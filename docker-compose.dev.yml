@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: edutech-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-edutech_v2}
+      POSTGRES_USER: ${POSTGRES_USER:-edutech_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edutech_secret_2026}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edutech_user} -d ${POSTGRES_DB:-edutech_v2}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: edutech-redis-dev
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-redis_secret_2026}"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata_dev:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret_2026}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    container_name: edutech-api-dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-edutech_user}:${POSTGRES_PASSWORD:-edutech_secret_2026}@postgres:5432/${POSTGRES_DB:-edutech_v2}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret_2026}@redis:6379
+      AI_SERVICE_URL: http://ai-service:8000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal_shared_secret_2026}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-jwt_access_super_secret_key_2026_dev}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-jwt_refresh_super_secret_key_2026_dev}
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+
+  ai-service:
+    build:
+      context: ./apps/ai-service
+      dockerfile: Dockerfile.dev
+    container_name: edutech-ai-dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      ENV: development
+      PORT: 8000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edutech_user}:${POSTGRES_PASSWORD:-edutech_secret_2026}@postgres:5432/${POSTGRES_DB:-edutech_v2}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret_2026}@redis:6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal_shared_secret_2026}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      - ./apps/ai-service:/app
+
+volumes:
+  pgdata_dev:
+  redisdata_dev:

@@ -1,0 +1,81 @@
+import { pgTable, bigserial, varchar, text, integer, smallint, timestamp, date, boolean, bigint, primaryKey } from 'drizzle-orm/pg-core';
+import { cohortStatusEnum, cohortStaffRoleEnum, sessionStatusEnum, videoSourceProviderEnum } from './enums.js';
+import { courses } from './catalog.js';
+import { accounts } from './identity.js';
+
+export const cohorts = pgTable('cohorts', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  courseId: bigserial('course_id', { mode: 'number' }).notNull().references(() => courses.id, { onDelete: 'restrict' }),
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  name: varchar('name', { length: 255 }).notNull(),
+  curriculumVersion: varchar('curriculum_version', { length: 30 }).notNull().default('v1.0'),
+  techStackNotes: text('tech_stack_notes'),
+  tuitionVnd: bigint('tuition_vnd', { mode: 'number' }).notNull(),
+  maxStudents: integer('max_students').notNull().default(50),
+  enrolledCount: integer('enrolled_count').notNull().default(0),
+  enrollmentOpenAt: timestamp('enrollment_open_at', { withTimezone: true }).notNull(),
+  enrollmentCloseAt: timestamp('enrollment_close_at', { withTimezone: true }).notNull(),
+  lateJoinCodeHash: text('late_join_code_hash'),
+  startDate: date('start_date').notNull(),
+  endDate: date('end_date').notNull(),
+  replayExpiresAt: timestamp('replay_expires_at', { withTimezone: true }),
+  status: cohortStatusEnum('status').notNull().default('DRAFT'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cohortInstructors = pgTable('cohort_instructors', {
+  cohortId: bigserial('cohort_id', { mode: 'number' }).notNull().references(() => cohorts.id, { onDelete: 'cascade' }),
+  instructorId: bigserial('instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
+  roleInCohort: cohortStaffRoleEnum('role_in_cohort').notNull().default('INSTRUCTOR'),
+  scopeNote: varchar('scope_note', { length: 255 }),
+  assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.cohortId, table.instructorId] }),
+]);
+
+export const classSessions = pgTable('class_sessions', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  cohortId: bigserial('cohort_id', { mode: 'number' }).notNull().references(() => cohorts.id, { onDelete: 'cascade' }),
+  hostInstructorId: bigserial('host_instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
+  originalHostId: bigserial('original_host_id', { mode: 'number' }).references(() => accounts.id, { onDelete: 'set null' }),
+  substitutionReason: varchar('substitution_reason', { length: 255 }),
+  sessionOrder: smallint('session_order').notNull(),
+  activityTags: text('activity_tags').array().notNull().default([]),
+  title: varchar('title', { length: 255 }).notNull(),
+  descriptionMd: text('description_md'),
+  isFreePreview: boolean('is_free_preview').notNull().default(false),
+  scheduledStart: timestamp('scheduled_start', { withTimezone: true }),
+  scheduledEnd: timestamp('scheduled_end', { withTimezone: true }),
+  actualStartedAt: timestamp('actual_started_at', { withTimezone: true }),
+  actualEndedAt: timestamp('actual_ended_at', { withTimezone: true }),
+  status: sessionStatusEnum('status').notNull().default('SCHEDULED'),
+  livekitRoomName: varchar('livekit_room_name', { length: 120 }).unique(),
+  videoProvider: videoSourceProviderEnum('video_provider'),
+  hlsManifestR2Key: text('hls_manifest_r2_key'),
+  hlsAesKeyHex: varchar('hls_aes_key_hex', { length: 32 }),
+  externalYoutubeId: varchar('external_youtube_id', { length: 32 }),
+  durationSeconds: integer('duration_seconds'),
+  aiSummaryMd: text('ai_summary_md'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sessionAttachments = pgTable('session_attachments', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  sessionId: bigserial('session_id', { mode: 'number' }).notNull().references(() => classSessions.id, { onDelete: 'cascade' }),
+  fileName: varchar('file_name', { length: 255 }).notNull(),
+  r2ObjectKey: text('r2_object_key').notNull(),
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sessionSubtitles = pgTable('session_subtitles', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  sessionId: bigserial('session_id', { mode: 'number' }).notNull().references(() => classSessions.id, { onDelete: 'cascade' }),
+  languageCode: varchar('language_code', { length: 10 }).notNull().default('vi'),
+  vttR2Key: text('vtt_r2_key').notNull(),
+  isAutoGenerated: boolean('is_auto_generated').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
