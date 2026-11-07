@@ -15,7 +15,6 @@ export const cohorts = pgTable('cohorts', {
   enrolledCount: integer('enrolled_count').notNull().default(0),
   enrollmentOpenAt: timestamp('enrollment_open_at', { withTimezone: true }).notNull(),
   enrollmentCloseAt: timestamp('enrollment_close_at', { withTimezone: true }).notNull(),
-  lateJoinCodeHash: text('late_join_code_hash'),
   startDate: date('start_date').notNull(),
   endDate: date('end_date').notNull(),
   replayExpiresAt: timestamp('replay_expires_at', { withTimezone: true }),

@@ -53,7 +53,7 @@ Toàn bộ API được đặt dưới tiền tố `/api/v1`. Mọi phản hồi
 ### 5. Module Đơn hàng Trực tiếp, VNPay Lũy đẳng & Chứng chỉ (`src/modules/orders/`)
 | Phương thức & Đường dẫn | Quyền | Chức năng & Yêu cầu Nghiệp vụ |
 | :--- | :---: | :--- |
-| `POST /api/v1/orders/checkout` | `STUDENT` | Tạo đơn hàng trực tiếp cho 1 `Cohort` (kiểm tra cửa sổ đăng ký hoặc `lateJoinCode`, kiểm tra còn chỗ trống, áp dụng `idempotencyKey`) và trả về URL thanh toán VNPay ký `HMAC-SHA512`. |
+| `POST /api/v1/orders/checkout` | `STUDENT` | Tạo đơn hàng trực tiếp cho 1 `Cohort` (kiểm tra cửa sổ đăng ký, kiểm tra còn chỗ trống, áp dụng `idempotencyKey`) và trả về URL thanh toán VNPay ký `HMAC-SHA512`. |
 | `GET /api/v1/payments/vnpay-ipn` | Public (Webhook) | Xác minh chữ ký `HMAC-SHA512` bằng `crypto.timingSafeEqual`, khóa dòng đơn hàng `FOR UPDATE`, kiểm tra khớp số tiền `amount_vnd`, cập nhật `PAID`, tạo `enrollments` và tăng `enrolled_count`. |
 | `POST /api/v1/admin/certificates/issue` | `ADMIN` | Cấp chứng chỉ số ký `HMAC-SHA256` cho học viên đủ điều kiện (hoàn thành $\ge 80\%$ buổi học + đỗ `FINAL_EXAM` + `integrity_status = 'CLEAN'`). |
 | `GET /api/v1/certificates/verify/:code` | Public | Tra cứu công khai tính hợp lệ của chứng chỉ và kiểm tra trạng thái thu hồi (`revoked_at`). |
@@ -128,3 +128,4 @@ Khi triển khai chi tiết từng module trong dự án mới, hãy tham chiế
 | **4. Phiên âm âm thanh Faster-Whisper** | `ai-service/src/core/transcription.py` | **Kế thừa:** Kỹ thuật `lazy import` và tự động chọn cấu hình model theo phần cứng (GPU/CPU).<br/>**Nâng cấp:** Thêm bộ lọc tiếng ồn/khoảng lặng `Silero VAD` phía trước và xuất mốc thời gian `start_sec`, `end_sec` cho từng câu. |
 | **5. Ký số & Xác minh giao dịch VNPay** | `3t-edu-tech-backend/src/utils/vnpay.util.js` | **Kế thừa:** Thuật toán sắp xếp khóa tham số theo bảng chữ cái (`sortObject`) và ký `HMAC-SHA512`.<br/>**Nâng cấp:** Kiểm tra chữ ký bằng `crypto.timingSafeEqual` và bọc cập nhật đơn hàng trong Transaction `FOR UPDATE`. |
 | **6. Cấp & Xác thực Chứng chỉ HMAC** | `3t-edu-tech-backend/src/api/certificates/certificates.service.js` | **Kế thừa:** Cách tạo chữ ký điện tử `HMAC-SHA256` chống làm giả mã chứng chỉ.<br/>**Nâng cấp:** Chỉ cho phép cấp khi học viên đạt cả tiến độ buổi học, đỗ kỳ thi cuối khóa và không vi phạm quy chế giám sát thi (`CLEAN` / `CLEARED_BY_INSTRUCTOR`). |
+

@@ -63,10 +63,11 @@ graph LR
 - Cơ chế liên kết tự động: Nếu học viên đã tạo tài khoản bằng Email rồi sau đó bấm "Tiếp tục với Google" có cùng địa chỉ Email đã xác thực, hệ thống tự động liên kết (`account_identities`) vào cùng một tài khoản `accounts`.
 - Bảo mật phiên: `Access Token` (JWT 15 phút) chỉ lưu trong RAM của trình duyệt; `Refresh Token` lưu trong `HttpOnly, Secure, SameSite=Lax Cookie` có cơ chế xoay vòng (Token Rotation).
 
-### Quyết định 2: Thanh toán Trực tiếp Đợt học (Bỏ Giỏ hàng & Ví Giảng viên)
-- Học viên chọn Đợt học (`Cohort`) -> Đi thẳng tới trang Checkout (`/checkout/:cohortCode`) -> Thanh toán qua **VNPay** bằng đồng **VND**.
+### Quyết định 2: Thanh toán Trực tiếp Đợt học (Bỏ Giỏ hàng, Ví Giảng viên & Mã Ghi danh Muộn)
+- Học viên chọn Đợt học (`Cohort`) -> Đi thẳng tới trang Checkout (`/checkout/:cohortCode`) -> Thanh toán qua **VNPay** bằng đồng **VND**. Không giỏ hàng, không coupon phức tạp.
 - Tích hợp khóa lũy đẳng (`idempotency_key`) khi tạo đơn và khóa nguyên tử (`SELECT ... FOR UPDATE`) khi nhận Webhook IPN từ VNPay để chống cộng đúp `enrolled_count` hoặc tạo 2 bản ghi `enrollments`.
-- Hỗ trợ **Mã ghi danh muộn (`late_join_code_hash`)**: Khi lớp đã đóng cổng đăng ký công khai, học viên có mã đặc cách do Admin cấp vẫn có thể hoàn tất thanh toán.
+- **Loại bỏ Mã ghi danh muộn (`late_join_code`):** Giữ trang thanh toán tinh gọn tối đa. Khi học viên có nhu cầu vào học sau khi lớp đã đóng đăng ký, họ liên hệ trực tiếp Ban tổ chức; Admin chỉ cần thao tác thêm học viên thủ công vào đợt học hoặc nới hạn `enrollment_close_at`.
+- **Quy trình Mở lớp Mặc định (Phương án Tinh gọn Core):** Đợt học mở theo lịch trình bình thường (`DRAFT` → `OPENING` → `ONGOING` → `COMPLETED`). Kể cả khi số lượng ghi danh đạt 20%–30% chỉ tiêu, lớp vẫn được tiến hành bình thường để phục vụ nhóm học viên tiên phong, ghi nhận dữ liệu âm thanh/video bản ghi và kiểm thử AI mà không cài cắm các thủ tục hủy lớp/gộp lớp/hoàn tiền tự động phức tạp gây phình to hệ thống.
 
 ### Quyết định 3: Cơ chế Dạy Thay 1-Click Tinh Gọn (Không Workflow Phê Duyệt Rườm Rà)
 - Giảng viên đều là nhân sự/đối tác nội bộ của Học viện, việc nhờ dạy thay được trao đổi nhanh bên ngoài rồi báo cho Admin.
@@ -148,3 +149,4 @@ sequenceDiagram
 ```
 
 - **Quy tắc bảo mật mạng nội bộ:** Trình duyệt (`apps/web`) **chỉ** giao tiếp với `apps/api` (Port 4000). Trình duyệt không bao giờ gọi trực tiếp sang `apps/ai-service` (Port 8000) hay gọi trực tiếp Gemini API. Mọi yêu cầu từ `apps/api` sang `apps/ai-service` đều phải đính kèm header `X-Internal-Key` được kiểm tra bằng `hmac.compare_digest` và truyền xuyên suốt mã vết `X-Request-ID`.
+

@@ -11,7 +11,6 @@ export const orders = pgTable('orders', {
   amountVnd: bigint('amount_vnd', { mode: 'number' }).notNull(),
   status: orderStatusEnum('status').notNull().default('PENDING'),
   idempotencyKey: varchar('idempotency_key', { length: 100 }).unique(),
-  isLateOverride: boolean('is_late_override').notNull().default(false),
   paidAt: timestamp('paid_at', { withTimezone: true }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

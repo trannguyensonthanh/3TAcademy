@@ -123,3 +123,4 @@ erDiagram
    - Kiểm tra khớp tuyệt đối `amount_vnd`.
    - Cập nhật `orders.status = 'PAID'`, chèn `payment_transactions`, chèn `enrollments`, và cộng `cohorts.enrolled_count = enrolled_count + 1` trong cùng một Transaction.
 5. **Quy tắc Thay Thế Video Buổi Học:** Khi giảng viên tải lên video mới thay thế video cũ của một `class_sessions`, Worker bắt buộc chạy `DELETE FROM knowledge_chunks WHERE session_id = $1 AND source_type = 'VIDEO_TRANSCRIPT'` trước khi chèn các chunk của video mới.
+

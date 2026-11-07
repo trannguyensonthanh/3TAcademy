@@ -182,7 +182,6 @@ export interface Order {
   courseTitle: string;
   amountVnd: number;
   status: OrderStatus;
-  isLateOverride: boolean;
   paidAt: ISODate | null;
   expiresAt: ISODate;
   createdAt: ISODate;

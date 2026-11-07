@@ -118,11 +118,9 @@ graph TD
   * Yêu cầu bắt buộc: Đã đăng nhập tài khoản học viên (nếu chưa, chuyển hướng sang Login và quay lại sau khi đăng nhập thành công).
   * Tóm tắt đơn hàng: Tên khóa học, Mã đợt học, Ngày khai giảng, Thời gian học hàng tuần, Học phí niêm yết (VND).
   * Hạn chót đăng ký đợt học (Enrollment Deadline Countdown).
-  * Ô nhập mã đặc cách đăng ký muộn ("Late-join Code") - chỉ xuất hiện khi lớp đã đóng đăng ký công khai nhưng học viên được Admin cấp mã đăng ký bổ sung.
   * Phương thức thanh toán duy nhất: **Cổng thanh toán Trực tuyến VNPAY (ATM Nội địa / Thẻ Quốc tế / QR Code Ngân hàng)**.
-  * Điều khoản đăng ký học và chính sách hoàn hủy.
+  * Điều khoản đăng ký học.
 * **Chức năng & Tác vụ:**
-  * Áp dụng mã ghi danh muộn (Validate realtime qua API).
   * Xác nhận điều khoản và bấm "Thanh toán qua VNPAY".
   * Hệ thống khởi tạo đơn hàng với khóa lũy đẳng (Idempotency Key chống tạo trùng đơn khi bấm nhiều lần) và chuyển hướng học viên sang Cổng thanh toán VNPAY.
 
@@ -463,7 +461,6 @@ Không gian quản lý vận hành chi tiết đợt học dành cho Giảng vi�
 * **Chức năng toàn diện:**
   * Tạo Đợt học mới từ một Khóa học có sẵn (Hệ thống tự động sinh toàn bộ danh sách các Buổi học dựa trên Khung giáo trình mẫu).
   * Thiết lập mã đợt (VD: `AI-ENG-2026-K01`), tên đợt, phiên bản tài liệu công nghệ áp dụng, học phí niêm yết, số lượng học viên tối đa, thời gian mở và đóng cổng đăng ký, ngày khai giảng và ngày bế giảng.
-  * Tạo và quản lý mã ghi danh muộn (Late-join Code) cấp quyền đặc cách cho học viên đăng ký sau khi đã đóng lớp.
   * **Quản lý Đội ngũ Đợt học (Staff Assignment):** Gán tài khoản Giảng viên chính (`INSTRUCTOR`), Trợ giảng (`TA`) hoặc Chuyên gia khách mời (`GUEST`) vào đợt học kèm ghi chú phạm vi công việc.
   * **Quản lý Buổi học & Xử lý Dạy Thay 1-Click:**
     * Danh sách toàn bộ các buổi học của đợt; Xem và sửa nhanh ngày giờ phát sóng dự kiến.

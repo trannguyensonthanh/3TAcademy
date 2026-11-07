@@ -126,3 +126,4 @@ flowchart TD
   - Trang Giám sát AI cho Admin (`/admin/ai`): Thống kê Token, chi phí VND, độ trễ p50/p95, tỷ lệ fallback Gemini ↔ vLLM, liên kết Langfuse Trace.
   - Bộ kiểm thử chất lượng RAG tự động (`apps/ai-service/evals/run_rag_eval.py`) trên bộ 50 câu hỏi tiếng Việt chuẩn (`golden_rag_vi.json`), đo 3 chỉ số: *Faithfulness*, *Answer Relevancy*, *Context Recall*.
   - Kiểm toán toàn bộ giao diện theo Checklist: Loading Skeleton, Empty State, Error State kèm `requestId`, Responsive Mobile/Desktop, và kiểm tra không rò rỉ `grading_config`.
+

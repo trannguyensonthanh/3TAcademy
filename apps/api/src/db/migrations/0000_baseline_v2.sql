@@ -156,7 +156,6 @@ CREATE TABLE cohorts (
     enrolled_count          INT NOT NULL DEFAULT 0 CHECK (enrolled_count >= 0 AND enrolled_count <= max_students),
     enrollment_open_at      TIMESTAMPTZ NOT NULL,
     enrollment_close_at     TIMESTAMPTZ NOT NULL CHECK (enrollment_close_at > enrollment_open_at),
-    late_join_code_hash     TEXT,
     start_date              DATE NOT NULL,
     end_date                DATE NOT NULL CHECK (end_date >= start_date),
     replay_expires_at       TIMESTAMPTZ,
@@ -241,7 +240,6 @@ CREATE TABLE orders (
     amount_vnd          BIGINT NOT NULL CHECK (amount_vnd >= 0),
     status              order_status NOT NULL DEFAULT 'PENDING',
     idempotency_key     VARCHAR(100) UNIQUE,
-    is_late_override    BOOLEAN NOT NULL DEFAULT FALSE,
     paid_at             TIMESTAMPTZ,
     expires_at          TIMESTAMPTZ NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -514,3 +512,4 @@ CREATE TABLE system_settings (
     is_public       BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
