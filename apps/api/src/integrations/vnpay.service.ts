@@ -46,3 +46,4 @@ export function createVnpayPaymentUrl({
 
   return `${vnpUrl}?${signData}&vnp_SecureHash=${signed}`;
 }
+

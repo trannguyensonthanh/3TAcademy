@@ -24,3 +24,4 @@ export function validate(schema: AnyZodObject) {
     }
   };
 }
+

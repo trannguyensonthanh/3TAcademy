@@ -51,3 +51,4 @@ export const instructorAvailabilities = pgTable('instructor_availabilities', {
   endMinute: integer('end_minute').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+

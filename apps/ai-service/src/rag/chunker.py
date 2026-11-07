@@ -32,3 +32,4 @@ def chunk_text(
         chunks.append({"content": combined, "length": len(combined)})
 
     return chunks
+

@@ -69,3 +69,4 @@ export const certificates = pgTable('certificates', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   revokeReason: text('revoke_reason'),
 });
+

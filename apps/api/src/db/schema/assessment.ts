@@ -87,3 +87,4 @@ export const proctoringEvents = pgTable('proctoring_events', {
   snapshotR2Key: text('snapshot_r2_key'),
   riskDelta: smallint('risk_delta').notNull().default(0),
 });
+

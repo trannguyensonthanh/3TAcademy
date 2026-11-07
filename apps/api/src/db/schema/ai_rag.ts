@@ -57,3 +57,4 @@ export const chatMessages = pgTable('chat_messages', {
   latencyMs: integer('latency_ms'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+

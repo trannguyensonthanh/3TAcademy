@@ -22,3 +22,4 @@ class WorkerSettings:
     functions = [ingest_session_material, process_live_recording]
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     max_jobs = 4
+

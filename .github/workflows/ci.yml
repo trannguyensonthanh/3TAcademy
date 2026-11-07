@@ -38,3 +38,4 @@ jobs:
           pip install -e apps/ai-service
       - name: Lint with ruff
         run: ruff check apps/ai-service
+

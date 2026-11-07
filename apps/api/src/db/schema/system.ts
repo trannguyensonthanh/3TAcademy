@@ -7,3 +7,4 @@ export const systemSettings = pgTable('system_settings', {
   isPublic: boolean('is_public').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+

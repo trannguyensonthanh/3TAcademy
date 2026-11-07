@@ -43,3 +43,4 @@ export const courseSkills = pgTable('course_skills', {
 }, (table) => [
   primaryKey({ columns: [table.courseId, table.skillId, table.skillRole] }),
 ]);
+

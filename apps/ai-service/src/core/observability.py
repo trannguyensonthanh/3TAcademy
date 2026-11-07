@@ -18,3 +18,4 @@ def get_langfuse() -> Langfuse | None:
         except Exception as e:
             logger.warning("Failed to initialize Langfuse", error=str(e))
     return langfuse
+

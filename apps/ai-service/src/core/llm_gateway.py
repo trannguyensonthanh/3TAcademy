@@ -71,3 +71,4 @@ class LLMGateway:
             vllm_cooldown_until = time.time() + 60.0  # 1-minute cooldown
             logger.error("vLLM fallback call failed", error=str(e))
             raise RuntimeError("Failed to generate response from all available LLM backends")
+

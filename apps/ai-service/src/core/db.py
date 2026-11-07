@@ -24,3 +24,4 @@ async def close_db_pool():
         logger.info("Closing asyncpg PostgreSQL pool")
         await pool.close()
         pool = None
+

@@ -48,3 +48,4 @@ def solve_schedule(
             "status": "INFEASIBLE",
             "message": "Không thể tìm thấy lịch học thỏa mãn toàn bộ ràng buộc (xung đột giờ giảng viên)",
         }
+
