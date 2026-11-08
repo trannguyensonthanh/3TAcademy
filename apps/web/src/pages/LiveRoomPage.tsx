@@ -56,8 +56,8 @@ export default function LiveRoomPage() {
               <div className="w-24 h-24 rounded-full bg-primary/20 border-2 border-primary mx-auto mb-4 flex items-center justify-center text-primary-dark font-bold text-2xl">
                 GV
               </div>
-              <h3 className="text-xl font-bold">Thầy B đang chia sẻ màn hình</h3>
-              <p className="text-sm text-stone-400 mt-1">Giảng dạy thay Thầy A · Chuyên đề Hybrid Search SQL</p>
+              <h3 className="text-xl font-bold">Giảng viên đang chia sẻ màn hình</h3>
+              <p className="text-sm text-stone-400 mt-1">Chuyên đề Hybrid Search SQL & pgvector</p>
             </div>
 
             {/* Dynamic Watermark simulation */}

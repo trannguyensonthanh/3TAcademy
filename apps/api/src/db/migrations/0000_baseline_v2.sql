@@ -13,8 +13,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;  -- Exclusion constraints on time ran
 CREATE TYPE account_role          AS ENUM ('STUDENT', 'INSTRUCTOR', 'ADMIN');
 CREATE TYPE account_status        AS ENUM ('ACTIVE', 'LOCKED');
 CREATE TYPE auth_provider         AS ENUM ('LOCAL', 'GOOGLE');
-CREATE TYPE instructor_tier       AS ENUM ('STAFF', 'GUEST');
-CREATE TYPE cohort_staff_role     AS ENUM ('INSTRUCTOR', 'TA', 'GUEST');
+CREATE TYPE cohort_staff_role     AS ENUM ('INSTRUCTOR', 'TA');
 
 CREATE TYPE course_status         AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
 CREATE TYPE skill_relation_role   AS ENUM ('PREREQUISITE', 'LEARNING_OUTCOME');
@@ -29,14 +28,14 @@ CREATE TYPE assessment_purpose    AS ENUM ('SESSION_ASSIGNMENT', 'FINAL_EXAM');
 CREATE TYPE grading_mode          AS ENUM ('AUTO', 'MANUAL', 'HYBRID');
 CREATE TYPE assessment_item_type  AS ENUM (
     'SINGLE_CHOICE', 'MULTI_SELECT', 'TRUE_FALSE',
-    'SHORT_ANSWER', 'ESSAY', 'FILE_SUBMISSION', 'CODING'
+    'SHORT_ANSWER', 'ESSAY', 'FILE_SUBMISSION'
 );
 CREATE TYPE answer_grading_status AS ENUM ('AUTO_GRADED', 'PENDING_MANUAL', 'MANUALLY_GRADED');
 CREATE TYPE integrity_verdict     AS ENUM ('CLEAN', 'FLAGGED', 'CONFIRMED_CHEAT', 'CLEARED_BY_INSTRUCTOR');
 CREATE TYPE chunk_visibility      AS ENUM ('PUBLIC', 'ENROLLED_ONLY');
 
 -- -----------------------------------------------------------------------------
--- 2. DOMAIN 1 — Identity, Google OAuth, Staff & Guest Instructors (5 Tables)
+-- 2. DOMAIN 1 — Identity, Google OAuth & Instructors (5 Tables)
 -- -----------------------------------------------------------------------------
 CREATE TABLE accounts (
     id                  BIGSERIAL PRIMARY KEY,
@@ -74,13 +73,11 @@ CREATE TABLE user_profiles (
 
 CREATE TABLE instructor_profiles (
     account_id              BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
-    tier                    instructor_tier NOT NULL DEFAULT 'STAFF',
     headline                VARCHAR(200) NOT NULL,
     organization            VARCHAR(150),
     years_of_experience     SMALLINT CHECK (years_of_experience >= 0),
     expertise_summary_md    TEXT,
     social_links            JSONB NOT NULL DEFAULT '{}',
-    is_schedulable_by_ai    BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -152,10 +149,8 @@ CREATE TABLE cohorts (
     curriculum_version      VARCHAR(30) NOT NULL DEFAULT 'v1.0',
     tech_stack_notes        TEXT,
     tuition_vnd             BIGINT NOT NULL CHECK (tuition_vnd >= 0),
-    max_students            INT NOT NULL DEFAULT 50 CHECK (max_students > 0),
-    enrolled_count          INT NOT NULL DEFAULT 0 CHECK (enrolled_count >= 0 AND enrolled_count <= max_students),
+    enrolled_count          INT NOT NULL DEFAULT 0 CHECK (enrolled_count >= 0),
     enrollment_open_at      TIMESTAMPTZ NOT NULL,
-    enrollment_close_at     TIMESTAMPTZ NOT NULL CHECK (enrollment_close_at > enrollment_open_at),
     start_date              DATE NOT NULL,
     end_date                DATE NOT NULL CHECK (end_date >= start_date),
     replay_expires_at       TIMESTAMPTZ,
@@ -177,8 +172,6 @@ CREATE TABLE class_sessions (
     id                      BIGSERIAL PRIMARY KEY,
     cohort_id               BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
     host_instructor_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    original_host_id        BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
-    substitution_reason     VARCHAR(255),
     session_order           SMALLINT NOT NULL CHECK (session_order > 0),
     activity_tags           TEXT[] NOT NULL DEFAULT '{}',
     title                   VARCHAR(255) NOT NULL,
@@ -186,8 +179,6 @@ CREATE TABLE class_sessions (
     is_free_preview         BOOLEAN NOT NULL DEFAULT FALSE,
     scheduled_start         TIMESTAMPTZ,
     scheduled_end           TIMESTAMPTZ,
-    actual_started_at       TIMESTAMPTZ,
-    actual_ended_at         TIMESTAMPTZ,
     status                  session_status NOT NULL DEFAULT 'SCHEDULED',
     livekit_room_name       VARCHAR(120) UNIQUE,
     video_provider          video_source_provider,
@@ -274,8 +265,6 @@ CREATE TABLE session_progress (
     account_id              BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     session_id              BIGINT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
     last_position_sec       INT NOT NULL DEFAULT 0 CHECK (last_position_sec >= 0),
-    watched_seconds         INT NOT NULL DEFAULT 0 CHECK (watched_seconds >= 0),
-    attended_live_seconds   INT NOT NULL DEFAULT 0 CHECK (attended_live_seconds >= 0),
     is_completed            BOOLEAN NOT NULL DEFAULT FALSE,
     completed_at            TIMESTAMPTZ,
     last_activity_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -412,7 +401,6 @@ CREATE TABLE submission_answers (
     final_score         NUMERIC(5,2),
     is_correct          BOOLEAN,
     feedback_md         TEXT,
-    review_comments     JSONB NOT NULL DEFAULT '[]',
     ai_suggestion       JSONB,
     graded_by           BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
     graded_at           TIMESTAMPTZ,

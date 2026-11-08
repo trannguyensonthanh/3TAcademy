@@ -69,7 +69,7 @@ export const submissionAnswers = pgTable('submission_answers', {
   finalScore: numeric('final_score', { precision: 5, scale: 2 }),
   isCorrect: boolean('is_correct'),
   feedbackMd: text('feedback_md'),
-  reviewComments: jsonb('review_comments').notNull().default([]),
+  aiSuggestion: jsonb('ai_suggestion'),
   gradedBy: bigserial('graded_by', { mode: 'number' }).references(() => accounts.id, { onDelete: 'set null' }),
   gradedAt: timestamp('graded_at', { withTimezone: true }),
 }, (table) => [

@@ -64,13 +64,9 @@ erDiagram
 ## 3. Giải Thích Chi Tiết Các Thiết Kế Bảng Trọng Yếu
 
 ### 3.1. Bảng `class_sessions` — Trái tim của Mô hình Cohort Live & Video Quay Sẵn
-- **Đổi người dạy (Dạy thay 1-Click):**
-  - `host_instructor_id`: Giảng viên thực tế đứng lớp và được cấp quyền mở phòng LiveKit.
-  - `original_host_id`: Giảng viên gốc theo lịch phân công ban đầu (chỉ khác `NULL` khi có dạy thay).
-  - `substitution_reason`: Lý do dạy thay ngắn gọn hiển thị minh bạch trên lịch học.
-- **Tách biệt Lịch dự kiến và Giờ thực tế:**
-  - `scheduled_start`, `scheduled_end`: Lịch dự kiến của buổi học (có thể `NULL` đối với buổi học bổ sung hoàn toàn bằng video quay sẵn).
-  - `actual_started_at`, `actual_ended_at`: Thời điểm giảng viên thực sự bấm bắt đầu và kết thúc phòng LiveKit (dùng để lọc bỏ các phiên test thiết bị `< 5 phút` và tính thời lượng thực tế).
+- **Quản lý Giảng viên chủ trì & Lịch học Tinh gọn:**
+  - `host_instructor_id`: Giảng viên thực tế đứng lớp và được cấp quyền mở phòng LiveKit (nếu mời diễn giả ngoài thì sinh LiveKit Guest Token dùng 1 lần qua `createGuestSpeakerToken` mà không cần tạo tài khoản DB).
+  - `scheduled_start`, `scheduled_end`: Lịch của buổi học (có thể `NULL` đối với buổi học bổ sung hoàn toàn bằng video quay sẵn; khi giảng viên bận chỉ cần dời `scheduled_start/end`).
 - **Khóa cứng chống trùng lịch giảng viên ở tầng CSDL (`EXCLUDE USING gist`):**
   ```sql
   EXCLUDE USING gist (
@@ -80,26 +76,16 @@ erDiagram
   ```
   Ràng buộc này đảm bảo **cùng một giảng viên không bao giờ bị xếp dạy 2 buổi chồng lấn giờ nhau**, trong khi 2 đợt học khác giảng viên vẫn mở lớp cùng khung giờ tối hoàn toàn thoải mái.
 
-### 3.2. Bảng `assessment_items` & `submission_answers` — Khảo Thí 7 Dạng & Inline Code Review
+### 3.2. Bảng `assessment_items` & `submission_answers` — Khảo Thí 6 Dạng (Trắc nghiệm + Tự luận/Dự án) & AI Co-Grader
 - **`assessment_items`:**
+  - Hỗ trợ 6 dạng câu hỏi tinh gọn: `SINGLE_CHOICE`, `MULTI_SELECT`, `TRUE_FALSE`, `SHORT_ANSWER`, `ESSAY` (bài viết Markdown, dán code, link GitHub), và `FILE_SUBMISSION` (tệp `.zip`, `.pdf`...).
   - Mỗi câu hỏi bắt buộc gắn với `skill_id REFERENCES skills(id)` để tự động cập nhật năng lực học viên (`student_skill_states`) sau khi chấm.
-  - **`prompt_config JSONB`**: Chứa nội dung đề bài, các lựa chọn trắc nghiệm (không có cờ đáp án), giới hạn số từ bài viết, hoặc starter code + public test cases cho bài lập trình.
-  - **`grading_config JSONB`**: Chứa đáp án đúng, barem chấm tự luận (`rubric`), và bộ `hiddenTestCases` của bài lập trình. **Cột này tuyệt đối không bao giờ được trả về cho trình duyệt của học viên.**
+  - **`prompt_config JSONB`**: Chứa nội dung đề bài, các lựa chọn trắc nghiệm (không có cờ đáp án), hướng dẫn nộp bài tự luận/dự án.
+  - **`grading_config JSONB`**: Chứa đáp án đúng và barem chấm tự luận/code (`rubric`). **Cột này tuyệt đối không bao giờ được trả về cho trình duyệt của học viên.**
 - **`submission_answers`:**
-  - Hỗ trợ quy trình chấm kép: `auto_score` (máy chấm test case/trắc nghiệm), `manual_score` (giảng viên chấm), `final_score` (điểm chốt), và `ai_suggestion` (điểm + nhận xét nháp do AI đề xuất).
-  - **`review_comments JSONB`**: Lưu danh sách nhận xét review code gắn trực tiếp vào từng dòng code:
-    ```json
-    [
-      {
-        "id": "rc-1",
-        "line": 14,
-        "body": "Vòng lặp này gây lỗi N+1 query, nên gom bằng mệnh đề WHERE IN.",
-        "author": { "id": 2, "fullName": "Thầy Nguyễn Văn A" },
-        "isAiDraft": false,
-        "createdAt": "2026-11-07T08:00:00Z"
-      }
-    ]
-    ```
+  - Hỗ trợ quy trình chấm kép: `auto_score` (máy chấm trắc nghiệm trong 5ms), `manual_score` (giảng viên chốt điểm), `final_score` (điểm cuối cùng), và **`ai_suggestion JSONB`** (điểm gợi ý + nhận xét chi tiết theo Rubric do AI Co-Grader `LLM-as-a-Judge` sinh tự động để giảng viên duyệt 1 chạm).
+- **`session_progress` (Hoàn thành buổi học theo năng lực hiểu bài):**
+  - Bỏ các cột đếm giây (`watched_seconds`, `attended_live_seconds`). Chỉ giữ `last_position_sec` để lưu vị trí xem video và `is_completed = TRUE` được kích hoạt tự động khi học viên vượt qua bài kiểm tra ngắn của buổi học (`SESSION_ASSIGNMENT`).
 
 ### 3.3. Bảng `knowledge_chunks` — Kho Tri Thức Hybrid Search (Vector + Full-Text)
 - Lưu trữ mọi đoạn tri thức từ:

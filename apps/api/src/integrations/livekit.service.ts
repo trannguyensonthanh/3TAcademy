@@ -35,3 +35,40 @@ export function createLiveKitToken({
   return at.toJwt();
 }
 
+export interface GuestSpeakerInviteOptions {
+  roomName: string;
+  guestName: string;
+  ttlHours?: number;
+}
+
+/**
+ * Generates a one-time LiveKit invite token for external Guest Speakers
+ * without requiring a database account or GUEST role in PostgreSQL.
+ */
+export function createGuestSpeakerToken({
+  roomName,
+  guestName,
+  ttlHours = 24,
+}: GuestSpeakerInviteOptions): Promise<string> {
+  const apiKey = env.LIVEKIT_API_KEY || 'devkey';
+  const apiSecret = env.LIVEKIT_API_SECRET || 'secret';
+
+  const at = new AccessToken(apiKey, apiSecret, {
+    identity: `guest-speaker-${Date.now()}`,
+    name: `[Diễn giả] ${guestName}`,
+    ttl: `${ttlHours}h`,
+  });
+
+  at.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish: true,
+    canPublishData: true,
+    canSubscribe: true,
+    roomAdmin: false,
+  });
+
+  return at.toJwt();
+}
+
+

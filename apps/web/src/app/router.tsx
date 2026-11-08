@@ -30,10 +30,10 @@ export const router = createBrowserRouter([
     },
   },
   {
-    path: '/app/code',
+    path: '/live/guest',
     lazy: async () => {
-      const { default: CodeLabPage } = await import('../pages/CodeLabPage');
-      return { Component: CodeLabPage };
+      const { default: LiveRoomPage } = await import('../pages/LiveRoomPage');
+      return { Component: LiveRoomPage };
     },
   },
   {

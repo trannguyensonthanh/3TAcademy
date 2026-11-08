@@ -42,9 +42,8 @@ export const sessionProgress = pgTable('session_progress', {
   accountId: bigserial('account_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'cascade' }),
   sessionId: bigserial('session_id', { mode: 'number' }).notNull().references(() => classSessions.id, { onDelete: 'cascade' }),
   lastPositionSec: integer('last_position_sec').notNull().default(0),
-  watchedSeconds: integer('watched_seconds').notNull().default(0),
-  attendedLiveSeconds: integer('attended_live_seconds').notNull().default(0),
   isCompleted: boolean('is_completed').notNull().default(false),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

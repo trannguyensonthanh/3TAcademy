@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.logging import setup_logging, logger
 from .core.security import verify_internal_api_key
-from .api.routes.code_runner import code_router
+from .api.routes.grading_ai import grading_router
 
 
 @asynccontextmanager
@@ -29,7 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(code_router)
+app.include_router(grading_router)
 
 
 @app.get("/health/live")

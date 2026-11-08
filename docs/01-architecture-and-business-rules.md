@@ -30,29 +30,28 @@ graph LR
 ```
 
 1. **`Course` (Khóa học gốc):** Là môn học/chương trình đào tạo lâu dài của Học viện. Gắn với **Chuẩn kỹ năng đầu vào (`PREREQUISITE`)** và **Chuẩn kỹ năng đầu ra (`LEARNING_OUTCOME`)** từ Từ điển Kỹ năng (`skills`). Có khung chương trình mẫu (`syllabus_template`).
-2. **`Cohort` (Đợt khai giảng / Lớp học):** Là một đợt mở lớp cụ thể của một `Course` (ví dụ: Khóa K01 mở tháng 11/2026, Khóa K02 mở tháng 03/2027). Mỗi `Cohort` có học phí (`tuition_vnd`), sĩ số tối đa (`max_students`), cửa sổ mở/đóng đăng ký (`enrollment_open_at`, `enrollment_close_at`), đội ngũ giảng viên/trợ giảng riêng và danh sách buổi học riêng. **Học viên đăng ký và thanh toán trực tiếp cho từng `Cohort`**.
+2. **`Cohort` (Đợt khai giảng / Lớp học):** Là một đợt mở lớp cụ thể của một `Course` (ví dụ: Khóa K01 mở tháng 11/2026, Khóa K02 mở tháng 03/2027). Mỗi `Cohort` có học phí (`tuition_vnd`), bộ đếm số học viên đã ghi danh (`enrolled_count`), thời điểm mở đăng ký (`enrollment_open_at`), ngày khai giảng/bế giảng (`start_date`, `end_date`), đội ngũ giảng viên/trợ giảng riêng và danh sách buổi học riêng. **Học viên đăng ký và thanh toán trực tiếp cho từng `Cohort`** (không giới hạn cứng trần sĩ số và không chặn hạn chốt sổ cứng để luồng thanh toán đơn giản, phi trạng thái 100%).
 3. **`ClassSession` (Buổi học):** Là đơn vị học tập duy nhất bên trong một `Cohort`. Một buổi học có thể là:
    - **Buổi học Livestream trực tiếp** qua phòng WebRTC LiveKit (sau khi kết thúc sẽ được xử lý thành bản ghi phát lại `REPLAY_READY`).
    - **Buổi học dùng Video quay sẵn chất lượng cao** (được xem như học liệu chính của buổi học đó, dùng cho các buổi lý thuyết nền tảng hoặc buổi học bổ sung/bonus).
-   - Mỗi buổi học đi kèm: Tài liệu đính kèm (PDF, slides, zip code), Phụ đề đồng bộ (`.vtt`), Bản tóm tắt AI (`ai_summary_md`), Thảo luận gắn mốc thời gian video (`discussion_threads`), và Bài tập thực hành của buổi (`SESSION_ASSIGNMENT`).
+   - Mỗi buổi học đi kèm: Tài liệu đính kèm (PDF, slides, zip code), Phụ đề đồng bộ (`.vtt`), Bản tóm tắt AI (`ai_summary_md`), Thảo luận gắn mốc thời gian video (`discussion_threads`), và Bài kiểm tra hiểu bài của buổi (`SESSION_ASSIGNMENT`).
 
 ---
 
-## 3. Ma Trận Phân Quyền 3 Tầng Rõ Ràng
+## 3. Ma Trận Phân Quyền Tinh Gọn & Cơ Chế Link Diễn Giả Khách Mời
 
 ### 3.1. Vai trò Tài khoản Hệ thống (`accounts.role`)
-- **`STUDENT` (Học viên):** Tự đăng ký qua Email/Password hoặc Google OAuth 1-Tap. Học tập, xem livestream/replay, làm bài tập, chạy code trong Code Lab, hỏi đáp với AI Tutor, thi cuối khóa và nhận chứng chỉ.
-- **`INSTRUCTOR` (Giảng viên / Trợ giảng / Chuyên gia):** Do Admin tạo tài khoản và gửi thư mời (không tự đăng ký ngoài trang công khai).
-- **`ADMIN` (Ban Tổ Chức / Quản trị viên Học viện):** Đại diện cho Tổ chức. Quản lý danh mục, từ điển kỹ năng, khóa học, mở đợt học (`Cohort`), phân công giảng viên, đổi người dạy thay, chạy AI xếp lịch tự động, duyệt cấp/thu hồi chứng chỉ, giám sát chi phí AI.
+- **`STUDENT` (Học viên):** Tự đăng ký qua Email/Password hoặc Google OAuth 1-Tap. Học tập, xem livestream/replay, làm bài kiểm tra trắc nghiệm & tự luận/dự án, hỏi đáp với AI Tutor, thi cuối khóa và nhận chứng chỉ.
+- **`INSTRUCTOR` (Giảng viên / Trợ giảng):** Do Admin tạo tài khoản (không tự đăng ký ngoài trang công khai). Có khai báo khung giờ rảnh (`instructor_availabilities`) để hỗ trợ AI xếp lịch tự động.
+- **`ADMIN` (Ban Tổ Chức / Quản trị viên Học viện):** Đại diện cho Tổ chức. Quản lý danh mục, từ điển kỹ năng, khóa học, mở đợt học (`Cohort`), phân công giảng viên, chạy AI xếp lịch tự động, duyệt cấp/thu hồi chứng chỉ, giám sát chi phí AI.
 
-### 3.2. Phân hạng Giảng viên (`instructor_profiles.tier`)
-- **`STAFF` (Giảng viên / Trợ giảng cơ hữu của công ty):** Có khai báo khung giờ rảnh (`instructor_availabilities`) và được thuật toán AI Scheduler tự động xếp lịch dạy (`is_schedulable_by_ai = TRUE`).
-- **`GUEST` (Chuyên gia khách mời từ doanh nghiệp):** Chỉ đứng lớp một số buổi chuyên đề cố định. Mặc định `is_schedulable_by_ai = FALSE` để thuật toán AI không tự ý xê dịch lịch của khách mời.
+### 3.2. Vai trò Nhân sự bên trong một Đợt học (`cohort_instructors.role_in_cohort`)
+- **`INSTRUCTOR` (Giảng viên chính của lớp):** Toàn quyền giảng dạy, mở phòng LiveKit, đăng/sửa tài liệu, tạo đề thi, duyệt chấm bài với AI Co-Grader, xem toàn bộ học viên và phân tích sư phạm của đợt học.
+- **`TA` (Trợ giảng của lớp):** Hỗ trợ lớp học, được phép chủ trì buổi học chữa bài tập, đăng tài liệu, chấm bài, xác nhận câu trả lời thảo luận.
 
-### 3.3. Vai trò Nhân sự bên trong một Đợt học (`cohort_instructors.role_in_cohort`)
-- **`INSTRUCTOR` (Giảng viên chính của lớp):** Toàn quyền giảng dạy, mở phòng LiveKit, đăng/sửa tài liệu, tạo đề thi, chấm bài, xem toàn bộ học viên và phân tích sư phạm của đợt học.
-- **`TA` (Trợ giảng của lớp):** Có quyền tương đương Giảng viên trong phạm vi hỗ trợ lớp học: được phép chủ trì buổi học (dạy phụ đạo, chữa bài tập, hoặc dạy thay khi được gán làm Host), đăng tài liệu, chấm bài, xác nhận câu trả lời thảo luận.
-- **`GUEST` (Diễn giả khách mời trong lớp):** Chỉ nhìn thấy và thao tác trên đúng các buổi học (`class_sessions`) mà họ được chỉ định làm `host_instructor_id`. Không nhìn thấy bảng điểm hay danh sách học viên toàn khóa.
+### 3.3. Cơ chế Mời Diễn Giả / Khách Mời Ngoài (LiveKit One-Time Guest Link — Không Cần Tài Khoản DB)
+- Thay vì tạo thêm role `GUEST` phức tạp trong CSDL, khi một buổi Workshop có chuyên gia khách mời từ doanh nghiệp tham gia chia sẻ, Giảng viên hoặc Admin chỉ cần bấm **"Tạo Link Mời Diễn Giả"** (`createGuestSpeakerToken`).
+- Hệ thống sinh một đường dẫn `/live/guest?token=...` chứa JWT LiveKit có quyền bật Mic/Camera/Share Screen trong 24h. Diễn giả bấm vào link, nhập tên hiển thị là vào thẳng phòng Live mà không cần đăng ký tài khoản hay phân quyền bảng điểm nội bộ.
 
 ---
 
@@ -63,24 +62,19 @@ graph LR
 - Cơ chế liên kết tự động: Nếu học viên đã tạo tài khoản bằng Email rồi sau đó bấm "Tiếp tục với Google" có cùng địa chỉ Email đã xác thực, hệ thống tự động liên kết (`account_identities`) vào cùng một tài khoản `accounts`.
 - Bảo mật phiên: `Access Token` (JWT 15 phút) chỉ lưu trong RAM của trình duyệt; `Refresh Token` lưu trong `HttpOnly, Secure, SameSite=Lax Cookie` có cơ chế xoay vòng (Token Rotation).
 
-### Quyết định 2: Thanh toán Trực tiếp Đợt học (Bỏ Giỏ hàng, Ví Giảng viên & Mã Ghi danh Muộn)
-- Học viên chọn Đợt học (`Cohort`) -> Đi thẳng tới trang Checkout (`/checkout/:cohortCode`) -> Thanh toán qua **VNPay** bằng đồng **VND**. Không giỏ hàng, không coupon phức tạp.
+### Quyết định 2: Thanh toán Trực tiếp Đợt học (Bỏ Giỏ hàng, Ví Giảng viên, Trần Sĩ Số & Mã Ghi danh Muộn)
+- Học viên chọn Đợt học (`Cohort`) -> Đi thẳng tới trang Checkout (`/checkout/:cohortCode`) -> Thanh toán qua **VNPay** bằng đồng **VND**. Không giỏ hàng, không coupon, không giữ ghế phức tạp.
+- Giữ `enrollment_open_at` (thời điểm mở cổng đăng ký) và `enrolled_count` (bộ đếm số học viên đã ghi danh để hiển thị nhanh trên UI mà không cần `COUNT(*)`). Bỏ `max_students` và `enrollment_close_at` để học viên đăng ký mượt mà miễn là đợt học chưa `COMPLETED`/`ARCHIVED`.
 - Tích hợp khóa lũy đẳng (`idempotency_key`) khi tạo đơn và khóa nguyên tử (`SELECT ... FOR UPDATE`) khi nhận Webhook IPN từ VNPay để chống cộng đúp `enrolled_count` hoặc tạo 2 bản ghi `enrollments`.
-- **Loại bỏ Mã ghi danh muộn (`late_join_code`):** Giữ trang thanh toán tinh gọn tối đa. Khi học viên có nhu cầu vào học sau khi lớp đã đóng đăng ký, họ liên hệ trực tiếp Ban tổ chức; Admin chỉ cần thao tác thêm học viên thủ công vào đợt học hoặc nới hạn `enrollment_close_at`.
-- **Quy trình Mở lớp Mặc định (Phương án Tinh gọn Core):** Đợt học mở theo lịch trình bình thường (`DRAFT` → `OPENING` → `ONGOING` → `COMPLETED`). Kể cả khi số lượng ghi danh đạt 20%–30% chỉ tiêu, lớp vẫn được tiến hành bình thường để phục vụ nhóm học viên tiên phong, ghi nhận dữ liệu âm thanh/video bản ghi và kiểm thử AI mà không cài cắm các thủ tục hủy lớp/gộp lớp/hoàn tiền tự động phức tạp gây phình to hệ thống.
+- **Quy trình Mở lớp Mặc định (Phương án Tinh gọn Core):** Đợt học mở theo lịch trình bình thường (`DRAFT` → `OPENING` → `ONGOING` → `COMPLETED`).
 
-### Quyết định 3: Cơ chế Dạy Thay 1-Click Tinh Gọn (Không Workflow Phê Duyệt Rườm Rà)
-- Giảng viên đều là nhân sự/đối tác nội bộ của Học viện, việc nhờ dạy thay được trao đổi nhanh bên ngoài rồi báo cho Admin.
-- **Không xây dựng** bảng yêu cầu dạy thay hay máy trạng thái chờ duyệt nhiều bước gây nghẽn lịch học.
-- Trên bảng `class_sessions`, chỉ sử dụng 3 cột:
-  1. `host_instructor_id`: Người trực tiếp đứng lớp thực tế và **có quyền khởi động phòng LiveKit**.
-  2. `original_host_id`: Người được phân công ban đầu trên lịch gốc (lưu vết khi có đổi người dạy).
-  3. `substitution_reason`: Ghi chú ngắn (VD: *"Thầy B dạy thay Thầy A do Thầy A công tác"*).
-- Khi Admin đổi Host của buổi học sang Giảng viên B: Hệ thống kiểm tra trùng lịch bằng ràng buộc `EXCLUDE USING gist`, lưu `original_host_id = A`, gán `host_instructor_id = B` và bắn thông báo cho học viên. Giảng viên B lập tức thấy nút "Bắt đầu Livestream" trên Dashboard.
+### Quyết định 3: Quản Lý Lịch Học Tinh Gọn (Dời Lịch Khi Bận & AI Xếp Lịch)
+- Mỗi buổi học (`class_sessions`) chỉ lưu `host_instructor_id` (người chủ trì buổi học) và cặp lịch `scheduled_start`, `scheduled_end` (loại bỏ các cột rườm rà `original_host_id`, `substitution_reason`, `actual_started_at`, `actual_ended_at`).
+- Nếu giảng viên bận đột xuất, Admin/Giảng viên chỉ cần dời lịch (`scheduled_start`, `scheduled_end`) sang khung giờ khác hoặc đổi `host_instructor_id` trực tiếp. Ràng buộc `EXCLUDE USING gist` dưới CSDL tự động đảm bảo một giảng viên không bị trùng lịch dạy.
 
-### Quyết định 4: Chỉnh sửa Nội dung Buổi học Trực tiếp (In-place Update)
-- Không tạo bản nháp phân nhánh phức tạp cho từng buổi học. Giảng viên/Admin chỉnh sửa trực tiếp tiêu đề, mô tả, tài liệu đính kèm trên buổi học và hệ thống ghi vết `last_updated_by`, `updated_at`.
-- Riêng theo từng năm/kỳ mở lớp, vì mỗi `Cohort` sở hữu các dòng `class_sessions` riêng (sinh ra từ `syllabus_template` khi mở lớp), nên việc sửa nội dung buổi học của Khóa 2027 hoàn toàn độc lập, không làm hỏng lịch sử học tập của học viên Khóa 2026.
+### Quyết định 4: Chỉnh sửa Nội dung Buổi học Trực tiếp & Bảo Toàn Tiến Độ Theo Đợt
+- Không tạo bản nháp phân nhánh phức tạp (Version 1 -> Version 2 đè nhau như hệ thống VOD cũ). Các buổi học của một `Cohort` được sinh từ khung đề cương chuẩn `syllabus_template` và giữ cố định cấu trúc buổi.
+- Việc nâng cấp chương trình học cho khóa sau được thực hiện bằng cách mở một `Cohort` mới (`curriculum_version` mới), bảo toàn 100% tiến độ (`session_progress`) và kho vector RAG (`knowledge_chunks.cohort_id`) của các khóa trước.
 
 ### Quyết định 5: Quản lý Video Quay Sẵn Như Một Học Liệu Của Buổi Học
 - Với các buổi học không cần phát trực tiếp, Giảng viên tải lên tệp Video quay sẵn.
@@ -90,25 +84,24 @@ graph LR
   3. Tạo vector embedding (`vector(1024)`) và lưu vào bảng `knowledge_chunks` gắn với `session_id`.
 - **Khi Giảng viên thay thế video mới cho buổi học:** Hệ thống xóa các `knowledge_chunks` có `source_type = 'VIDEO_TRANSCRIPT'` của `session_id` cũ và lập chỉ mục lại từ video mới, đảm bảo AI Tutor không bao giờ trả lời kiến thức cũ đã bị thay thế.
 
-### Quyết định 6: Luồng Xử lý Bản ghi Livestream & Lọc Livestream Thử Nghiệm (< 5 phút)
-- Khi Giảng viên bấm kết thúc phòng LiveKit:
-  - Nếu thời lượng thực tế (`actual_ended_at - actual_started_at`) **nhỏ hơn 5 phút (300 giây)**: Hệ thống tự động coi đây là phiên mở thử nghiệm thiết bị (test stream), không đưa vào hàng đợi chuyển mã Replay và không nạp vào RAG.
-  - Nếu thời lượng **từ 5 phút trở lên**: Chuyển trạng thái buổi học sang `PROCESSING_REPLAY`, cắt HLS AES-128, tạo phụ đề `.vtt`, sinh bản tóm tắt AI (`ai_summary_md`) và 5 câu hỏi ôn tập nháp. Giảng viên bấm **"Duyệt xuất bản & Nạp AI"** để chuyển sang `REPLAY_READY`.
+### Quyết định 6: Xác Nhận Hoàn Thành Buổi Học Dựa Trên Hiểu Bài (Competency-Based Completion)
+- **Loại bỏ cơ chế đếm số giây xem video (`watched_seconds`, `attended_live_seconds`)** dễ bị học viên treo máy đối phó. Bảng `session_progress` chỉ lưu `last_position_sec` (để học viên mở lại video xem tiếp đúng chỗ đang dừng) và cờ `is_completed`.
+- **Điều kiện hoàn thành buổi học (`is_completed = TRUE`):** Sau khi xem bài giảng, học viên làm bài kiểm tra ngắn của buổi học (`assessments` với `purpose = 'SESSION_ASSIGNMENT'`, được AI tự động sinh câu hỏi từ phụ đề video buổi học). Khi học viên vượt qua bài kiểm tra (`is_passed = TRUE`), hệ thống tự động đánh dấu hoàn thành buổi học (nếu buổi học không có bài kiểm tra thì cho phép bấm nút hoàn thành trực tiếp).
 
 ### Quyết định 7: Bảo vệ Bản quyền Video 3 Lớp (Anti-Piracy)
 1. **Cloudflare R2 Private Bucket + Presigned URL ngắn hạn.**
 2. **HLS AES-128 Encryption:** Khóa giải mã 16-byte chỉ được trả về qua API xác thực quyền `enrollments` của học viên.
 3. **Dynamic Canvas Watermark:** Trình phát video trên trình duyệt vẽ lớp phủ `email + short_id` di chuyển ngẫu nhiên mỗi 12 giây (kể cả khi bật Fullscreen) và có `MutationObserver` tự động khôi phục nếu học viên mở F12 xóa node DOM.
 
-### Quyết định 8: Hệ thống Khảo thí 7 Dạng Câu Hỏi & Chấm Điểm Kép (Auto + Manual + AI Draft)
-- Hỗ trợ 7 dạng câu hỏi: `SINGLE_CHOICE`, `MULTI_SELECT`, `TRUE_FALSE`, `SHORT_ANSWER`, `ESSAY`, `FILE_SUBMISSION` (bao gồm cả thu âm giọng nói), và `CODING`.
-- **Bảo mật tuyệt đối đề thi:** Bảng `assessment_items` tách `prompt_config` (hiển thị cho học viên) và `grading_config` (đáp án đúng, test case ẩn, rubric chấm điểm). API dành cho học viên tuyệt đối không bao giờ `SELECT grading_config`.
-- **Chấm điểm kép:** Các câu trắc nghiệm và code có test case được chấm tự động (`AUTO_GRADED`). Các câu tự luận, nộp file, hoặc đánh giá phong cách code được chuyển vào hàng đợi chấm tay (`PENDING_MANUAL`) kèm **gợi ý điểm và nhận xét nháp từ AI (`ai_suggestion`)** để Giảng viên duyệt 1 chạm.
+### Quyết định 8: Hệ thống Khảo thí 6 Dạng Câu Hỏi Tinh Gọn (Trắc Nghiệm + Tự Luận/Nộp Bài) & Chấm Điểm Kép
+- Hỗ trợ 6 dạng câu hỏi chuẩn mực (loại bỏ hoàn toàn Code Lab Sandbox chạy code trực tiếp phức tạp):
+  1. **Nhóm Trắc nghiệm / Trả lời ngắn (`SINGLE_CHOICE`, `MULTI_SELECT`, `TRUE_FALSE`, `SHORT_ANSWER`):** Backend chấm tự động 100% trong `5ms` (`AUTO_GRADED`).
+  2. **Nhóm Tự luận / Bài tập Dự án (`ESSAY`, `FILE_SUBMISSION`):** Học viên làm bài trên máy cá nhân (VS Code) rồi nộp bài viết phân tích Markdown, dán đoạn code, gửi link GitHub Repository hoặc đính kèm file `.zip`/`.pdf`.
+- **Bảo mật tuyệt đối đề thi:** Bảng `assessment_items` tách `prompt_config` (hiển thị cho học viên) và `grading_config` (đáp án đúng, rubric chấm điểm). API dành cho học viên tuyệt đối không bao giờ `SELECT grading_config`.
 
-### Quyết định 9: Code Lab, Sandbox Không Trạng Thái & Inline Code Review
-- Học viên có môi trường thực hành lập trình với **Monaco Editor** (Python, JS/TS, Java, C++, SQL).
-- Thực thi code qua endpoint không lưu trạng thái `POST /api/v1/code/run` (chạy trong sandbox cô lập có giới hạn thời gian 5s và bộ nhớ). Các tệp nháp cá nhân (Scratchpads) lưu tại `localStorage` của trình duyệt.
-- Khi chấm bài tập `CODING`, Giảng viên và AI có thể gắn nhận xét trực tiếp vào từng dòng code thông qua cột `submission_answers.review_comments JSONB` (`[{line, body, author, isAiDraft}]`).
+### Quyết định 9: AI Co-Grader (`LLM-as-a-Judge`) & AI Quiz Generator
+- **AI Quiz Generator (`/api/v1/ai/assessments/generate-quiz`):** Tự động đọc phụ đề/nội dung buổi học để sinh bộ câu hỏi kiểm tra hiểu bài cho buổi học đó.
+- **AI Co-Grader (`/api/v1/ai/assessments/co-grade`):** Với các bài nộp `ESSAY` (Markdown / Code / Link GitHub) hoặc `FILE_SUBMISSION`, AI đóng vai trò như một Senior Reviewer: đối chiếu bài làm của học viên với `grading_config` (Rubric), chấm điểm nháp, phân tích điểm mạnh/lỗi sai và lưu vào cột `submission_answers.ai_suggestion JSONB` để Giảng viên/TA duyệt chỉ với 1 cú nhấp chuột.
 
 ### Quyết định 10: Từ Điển Kỹ Năng Chuẩn Hóa (`skills`) & Hệ Gợi Ý 2 Tầng (2-Tier RecSys)
 - Mọi khóa học và mọi câu hỏi bài tập đều gắn với mã kỹ năng chuẩn trong bảng `skills`.

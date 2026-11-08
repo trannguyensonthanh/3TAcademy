@@ -11,7 +11,6 @@ async function seed() {
     await db.insert(systemSettings).values([
       { key: 'maintenance_mode', value: 'false', description: 'Bật/tắt chế độ bảo trì toàn hệ thống', isPublic: true },
       { key: 'support_email', value: 'support@edutech.vn', description: 'Email hỗ trợ kỹ thuật', isPublic: true },
-      { key: 'default_seat_limit', value: '50', description: 'Số lượng học viên tối đa mặc định cho mỗi đợt học', isPublic: false },
       { key: 'replay_retention_days', value: '90', description: 'Số ngày lưu trữ video bản ghi bài học', isPublic: false },
     ]).onConflictDoNothing();
 

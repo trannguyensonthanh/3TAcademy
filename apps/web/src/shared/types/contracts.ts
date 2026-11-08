@@ -3,8 +3,7 @@ export type ISODate = string;
 
 export type AccountRole = 'STUDENT' | 'INSTRUCTOR' | 'ADMIN';
 export type AccountStatus = 'ACTIVE' | 'LOCKED';
-export type InstructorTier = 'STAFF' | 'GUEST';
-export type CohortStaffRole = 'INSTRUCTOR' | 'TA' | 'GUEST';
+export type CohortStaffRole = 'INSTRUCTOR' | 'TA';
 export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 export type CohortStatus = 'DRAFT' | 'OPENING' | 'ONGOING' | 'COMPLETED' | 'ARCHIVED';
 export type SessionStatus = 'SCHEDULED' | 'LIVE' | 'PROCESSING_REPLAY' | 'REPLAY_READY';
@@ -20,8 +19,7 @@ export type ItemType =
   | 'TRUE_FALSE'
   | 'SHORT_ANSWER'
   | 'ESSAY'
-  | 'FILE_SUBMISSION'
-  | 'CODING';
+  | 'FILE_SUBMISSION';
 export type AnswerGradingStatus = 'AUTO_GRADED' | 'PENDING_MANUAL' | 'MANUALLY_GRADED';
 export type IntegrityVerdict = 'CLEAN' | 'FLAGGED' | 'CONFIRMED_CHEAT' | 'CLEARED_BY_INSTRUCTOR';
 export type ChunkVisibility = 'PUBLIC' | 'ENROLLED_ONLY';
@@ -49,13 +47,11 @@ export interface UserProfile {
 }
 
 export interface InstructorProfile {
-  tier: InstructorTier;
   headline: string;
   organization: string | null;
   yearsOfExperience: number | null;
   expertiseSummaryMd: string | null;
   socialLinks: Record<string, string>;
-  isSchedulableByAi: boolean;
 }
 
 export interface Category {
@@ -110,10 +106,8 @@ export interface Cohort {
   curriculumVersion: string;
   techStackNotes: string | null;
   tuitionVnd: number;
-  maxStudents: number;
   enrolledCount: number;
   enrollmentOpenAt: ISODate;
-  enrollmentCloseAt: ISODate;
   startDate: string;
   endDate: string;
   replayExpiresAt: ISODate | null;
@@ -146,12 +140,8 @@ export interface ClassSession {
   activityTags: ActivityTag[];
   isFreePreview: boolean;
   host: { id: ID; fullName: string; avatarUrl: string | null };
-  originalHost: { id: ID; fullName: string } | null;
-  substitutionReason: string | null;
   scheduledStart: ISODate | null;
   scheduledEnd: ISODate | null;
-  actualStartedAt: ISODate | null;
-  actualEndedAt: ISODate | null;
   status: SessionStatus;
   videoProvider: VideoProvider | null;
   durationSeconds: number | null;
@@ -203,9 +193,8 @@ export interface Enrollment {
 export interface SessionProgress {
   sessionId: ID;
   lastPositionSec: number;
-  watchedSeconds: number;
-  attendedLiveSeconds: number;
   isCompleted: boolean;
+  completedAt: ISODate | null;
   lastActivityAt: ISODate;
 }
 
@@ -231,17 +220,6 @@ export interface Assessment {
   totalPoints: number;
 }
 
-export type CodeLanguage = 'python' | 'javascript' | 'typescript' | 'java' | 'cpp' | 'sql';
-
-export interface ReviewComment {
-  id: string;
-  line: number;
-  body: string;
-  author: { id: ID; fullName: string } | null;
-  isAiDraft: boolean;
-  createdAt: ISODate;
-}
-
 export interface SubmissionAnswer {
   id: ID;
   itemId: ID;
@@ -252,7 +230,6 @@ export interface SubmissionAnswer {
   finalScore: number | null;
   isCorrect: boolean | null;
   feedbackMd: string | null;
-  reviewComments: ReviewComment[];
   aiSuggestion?: { score: number; feedbackMd: string; rubricScores: Record<string, number> } | null;
   gradedBy: { id: ID; fullName: string } | null;
   gradedAt: ISODate | null;

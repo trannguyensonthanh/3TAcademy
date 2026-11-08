@@ -1,6 +1,6 @@
 # Bộ Prompt Xây Dựng Frontend Hoàn Chỉnh Cho Google AI Studio (Gemini)
 
-Tài liệu gồm **1 Master Prompt** (bối cảnh, design system, kiến trúc, hợp đồng dữ liệu) và **9 Phase Prompt** gửi lần lượt. Nội dung tổng hợp toàn bộ các quyết định đã chốt: mô hình Học viện tổ chức (Course → Cohort → Class Session), vai trò `STUDENT / INSTRUCTOR (STAFF|GUEST) / ADMIN`, vai trò trong lớp `INSTRUCTOR / TA / GUEST`, dạy thay bằng cách Admin đổi người phụ trách, video quay sẵn là học liệu của buổi học, chỉnh sửa trực tiếp (không nhân bản), bỏ Giỏ hàng, bỏ Facebook/GitHub Login, Google + Email/Password, VNPay VND, Hybrid RAG, RecSys theo kỹ năng, Live Copilot, AI Scheduler, Proctoring CV 2 tầng.
+Tài liệu gồm **1 Master Prompt** (bối cảnh, design system, kiến trúc, hợp đồng dữ liệu) và **9 Phase Prompt** gửi lần lượt. Nội dung tổng hợp toàn bộ các quyết định đã chốt: mô hình Học viện tổ chức (Course → Cohort → Class Session), vai trò `STUDENT / INSTRUCTOR / ADMIN`, vai trò trong lớp `INSTRUCTOR / TA` (diễn giả khách mời tham gia qua **LiveKit Guest Invite Link** `/live/guest?token=...` không cần tạo tài khoản DB), video quay sẵn là học liệu của buổi học, hoàn thành buổi học dựa trên việc vượt qua bài kiểm tra ngắn của buổi học (`SESSION_ASSIGNMENT`), khảo thí 6 dạng câu hỏi (Trắc nghiệm + Tự luận/Code/Link GitHub/Nộp File) có **AI Co-Grader (`LLM-as-a-Judge`)** chấm nháp, bỏ Giỏ hàng, bỏ Facebook/GitHub Login, Google + Email/Password, VNPay VND, Hybrid RAG, RecSys theo kỹ năng, Live Copilot, AI Scheduler, Proctoring CV 2 tầng.
 
 ---
 
@@ -10,11 +10,6 @@ Tài liệu gồm **1 Master Prompt** (bối cảnh, design system, kiến trúc
 2. **Thứ tự:** Dán **Master Prompt** ở lượt đầu (hoặc vào *System Instructions* nếu dùng chế độ Chat), sau đó gửi **Phase 0 → Phase 8** từng lượt. Chỉ gửi phase tiếp theo khi phase trước chạy được và qua checklist.
 3. **Giữ nguyên phần `Data Contracts`:** Các kiểu TypeScript trong Master Prompt được đặt tên và giá trị khớp với lược đồ PostgreSQL v2.1. Khi nối Backend thật, chỉ cần tắt mock (`VITE_USE_MOCKS=false`).
 4. **Không để AI Studio gọi Gemini trực tiếp từ trình duyệt.** Mọi tính năng AI đi qua API Backend (giai đoạn này là mock). Prompt đã khóa điều này.
-
-> [!IMPORTANT]
-> **Hai điểm phát sinh cần bổ sung vào lược đồ CSDL khi làm Backend** (do yêu cầu mới về Code Lab & Code Review):
-> 1. `submission_answers.review_comments JSONB NOT NULL DEFAULT '[]'` — lưu bình luận theo dòng code (`{line, body, authorId, isAiDraft}`).
-> 2. Thực thi code dùng endpoint không lưu trạng thái `POST /api/v1/code/run` (sandbox kiểu Judge0/Piston chạy trong container riêng). **Scratchpad cá nhân lưu ở `localStorage`**, không tạo bảng mới. Bài nộp code vẫn nằm trong `submission_answers.response_data`.
 
 ---
 
@@ -160,8 +155,7 @@ type ISODate = string;
 
 type AccountRole = 'STUDENT' | 'INSTRUCTOR' | 'ADMIN';
 type AccountStatus = 'ACTIVE' | 'LOCKED';
-type InstructorTier = 'STAFF' | 'GUEST';
-type CohortStaffRole = 'INSTRUCTOR' | 'TA' | 'GUEST';
+type CohortStaffRole = 'INSTRUCTOR' | 'TA';
 type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 type CohortStatus = 'DRAFT' | 'OPENING' | 'ONGOING' | 'COMPLETED' | 'ARCHIVED';
 type SessionStatus = 'SCHEDULED' | 'LIVE' | 'PROCESSING_REPLAY' | 'REPLAY_READY';
@@ -171,7 +165,7 @@ type OrderStatus = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED' | 'CANCELED';
 type EnrollmentStatus = 'ACTIVE' | 'COMPLETED' | 'REVOKED';
 type AssessmentPurpose = 'SESSION_ASSIGNMENT' | 'FINAL_EXAM';
 type GradingMode = 'AUTO' | 'MANUAL' | 'HYBRID';
-type ItemType = 'SINGLE_CHOICE' | 'MULTI_SELECT' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY' | 'FILE_SUBMISSION' | 'CODING';
+type ItemType = 'SINGLE_CHOICE' | 'MULTI_SELECT' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY' | 'FILE_SUBMISSION';
 type AnswerGradingStatus = 'AUTO_GRADED' | 'PENDING_MANUAL' | 'MANUALLY_GRADED';
 type IntegrityVerdict = 'CLEAN' | 'FLAGGED' | 'CONFIRMED_CHEAT' | 'CLEARED_BY_INSTRUCTOR';
 type ChunkVisibility = 'PUBLIC' | 'ENROLLED_ONLY';
@@ -180,22 +174,22 @@ type SkillRelationRole = 'PREREQUISITE' | 'LEARNING_OUTCOME';
 
 interface Account { id: ID; email: string; role: AccountRole; status: AccountStatus; emailVerifiedAt: ISODate | null; hasPassword: boolean; googleLinked: boolean; profile: UserProfile; instructorProfile?: InstructorProfile; }
 interface UserProfile { fullName: string; avatarUrl: string | null; bio: string | null; careerGoal: string | null; hasFaceReference: boolean; }
-interface InstructorProfile { tier: InstructorTier; headline: string; organization: string | null; yearsOfExperience: number | null; expertiseSummaryMd: string | null; socialLinks: Record<string, string>; isSchedulableByAi: boolean; }
+interface InstructorProfile { headline: string; organization: string | null; yearsOfExperience: number | null; expertiseSummaryMd: string | null; socialLinks: Record<string, string>; }
 interface Category { id: ID; name: string; slug: string; parentId: ID | null; }
 interface Skill { id: ID; code: string; name: string; categoryId: ID | null; description: string | null; }
 interface CourseSkill { skill: Skill; role: SkillRelationRole; targetWeight: number; }
 interface Course { id: ID; slug: string; title: string; shortDescription: string; descriptionMd: string; thumbnailUrl: string | null; previewYoutubeUrl: string | null; difficultyLevel: 1|2|3|4|5; category: Category; skills: CourseSkill[]; syllabusTemplate: { order: number; title: string; activityTags: ActivityTag[] }[]; status: CourseStatus; ratingAvg: number | null; reviewCount: number; }
 interface CohortStaff { account: Pick<Account,'id'|'email'> & { profile: UserProfile; instructorProfile?: InstructorProfile }; role: CohortStaffRole; scopeNote: string | null; }
-interface Cohort { id: ID; courseId: ID; code: string; name: string; curriculumVersion: string; techStackNotes: string | null; tuitionVnd: number; maxStudents: number; enrolledCount: number; enrollmentOpenAt: ISODate; enrollmentCloseAt: ISODate; startDate: string; endDate: string; replayExpiresAt: ISODate | null; status: CohortStatus; staff: CohortStaff[]; }
+interface Cohort { id: ID; courseId: ID; code: string; name: string; curriculumVersion: string; techStackNotes: string | null; tuitionVnd: number; enrolledCount: number; enrollmentOpenAt: ISODate; startDate: string; endDate: string; replayExpiresAt: ISODate | null; status: CohortStatus; staff: CohortStaff[]; }
 interface SessionAttachment { id: ID; fileName: string; mimeType: string; fileSizeBytes: number; uploadedBy: { id: ID; fullName: string }; createdAt: ISODate; }
 interface SessionSubtitle { id: ID; languageCode: string; isAutoGenerated: boolean; vttUrl: string; }
-interface ClassSession { id: ID; cohortId: ID; sessionOrder: number; title: string; descriptionMd: string | null; activityTags: ActivityTag[]; isFreePreview: boolean; host: { id: ID; fullName: string; avatarUrl: string | null }; originalHost: { id: ID; fullName: string } | null; substitutionReason: string | null; scheduledStart: ISODate | null; scheduledEnd: ISODate | null; actualStartedAt: ISODate | null; actualEndedAt: ISODate | null; status: SessionStatus; videoProvider: VideoProvider | null; durationSeconds: number | null; aiSummaryMd: string | null; attachments: SessionAttachment[]; subtitles: SessionSubtitle[]; lastUpdatedBy: { id: ID; fullName: string } | null; updatedAt: ISODate; }
+interface ClassSession { id: ID; cohortId: ID; sessionOrder: number; title: string; descriptionMd: string | null; activityTags: ActivityTag[]; isFreePreview: boolean; host: { id: ID; fullName: string; avatarUrl: string | null }; scheduledStart: ISODate | null; scheduledEnd: ISODate | null; status: SessionStatus; videoProvider: VideoProvider | null; durationSeconds: number | null; aiSummaryMd: string | null; attachments: SessionAttachment[]; subtitles: SessionSubtitle[]; lastUpdatedBy: { id: ID; fullName: string } | null; updatedAt: ISODate; }
 interface PlaybackSession { manifestUrl: string; provider: VideoProvider; expiresAt: ISODate; watermark: { email: string; shortId: string }; }
 interface TranscriptSegment { startSec: number; endSec: number; text: string; }
 interface Order { id: ID; orderCode: string; cohort: Pick<Cohort,'id'|'code'|'name'>; courseTitle: string; amountVnd: number; status: OrderStatus; paidAt: ISODate | null; expiresAt: ISODate; createdAt: ISODate; }
 interface PaymentTransaction { id: ID; gateway: 'VNPAY'; gatewayTxnId: string; amountVnd: number; responseCode: string; rawPayload: Record<string, unknown>; createdAt: ISODate; }
 interface Enrollment { id: ID; cohort: Cohort; course: Pick<Course,'id'|'slug'|'title'|'thumbnailUrl'>; status: EnrollmentStatus; finalExamPassed: boolean; enrolledAt: ISODate; completedAt: ISODate | null; progressPct: number; completedSessions: number; totalSessions: number; }
-interface SessionProgress { sessionId: ID; lastPositionSec: number; watchedSeconds: number; attendedLiveSeconds: number; isCompleted: boolean; lastActivityAt: ISODate; }
+interface SessionProgress { sessionId: ID; lastPositionSec: number; isCompleted: boolean; completedAt: ISODate | null; lastActivityAt: ISODate; }
 interface Assessment { id: ID; cohortId: ID; sessionId: ID | null; purpose: AssessmentPurpose; gradingMode: GradingMode; title: string; instructionsMd: string | null; durationMinutes: number | null; passScorePct: number; maxAttempts: number | null; dueAt: ISODate | null; proctoringConfig: { enabled: boolean; requireFaceMatch: boolean; requireFullscreen: boolean; maxRiskScore: number }; itemCount: number; totalPoints: number; }
 // Student-safe item (NO grading config)
 interface AssessmentItemStudent { id: ID; itemOrder: number; itemType: ItemType; points: number; skill: Pick<Skill,'id'|'name'>; prompt: ItemPrompt; }
@@ -203,22 +197,17 @@ type ItemPrompt =
   | { type: 'SINGLE_CHOICE' | 'MULTI_SELECT'; stemMd: string; options: { id: string; text: string }[] }
   | { type: 'TRUE_FALSE'; stemMd: string }
   | { type: 'SHORT_ANSWER'; stemMd: string; maxLength: number }
-  | { type: 'ESSAY'; stemMd: string; minWords?: number; maxWords?: number }
-  | { type: 'FILE_SUBMISSION'; stemMd: string; acceptedMimeTypes: string[]; maxSizeMb: number }
-  | { type: 'CODING'; stemMd: string; languages: CodeLanguage[]; starterCode: Partial<Record<CodeLanguage, string>>; publicTestCases: { input: string; expectedOutput: string }[]; timeLimitMs: number; memoryLimitMb: number };
+  | { type: 'ESSAY'; stemMd: string; minWords?: number; maxWords?: number; allowGithubUrl?: boolean }
+  | { type: 'FILE_SUBMISSION'; stemMd: string; acceptedMimeTypes: string[]; maxSizeMb: number };
 // Staff-only item
 interface AssessmentItemStaff extends AssessmentItemStudent { grading: ItemGrading; explanationMd: string | null; }
 type ItemGrading =
   | { type: 'SINGLE_CHOICE' | 'TRUE_FALSE'; correct: string }
   | { type: 'MULTI_SELECT'; correct: string[]; partialCredit: boolean }
   | { type: 'SHORT_ANSWER'; acceptedAnswers: string[]; caseSensitive: boolean }
-  | { type: 'ESSAY' | 'FILE_SUBMISSION'; rubric: RubricCriterion[] }
-  | { type: 'CODING'; hiddenTestCases: { input: string; expectedOutput: string; weight: number }[]; rubric: RubricCriterion[] };
+  | { type: 'ESSAY' | 'FILE_SUBMISSION'; rubric: RubricCriterion[] };
 interface RubricCriterion { id: string; title: string; description: string; maxPoints: number; }
-type CodeLanguage = 'python' | 'javascript' | 'typescript' | 'java' | 'cpp' | 'sql';
-interface CodeRunResult { status: 'ACCEPTED' | 'WRONG_ANSWER' | 'RUNTIME_ERROR' | 'COMPILE_ERROR' | 'TIME_LIMIT' | 'MEMORY_LIMIT'; stdout: string; stderr: string; timeMs: number; memoryKb: number; testResults?: { index: number; passed: boolean; input: string; expected: string; actual: string; hidden: boolean }[]; }
-interface ReviewComment { id: string; line: number; body: string; author: { id: ID; fullName: string } | null; isAiDraft: boolean; createdAt: ISODate; }
-interface SubmissionAnswer { id: ID; itemId: ID; responseData: unknown; gradingStatus: AnswerGradingStatus; autoScore: number | null; manualScore: number | null; finalScore: number | null; isCorrect: boolean | null; feedbackMd: string | null; reviewComments: ReviewComment[]; aiSuggestion?: { score: number; feedbackMd: string; rubricScores: Record<string, number> } | null; gradedBy: { id: ID; fullName: string } | null; gradedAt: ISODate | null; }
+interface SubmissionAnswer { id: ID; itemId: ID; responseData: unknown; gradingStatus: AnswerGradingStatus; autoScore: number | null; manualScore: number | null; finalScore: number | null; isCorrect: boolean | null; feedbackMd: string | null; aiSuggestion?: { score: number; feedbackMd: string; rubricScores: Record<string, number> } | null; gradedBy: { id: ID; fullName: string } | null; gradedAt: ISODate | null; }
 interface AssessmentAttempt { id: ID; assessmentId: ID; attemptNumber: number; startedAt: ISODate; expiresAt: ISODate | null; submittedAt: ISODate | null; gradingCompletedAt: ISODate | null; totalScore: number | null; maxPossibleScore: number | null; scorePct: number | null; isPassed: boolean | null; totalRiskScore: number; integrityStatus: IntegrityVerdict; answers: SubmissionAnswer[]; remedial: RemedialItem[] | null; }
 interface RemedialItem { skill: Pick<Skill,'id'|'name'>; masteryBefore: number; masteryAfter: number; resources: ({ kind: 'VIDEO'; sessionId: ID; sessionTitle: string; startSec: number; endSec: number } | { kind: 'DOCUMENT'; sessionId: ID; attachmentId: ID; fileName: string; page: number })[]; }
 interface ProctoringEvent { id: ID; occurredAt: ISODate; videoOffsetSec: number | null; tier: 'EDGE' | 'SERVER'; eventType: 'NO_FACE' | 'MULTI_FACE' | 'HEAD_TURNED' | 'TAB_HIDDEN' | 'FULLSCREEN_EXIT' | 'PHONE_DETECTED' | 'FACE_MISMATCH'; confidence: number; riskDelta: number; snapshotUrl: string | null; }
@@ -317,18 +306,17 @@ PHASE 3 — Live room "/live/:sessionId" (LiveLayout). Use @livekit/components-r
 7. Reconnecting overlay, host-left state, session-not-started waiting room with countdown, not-enrolled 403 state.
 ````
 
-### Phase 4 — Bài tập & Thi: mọi dạng câu hỏi, Code Lab, Code Review, Phòng thi giám sát
+### Phase 4 — Bài tập & Thi: 6 dạng câu hỏi, AI Co-Grader, Phòng thi giám sát
 
 ````text
-PHASE 4 — Assessments, Code Lab, code review and proctored exam. Implement:
+PHASE 4 — Assessments, AI Co-Grader review and proctored exam. Implement:
 1. "/app/assessments/:assessmentId" Intro: purpose (Bài tập buổi học / Thi cuối khóa), rules, duration, attempts used/max, due date, pass score, skills covered, previous attempts list. Start button (confirm if timed).
 2. Taking view "/app/assessments/:assessmentId/attempts/:attemptId": header with timer (warning at 5 and 1 minute, aria-live), autosave indicator ("Đã lưu lúc 20:14"), question palette (answered / flagged / current), flag for review, keyboard navigation, submit with summary of unanswered/flagged. Renderers for EVERY ItemType:
-   - SINGLE_CHOICE (radio cards), MULTI_SELECT (checkbox cards, "Chọn tất cả đáp án đúng"), TRUE_FALSE, SHORT_ANSWER (with char counter), ESSAY (markdown editor with preview, word count vs min/max), FILE_SUBMISSION (dropzone, accepted types, size limit, upload progress, replace/remove; works for audio files too e.g. IELTS speaking recordings with an inline audio player and a "Ghi âm" option using MediaRecorder), CODING (Monaco editor, language selector limited to allowed languages, starter code, reset to starter, run against public tests, custom stdin, output console, per-test results table, status chips ACCEPTED/WRONG_ANSWER/RUNTIME_ERROR/COMPILE_ERROR/TIME_LIMIT/MEMORY_LIMIT with time and memory, run history, unsaved changes guard).
+   - SINGLE_CHOICE (radio cards), MULTI_SELECT (checkbox cards, "Chọn tất cả đáp án đúng"), TRUE_FALSE, SHORT_ANSWER (with char counter), ESSAY (markdown editor with preview, code snippet formatting, optional GitHub Repo URL field, word count vs min/max), FILE_SUBMISSION (dropzone, accepted types .zip/.pdf/audio, size limit, upload progress, replace/remove; works for audio files too e.g. IELTS speaking recordings with an inline audio player and a "Ghi âm" option using MediaRecorder).
    Network loss: queue answers locally and sync when back online; banner.
-3. Result page: score and pass/fail (if fully auto graded) or "Đang chờ chấm thủ công N câu"; per-item review (student's answer, correctness, explanation when allowed, feedback, rubric scores, review comments); "Kỹ năng thay đổi" (mastery before→after per skill); Remedial plan (AI badge) listing sessions with time ranges (click → session page seeking to startSec) and document pages; retake button if attempts remain.
-4. Code Lab "/app/code": two areas — (a) "Bài lập trình của tôi": coding items across cohorts with status and best result; (b) "Sân chơi" scratchpads stored in localStorage: multiple files tabs, language selector, run with stdin via POST /code/run (mocked sandbox), output panel, execution time/memory, rename/duplicate/delete scratchpad, keyboard shortcut Ctrl/Cmd+Enter to run, resizable panes, light/dark editor themes synced with app theme.
-5. Code review view for students "/app/submissions/:answerId": read-only code with line numbers, inline review comments anchored to lines (author, time, AI draft vs verified by staff), overall feedback, rubric breakdown, diff against starter code toggle, test results.
-6. Proctored final exam flow "/app/exams/:assessmentId":
+3. Result page: score and pass/fail (if fully auto graded) or "Đang chờ chấm thủ công N câu"; passing a SESSION_ASSIGNMENT automatically marks the session as completed (`isCompleted = true`); per-item review (student's answer, correctness, explanation when allowed, feedback, rubric scores, AI Co-Grader suggestion); "Kỹ năng thay đổi" (mastery before→after per skill); Remedial plan (AI badge) listing sessions with time ranges (click → session page seeking to startSec) and document pages; retake button if attempts remain.
+4. Submission review view for students "/app/submissions/:answerId": read-only student submission (Markdown, formatted code blocks, GitHub repository link, or attached file), overall feedback, AI Co-Grader evaluation & rubric breakdown.
+5. Proctored final exam flow "/app/exams/:assessmentId":
    - Pre-check stepper: (1) system check: camera, fullscreen support, browser compatibility, stable connection; (2) identity verification: live face capture compared to reference (mock result: matched / retry / mismatch → contact support), missing reference → link to settings; (3) rules & privacy consent (what is monitored, what is stored: only event snapshots, retention period); (4) start.
    - Exam taking: same item renderers + fullscreen enforced (exit → warning modal + event), small draggable webcam preview tile, proctoring status chip (Ổn định / Cảnh báo / Nghiêm trọng) driven by mock events (NO_FACE, MULTI_FACE, HEAD_TURNED, TAB_HIDDEN), non-blocking warning toasts with aria-live assertive, counter of warnings, never accuse — neutral wording ("Không phát hiện khuôn mặt trong khung hình. Vui lòng ngồi đối diện camera.").
    - Submission screen: submitted, grading status, integrity review notice if flagged ("Bài thi đang được giảng viên xem lại").

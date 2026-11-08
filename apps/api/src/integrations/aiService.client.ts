@@ -22,18 +22,52 @@ export class AiServiceClient {
     return res.json() as Promise<T>;
   }
 
-  async runCodeSandbox(code: string, language: string, stdin = '', correlationId?: string) {
+  async generateSessionQuiz(
+    payload: {
+      session_id: number;
+      session_title: string;
+      transcript_text: string;
+      skill_ids?: number[];
+      question_count?: number;
+    },
+    correlationId?: string
+  ) {
     return this.request<{
-      status: string;
-      stdout: string;
-      stderr: string;
-      timeMs: number;
-      memoryKb: number;
+      session_id: number;
+      generated_items: Array<Record<string, unknown>>;
     }>(
-      '/api/v1/code/run',
+      '/api/v1/ai/assessments/generate-quiz',
       {
         method: 'POST',
-        body: JSON.stringify({ code, language, stdin }),
+        body: JSON.stringify(payload),
+      },
+      correlationId
+    );
+  }
+
+  async coGradeSubmission(
+    payload: {
+      item_id: number;
+      prompt_md: string;
+      rubric_config: Record<string, unknown>;
+      student_response_md: string;
+      github_repo_url?: string;
+      max_points: number;
+    },
+    correlationId?: string
+  ) {
+    return this.request<{
+      item_id: number;
+      ai_suggestion: {
+        score: number;
+        feedback_md: string;
+        rubric_scores: Record<string, number>;
+      };
+    }>(
+      '/api/v1/ai/assessments/co-grade',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
       },
       correlationId
     );

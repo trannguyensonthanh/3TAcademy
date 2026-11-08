@@ -1,5 +1,5 @@
-import { pgTable, bigserial, varchar, text, boolean, timestamp, integer, uniqueIndex } from 'drizzle-orm/pg-core';
-import { accountRoleEnum, accountStatusEnum, instructorTierEnum, authProviderEnum } from './enums.js';
+import { pgTable, bigserial, varchar, text, timestamp, integer, uniqueIndex } from 'drizzle-orm/pg-core';
+import { accountRoleEnum, accountStatusEnum, authProviderEnum } from './enums.js';
 
 export const accounts = pgTable('accounts', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -34,12 +34,10 @@ export const userProfiles = pgTable('user_profiles', {
 
 export const instructorProfiles = pgTable('instructor_profiles', {
   accountId: bigserial('account_id', { mode: 'number' }).primaryKey().references(() => accounts.id, { onDelete: 'cascade' }),
-  tier: instructorTierEnum('tier').notNull().default('STAFF'),
   headline: varchar('headline', { length: 255 }).notNull(),
   organization: varchar('organization', { length: 200 }),
   yearsOfExperience: integer('years_of_experience'),
   expertiseSummaryMd: text('expertise_summary_md'),
-  isSchedulableByAi: boolean('is_schedulable_by_ai').notNull().default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

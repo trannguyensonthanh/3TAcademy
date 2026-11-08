@@ -10,10 +10,10 @@
 flowchart TD
     M0["Milestone 0: Khởi tạo Monorepo, Docker, Schema 33 Bảng & Seed (ĐÃ HOÀN TẤT KHUNG)"]
     M1["Milestone 1: Xác thực (Argon2id + Google OAuth), RBAC & Quản lý Tài khoản"]
-    M2["Milestone 2: Từ điển Kỹ năng, Khóa học, Đợt học (Cohort), Dạy thay 1-Click & Thanh toán VNPay"]
-    M3["Milestone 3: Buổi học (LiveKit WebRTC + Video R2 HLS AES-128 + Watermark Chống Leak)"]
+    M2["Milestone 2: Từ điển Kỹ năng, Khóa học, Đợt học (Cohort), Quản lý Lịch & Thanh toán VNPay"]
+    M3["Milestone 3: Buổi học (LiveKit WebRTC + Guest Link + Video R2 HLS AES-128 + Watermark)"]
     M4["Milestone 4: Hybrid RAG (pgvector + tsvector + Reranker) & AI Live Copilot"]
-    M5["Milestone 5: Khảo thí 7 Dạng Câu Hỏi, Code Lab Sandbox, Chấm Kép & Inline Code Review"]
+    M5["Milestone 5: Khảo thí 6 Dạng (Trắc nghiệm + Tự luận/Dự án), AI Quiz Gen & AI Co-Grader"]
     M6["Milestone 6: Giám sát Thi Computer Vision 2 Tầng (MediaPipe + ONNX) & Chứng chỉ HMAC"]
     M7["Milestone 7: Hệ Gợi Ý 2 Tầng (ZPD + Video Clips Ôn Tập) & AI Scheduler (OR-Tools)"]
     M8["Milestone 8: Kiểm thử Toàn diện, Đánh giá RAG (Evals), Observability & Đóng gói Production"]
@@ -51,30 +51,29 @@ flowchart TD
 
 ---
 
-### Milestone 2: Danh Mục Kỹ Năng, Khóa Học, Đợt Học (`Cohort`), Dạy Thay 1-Click & Thanh Toán VNPay
+### Milestone 2: Danh Mục Kỹ Năng, Khóa Học, Đợt Học (`Cohort`) & Thanh Toán VNPay
 - **Phía Backend (`apps/api/src/modules/courses/`, `cohorts/`, `orders/`):**
   - CRUD Danh mục (`categories`), Từ điển Kỹ năng (`skills`), Khóa học (`courses`, `course_skills`, `syllabus_template`).
   - Mở Đợt học (`cohorts`) tự động sinh danh sách `class_sessions` từ `syllabus_template`.
-  - Gán đội ngũ giảng dạy (`cohort_instructors`: `INSTRUCTOR`, `TA`, `GUEST`).
-  - API **Đổi người dạy thay 1-Click** (`PATCH /api/v1/admin/sessions/:id/host`) kiểm tra chống trùng giờ bằng `EXCLUDE USING gist`.
-  - Luồng thanh toán trực tiếp qua VNPay (`HMAC-SHA512`) có khóa lũy đẳng `idempotency_key` và xử lý IPN nguyên tử `FOR UPDATE`.
+  - Gán đội ngũ giảng dạy (`cohort_instructors`: `INSTRUCTOR`, `TA`).
+  - API dời lịch buổi học (`scheduled_start`, `scheduled_end`) và kiểm tra chống trùng giờ bằng `EXCLUDE USING gist`.
+  - Luồng thanh toán trực tiếp qua VNPay (`HMAC-SHA512`) có khóa lũy đẳng `idempotency_key` và xử lý IPN nguyên tử `FOR UPDATE` cộng `enrolled_count`.
 - **Phía Frontend (`apps/web/src/features/catalog/`, `checkout/`, `admin/`):**
   - Trang chủ `/`, Danh mục `/courses`, Chi tiết khóa học `/courses/:slug` (có cảnh báo trùng lịch học nếu học viên đang học lớp khác), Hồ sơ giảng viên `/instructors/:id`.
   - Trang thanh toán trực tiếp `/checkout/:cohortCode` và kết quả `/checkout/result`.
-  - Giao diện Admin quản lý khóa học, kỹ năng, đợt học và đổi người dạy thay 1-click.
+  - Giao diện Admin quản lý khóa học, kỹ năng, đợt học và xếp lịch.
 
 ---
 
-### Milestone 3: Không Gian Lớp Học, Phòng LiveKit WebRTC & Trình Phát Video HLS Chống Leak
+### Milestone 3: Không Gian Lớp Học, Phòng LiveKit WebRTC (+ Guest Link) & Trình Phát Video HLS Chống Leak
 - **Phía Backend & Worker (`apps/api/src/modules/sessions/`, `apps/ai-service/src/worker/`):**
-  - Cấp LiveKit Token phân quyền theo vai trò (`host_instructor_id` / `TA` / `ADMIN` làm Host; `STUDENT` làm người học).
-  - Xử lý bắt đầu/kết thúc buổi Live: tự động lọc bỏ các phiên thử nghiệm `< 5 phút`.
+  - Cấp LiveKit Token phân quyền theo vai trò (`host_instructor_id` / `TA` / `ADMIN` làm Host; `STUDENT` làm người học) và **sinh Link Mời Diễn Giả 1 chạm (`createGuestSpeakerToken`)** cho khách mời bên ngoài vào phòng Live không cần tài khoản DB.
   - Pipeline xử lý Video quay sẵn và Replay buổi Live sang **HLS mã hóa AES-128** lưu trên Cloudflare R2.
-  - Ghi nhận tiến độ xem video (`session_progress`) mỗi 15 giây, tự động hoàn thành khi xem đạt $\ge 90\%$.
+  - Lưu vị trí xem video (`last_position_sec`); đánh dấu hoàn thành buổi học (`is_completed = TRUE`) khi học viên vượt qua bài kiểm tra ngắn của buổi học.
 - **Phía Frontend (`apps/web/src/features/cohort-workspace/`, `session/`, `live-room/`):**
-  - Dashboard học viên `/app`, Không gian đợt học `/app/cohorts/:cohortId` (6 Tab).
+  - Dashboard học viên `/app`, Không gian đợt học `/app/cohorts/:cohortId`.
   - Trang buổi học `/app/cohorts/:cohortId/sessions/:sessionId` với trình phát `SecureHlsPlayer` tích hợp **Dynamic Canvas Watermark** di chuyển mỗi 12 giây và `MutationObserver`.
-  - Phòng học trực tuyến `/live/:sessionId` (Pre-join Lobby, Sân khấu chính, Chat, Hỏi đáp bình chọn, Điểm danh).
+  - Phòng học trực tuyến `/live/:sessionId` và `/live/guest` (Sân khấu chính, Chat, Hỏi đáp bình chọn, AI Copilot).
 
 ---
 
@@ -84,21 +83,19 @@ flowchart TD
   - Cơ chế xóa và lập chỉ mục lại khi giảng viên thay thế video quay sẵn mới cho buổi học.
   - Truy vấn **Hybrid Search (`pgvector` HNSW + `tsvector` GIN + RRF)** + **Cross-Encoder Reranker**.
   - Trợ lý Tư vấn Tuyển sinh (`/advisor` - `visibility = 'PUBLIC'`) và Trợ giảng Buổi học (`SESSION_TUTOR` - cô lập theo `cohort_id`).
-  - AI Live Copilot: Phiên âm trực tiếp (`Silero VAD` + `faster-whisper`), nút **"Tóm tắt 10 phút vừa qua"** cho người vào muộn, gom cụm câu hỏi cho giảng viên, và sinh bản tóm tắt + câu hỏi ôn tập sau buổi học.
+  - AI Live Copilot: Phiên âm trực tiếp (`Silero VAD` + `faster-whisper`), nút **"Tóm tắt 10 phút vừa qua"** cho người vào muộn, gom cụm câu hỏi cho giảng viên, và sinh bản tóm tắt + câu hỏi kiểm tra hiểu bài sau buổi học.
   - Tự động sinh câu trả lời nháp (`is_ai_generated = TRUE`) cho các chủ đề thảo luận của học viên, chờ giảng viên/TA bấm xác nhận.
 
 ---
 
-### Milestone 5: Khảo Thí 7 Dạng Câu Hỏi, Code Lab Sandbox, Chấm Điểm Kép & Inline Code Review
-- **Phía Backend & AI Service (`apps/api/src/modules/assessments/`, `code-sandbox/`):**
-  - Trình tạo đề thi hỗ trợ đủ 7 dạng câu hỏi (`SINGLE_CHOICE`, `MULTI_SELECT`, `TRUE_FALSE`, `SHORT_ANSWER`, `ESSAY`, `FILE_SUBMISSION`, `CODING`), bắt buộc gán `skill_id`.
-  - Công cụ AI tạo câu hỏi nháp từ bản ghi lời giảng của buổi học.
-  - Endpoint chạy code cô lập `POST /api/v1/code/run`.
-  - Chấm điểm tự động kết hợp hàng đợi chấm tay có **AI gợi ý điểm + nhận xét theo rubric** và **nhận xét từng dòng code (`review_comments JSONB`)**.
-- **Phía Frontend (`apps/web/src/features/assessments/`, `code-lab/`, `code-review/`, `teach/`):**
-  - Phòng làm bài kiểm tra trực tuyến `/app/assessments/:id/attempts/:attemptId` (lưu tự động, hỗ trợ thu âm bài nói và trình soạn thảo Monaco Editor).
-  - Phòng thực hành lập trình `/app/code` (Bài lập trình trong khóa + Sân chơi Scratchpad lưu `localStorage`).
-  - Bàn chấm bài của Giảng viên `/teach/grading` và trang xem chi tiết nhận xét code của Học viên `/app/submissions/:answerId`.
+### Milestone 5: Khảo Thí 6 Dạng Câu Hỏi, AI Quiz Generator & AI Co-Grader (`LLM-as-a-Judge`)
+- **Phía Backend & AI Service (`apps/api/src/modules/assessments/`, `apps/ai-service/src/api/routes/grading_ai.py`):**
+  - Trình tạo đề thi hỗ trợ 6 dạng câu hỏi tinh gọn (`SINGLE_CHOICE`, `MULTI_SELECT`, `TRUE_FALSE`, `SHORT_ANSWER`, `ESSAY`, `FILE_SUBMISSION`), bắt buộc gán `skill_id`.
+  - Công cụ **AI Quiz Generator** tự động tạo bài kiểm tra ngắn từ bản ghi lời giảng của buổi học để xác nhận học viên hiểu bài (`is_completed = TRUE`).
+  - Chấm điểm tự động trắc nghiệm (`5ms`) kết hợp **AI Co-Grader (`LLM-as-a-Judge`)** đọc bài tự luận Markdown / đoạn code / link GitHub Repo đối chiếu với `rubric` để sinh điểm gợi ý và nhận xét chi tiết vào `ai_suggestion` cho Giảng viên duyệt 1 chạm.
+- **Phía Frontend (`apps/web/src/features/assessments/`, `teach/`):**
+  - Giao diện làm bài kiểm tra & nộp bài tự luận/dự án `/app/assessments/:id/attempts/:attemptId` (lưu tự động, hỗ trợ soạn thảo Markdown, dán code snippet, đính kèm link GitHub hoặc file `.zip`/`.pdf`).
+  - Bàn chấm bài 1-chạm của Giảng viên `/teach/grading` với khung đối chiếu gợi ý từ AI Co-Grader.
 
 ---
 

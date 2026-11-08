@@ -12,11 +12,11 @@
 | **Mô hình kinh doanh** | Chợ khóa học mở (Udemy Marketplace) cho GV tự do đăng bán video lẻ. | **Học viện Tổ chức (Live Cohort Academy)**. Tổ chức sở hữu khóa học, chia thành các Đợt học (`Cohort`) theo kỳ/năm. | Học viên mua **Đợt học (`Cohort`)**, học theo lịch trình với Giảng viên và bạn cùng lớp. |
 | **Đơn vị học tập** | Video bài giảng ghi sẵn cắt vụn. | **Buổi học (`Class Session`)**: Có thể là Buổi Livestream thực tế hoặc Buổi học dùng Video quay sẵn chất lượng cao làm học liệu. | Cùng 1 giao diện Buổi học quản lý thống nhất cả Live, Replay và Pre-recorded Video. |
 | **Quy trình Mua hàng** | Giỏ hàng nhiều khóa, ví giảng viên, chia doanh thu %, mã giảm giá đại trà. | **Mua trực tiếp 1-Click (Direct Checkout)** qua VNPay. Không giỏ hàng, không ví GV, giá niêm yết theo Đợt. | Luồng mua đi thẳng: Bấm "Đăng ký" -> Trang Checkout -> Cổng VNPay -> Kích hoạt ghi danh tự động. |
-| **Xác thực người dùng** | Email, Google, Facebook, GitHub rườm rà. | **Email/Mật khẩu (Argon2id) + Google OAuth 2.0 (1-Tap)**. Bỏ hoàn toàn Facebook & GitHub. | 3 vai trò tài khoản: `STUDENT`, `INSTRUCTOR` (Staff/Guest), `ADMIN`. Giảng viên/Admin do Tổ chức mời. |
+| **Xác thực người dùng** | Email, Google, Facebook, GitHub rườm rà. | **Email/Mật khẩu (Argon2id) + Google OAuth 2.0 (1-Tap)**. Bỏ hoàn toàn Facebook & GitHub. | 3 vai trò tài khoản: `STUDENT`, `INSTRUCTOR`, `ADMIN`. Diễn giả khách mời tham gia qua **LiveKit Guest Link** dùng 1 lần. |
 | **Bảo vệ Bản quyền Video** | Video upload thẳng lên server/S3, dễ bị tải lậu qua IDM/F12. | **Cloudflare R2 + HLS Mã hóa AES-128 + Dynamic Watermark Canvas** (Email + Short ID di chuyển ngẫu nhiên). | Trình phát video độc quyền có lớp watermark di chuyển mỗi 12s, chống inspect DOM, chặn chuột phải khu vực phát. |
-| **Điều phối Giảng viên & Dạy thay** | Không hỗ trợ hoặc quy trình xin phép/phê duyệt rườm rà dễ nghẽn lịch. | **Chỉ định & Đổi Host 1-Click**: Giảng viên A bận -> Admin cập nhật `host_instructor_id = GV B`. | GV B lập tức có quyền mở phòng Live. Giao diện hiển thị minh bạch: *"GV B (Dạy thay Thầy A)"*. |
-| **Hệ thống AI tích hợp** | RAG cơ bản hoặc chatbot rời rạc, không gắn với mốc thời gian bài giảng. | **Bộ AI Đa phương thức gắn chặt với nghiệp vụ**: Hybrid RAG, Live Copilot, RecSys 2 tầng (ZPD + Video clip ôn tập), Giám sát thi CV 2 tầng, AI Scheduler. | Mọi trích dẫn AI (`Citations`) trong bài giảng đều có thể click để nhảy đúng giây video (`seek(mm:ss)`) hoặc trang tài liệu PDF. |
-| **Phân hệ Lập trình & Bài tập** | Trắc nghiệm đơn giản, không có môi trường chạy code và review code. | **Code Lab tương tác (Monaco Editor + Stateless Runner) + Chấm điểm Kép (AI gợi ý + GV xác nhận) + Review Code theo dòng**. | Hỗ trợ 7 dạng câu hỏi. Chức năng Review Code cho phép GV để lại nhận xét ghim vào từng dòng code của học viên. |
+| **Quản lý Lịch học & Giảng viên** | Không hỗ trợ hoặc quy trình xin phép/phê duyệt rườm rà dễ nghẽn lịch. | **Lịch học tinh gọn & Dời lịch nhanh**: Giảng viên bận -> dời lịch `scheduled_start/end` hoặc cập nhật `host_instructor_id`. | Kiểm tra chống trùng giờ tự động bằng `EXCLUDE USING gist`. |
+| **Hệ thống AI tích hợp** | RAG cơ bản hoặc chatbot rời rạc, không gắn với mốc thời gian bài giảng. | **Bộ AI Đa phương thức gắn chặt với nghiệp vụ**: Hybrid RAG, Live Copilot, RecSys 2 tầng (ZPD + Video clip ôn tập), Giám sát thi CV 2 tầng, AI Scheduler, AI Co-Grader. | Mọi trích dẫn AI (`Citations`) trong bài giảng đều có thể click để nhảy đúng giây video (`seek(mm:ss)`) hoặc trang tài liệu PDF. |
+| **Phân hệ Bài tập & Đánh giá** | Trắc nghiệm đơn giản, không có AI đánh giá tự luận/dự án. | **Khảo thí 6 dạng câu hỏi (Trắc nghiệm + Tự luận/Code/Link GitHub/Nộp File) + AI Quiz Generator + AI Co-Grader (`LLM-as-a-Judge`)**. | Học viên vượt qua bài kiểm tra ngắn của buổi học để xác nhận hoàn thành buổi học (`is_completed = true`). |
 
 ---
 
@@ -247,16 +247,15 @@ Trang học tập chuyên sâu được tối ưu hóa cho việc tiếp thu ki�
 * **Giao diện & Thành phần chức năng:**
   * **Header cố định:** Đồng hồ đếm ngược thời gian còn lại (chuyển sang màu đỏ cảnh báo ở 5 phút và 1 phút cuối); Chỉ báo lưu tự động ("Đã lưu lúc 20:15:30"); Nút nộp bài.
   * **Bảng điều hướng câu hỏi (Question Palette):** Lưới các câu hỏi với trạng thái màu sắc rõ ràng: *Đã trả lời, Chưa trả lời, Đang đánh dấu xem lại (Flagged)*.
-  * **Hỗ trợ 7 dạng câu hỏi tiêu chuẩn:**
+  * **Hỗ trợ 6 dạng câu hỏi tiêu chuẩn (Trắc nghiệm + Tự luận/Dự án):**
     1. `SINGLE_CHOICE`: Trắc nghiệm 1 đáp án đúng (Radio cards lớn, dễ bấm).
     2. `MULTI_SELECT`: Trắc nghiệm nhiều đáp án đúng (Checkbox cards kèm chỉ dẫn *"Chọn tất cả đáp án đúng"*).
     3. `TRUE_FALSE`: Lựa chọn Đúng / Sai.
     4. `SHORT_ANSWER`: Điền từ/câu trả lời ngắn kèm bộ đếm ký tự.
-    5. `ESSAY`: Trình soạn thảo văn bản tự luận Markdown kèm bộ đếm số từ theo yêu cầu tối thiểu/tối đa.
-    6. `FILE_SUBMISSION`: Khu vực kéo thả tệp đính kèm (hỗ trợ tệp tài liệu, nén zip hoặc tệp ghi âm giọng nói bài thi Speaking với trình thu âm tích hợp sẵn).
-    7. `CODING`: Môi trường lập trình Monaco Editor chuyên nghiệp: Chọn ngôn ngữ (Python, JavaScript, TypeScript, Java, C++, SQL), mã khởi tạo có sẵn, nút "Reset về ban đầu", nút "Chạy thử (Run)" với Test case công khai, nhập dữ liệu Stdin tùy ý, bảng kết quả chạy console chi tiết (Thời gian chạy ms, bộ nhớ KB, trạng thái Passed / Failed).
+    5. `ESSAY`: Trình soạn thảo văn bản tự luận Markdown (hỗ trợ viết bài phân tích, dán đoạn code hoặc đính kèm link GitHub Repository) kèm bộ đếm số từ.
+    6. `FILE_SUBMISSION`: Khu vực kéo thả tệp đính kèm (hỗ trợ tệp bài tập `.zip`, báo cáo `.pdf`, hoặc tệp ghi âm giọng nói với trình thu âm tích hợp sẵn).
   * **Cơ chế an toàn kết nối mạng:** Tự động lưu bài tạm vào bộ nhớ trình duyệt nếu mất mạng và tự động đồng bộ lên máy chủ ngay khi có kết nối trở lại.
-  * **Nộp bài:** Hộp thoại tổng kết số câu đã làm, số câu còn bỏ sót hoặc đang cắm cờ trước khi chính thức xác nhận nộp.
+  * **Nộp bài:** Hộp thoại tổng kết số câu đã làm, số câu còn bỏ sót hoặc đang cắm cờ trước khi chính thức xác nhận nộp. Khi học viên vượt qua bài kiểm tra ngắn của buổi học (`SESSION_ASSIGNMENT`), buổi học đó tự động được đánh dấu Hoàn thành (`is_completed = TRUE`).
 
 #### 20. Trang Kết quả Bài thi & Lộ trình Ôn tập AI (`GET /app/assessments/.../result`)
 * **Dữ liệu hiển thị:**
@@ -277,24 +276,11 @@ Dành riêng cho các kỳ thi chứng chỉ quan trọng đòi hỏi kiểm so�
   * Cửa sổ camera thu nhỏ hiển thị ở góc màn hình để học viên tự theo dõi khung hình của mình.
   * Nhãn trạng thái giám sát AI hoạt động âm thầm: Báo hiệu các lỗi như *Không thấy khuôn mặt trong khung hình, Phát hiện nhiều khuôn mặt, Quay mặt ra ngoài quá lâu*. Thông báo nhắc nhở hiển thị với ngôn từ hòa nhã, chuyên nghiệp, không phán xét.
 
-#### 22. Phòng Thực hành Lập trình Độc lập (`GET /app/code`)
-* **Dữ liệu hiển thị & Chức năng:**
-  * **Phần 1 — Bài tập Lập trình của tôi:** Tập hợp toàn bộ các bài toán Coding từ các buổi học và đợt học mà học viên đã tham gia, hiển thị trạng thái đã giải quyết (`Accepted`) hoặc cần sửa lại.
-  * **Phần 2 — Sân chơi Code Tự do (Scratchpad Sandbox):**
-    * Môi trường thực hành code cá nhân hóa lưu trữ tại `localStorage` của trình duyệt.
-    * Hỗ trợ tạo nhiều tệp/tab code, đổi tên, nhân bản hoặc xóa tệp.
-    * Trình soạn thảo Monaco Editor đầy đủ tính năng: Tự động thụt lề, tô màu cú pháp, gợi ý code thông minh (IntelliSense).
-    * Hỗ trợ các ngôn ngữ phổ biến: Python 3, Node.js/TypeScript, Java, C++, SQL.
-    * Bảng điều khiển nhập dữ liệu đầu vào (Custom Stdin) và khung hiển thị kết quả Console Output (Stdout, Stderr).
-    * Phím tắt thực thi nhanh: `Ctrl + Enter` (hoặc `Cmd + Enter`). Đo lường thời gian thực thi và tài nguyên RAM sử dụng.
-
-#### 23. Trang Xem Bài Nộp & Nhận xét Code Review Chi tiết (`GET /app/submissions/:answerId`)
+#### 22. Trang Xem Chi Tiết Bài Nộp & Nhận Xét Từ AI Co-Grader (`GET /app/submissions/:answerId`)
 * **Dữ liệu hiển thị:**
-  * Màn hình xem lại bài làm Coding đã được Giảng viên hoặc AI đánh giá.
-  * Trình hiển thị mã nguồn chỉ đọc với số dòng chi tiết.
-  * **Bình luận Code Review theo dòng (Inline Code Comments):** Các nhận xét đóng góp của Giảng viên/Trợ giảng được neo chặt vào đúng số dòng code tương ứng; hiển thị phân định rõ bình luận do Giảng viên viết hay gợi ý từ AI.
-  * Công cụ so sánh Diff: So sánh mã nguồn học viên nộp với mã khởi tạo ban đầu (Starter Code) để học viên thấy rõ những thay đổi mình đã viết.
-  * Bảng điểm theo tiêu chí (Rubric breakdown) và bảng kết quả kiểm thử (Test cases).
+  * Màn hình xem lại bài làm Tự luận / Code / Dự án (`ESSAY`, `FILE_SUBMISSION`) đã được Giảng viên và AI Co-Grader đánh giá.
+  * Nội dung bài nộp của học viên (Markdown, khối mã nguồn có tô màu cú pháp, liên kết GitHub Repo hoặc tệp đính kèm).
+  * **Nhận xét chi tiết & Bảng điểm theo tiêu chí (`Rubric Breakdown`):** Hiển thị điểm thành phần theo từng tiêu chí trong Rubric, phân tích ưu điểm, lỗi sai và hướng dẫn tối ưu từ AI Co-Grader đã được Giảng viên xác nhận.
 
 #### 24. Báo cáo Năng lực & Radar Kỹ năng (`GET /app/progress`)
 * **Dữ liệu hiển thị:**

@@ -30,42 +30,42 @@ Toàn bộ API được đặt dưới tiền tố `/api/v1`. Mọi phản hồi
 | `POST /api/v1/admin/courses` | `ADMIN` | Tạo khóa học mới, gán `course_skills` và `syllabus_template`, đẩy job tạo vector embedding cho khóa học. |
 | `PATCH /api/v1/admin/courses/:id` | `ADMIN` | Cập nhật trực tiếp thông tin khóa học và trạng thái (`DRAFT`, `PUBLISHED`, `ARCHIVED`). |
 
-### 3. Module Đợt học, Đội ngũ Giảng dạy & Dạy thay 1-Click (`src/modules/cohorts/`)
+### 3. Module Đợt học, Đội ngũ Giảng dạy & Quản lý Lịch học (`src/modules/cohorts/`)
 | Phương thức & Đường dẫn | Quyền | Chức năng & Yêu cầu Nghiệp vụ |
 | :--- | :---: | :--- |
 | `GET /api/v1/cohorts/:id` | Enrolled / Staff | Lấy thông tin không gian lớp học: tiến độ, danh sách buổi học, lịch học, đội ngũ giảng viên/trợ giảng. |
 | `POST /api/v1/admin/cohorts` | `ADMIN` | Mở đợt học mới từ một `Course`: tự động sinh danh sách `class_sessions` từ `syllabus_template`. |
-| `PUT /api/v1/admin/cohorts/:id/staff` | `ADMIN` | Phân công Giảng viên (`INSTRUCTOR`), Trợ giảng (`TA`), hoặc Khách mời (`GUEST`) vào đợt học. |
-| `PATCH /api/v1/admin/sessions/:id/host` | `ADMIN` | **Đổi người dạy (Dạy thay 1-Click):** Cập nhật `host_instructor_id = newHostId`, tự động lưu người cũ vào `original_host_id` (nếu chưa có), ghi nhận `substitution_reason`, kiểm tra xung đột giờ dạy bằng `EXCLUDE USING gist`, và gửi thông báo cho học viên. |
+| `PUT /api/v1/admin/cohorts/:id/staff` | `ADMIN` | Phân công Giảng viên (`INSTRUCTOR`) hoặc Trợ giảng (`TA`) vào đợt học. |
+| `PATCH /api/v1/admin/sessions/:id/schedule` | `ADMIN` / `INSTRUCTOR` | Cập nhật lịch dự kiến (`scheduled_start`, `scheduled_end`) khi cần dời lịch buổi học hoặc đổi `host_instructor_id`, tự động kiểm tra chống trùng giờ dạy bằng `EXCLUDE USING gist`. |
 
 ### 4. Module Buổi học, Video HLS Chống Leak & Phòng LiveKit (`src/modules/sessions/`)
 | Phương thức & Đường dẫn | Quyền | Chức năng & Yêu cầu Nghiệp vụ |
 | :--- | :---: | :--- |
-| `GET /api/v1/sessions/:id` | Enrolled / Staff | Chi tiết buổi học, danh sách tài liệu (`session_attachments`), phụ đề (`.vtt`), bản tóm tắt AI. |
+| `GET /api/v1/sessions/:id` | Enrolled / Staff | Chi tiết buổi học, danh sách tài liệu (`session_attachments`), phụ đề (`.vtt`), bản tóm tắt AI và bài kiểm tra hiểu bài (`SESSION_ASSIGNMENT`). |
 | `POST /api/v1/sessions/:id/playback` | Enrolled / Staff | Kiểm tra quyền truy cập, trả về đường dẫn Manifest HLS R2 ngắn hạn, khóa giải mã AES-128 và thông tin `watermark` (`email`, `shortId`). |
-| `POST /api/v1/sessions/:id/progress` | `STUDENT` | Heartbeat lưu vị trí xem video (`last_position_sec`, `watched_seconds`). Tự động đánh dấu `is_completed = TRUE` khi đạt $\ge 90\%$ thời lượng. |
+| `POST /api/v1/sessions/:id/progress` | `STUDENT` | Lưu vị trí đang xem video (`last_position_sec`). Cờ `is_completed = TRUE` được kích hoạt tự động khi học viên vượt qua bài kiểm tra ngắn của buổi học (`is_passed = TRUE`). |
 | `POST /api/v1/sessions/:id/live/token` | Enrolled / Staff | Cấp LiveKit Token: Nếu `user.role === 'ADMIN' \|\| session.host_instructor_id === user.id` (hoặc `TA` của lớp) thì cấp quyền `canPublish: true, roomAdmin: true`; nếu là `STUDENT` thì cấp quyền người học. |
-| `POST /api/v1/sessions/:id/live/start` | Host / `ADMIN` | Bắt đầu buổi học trực tiếp (`status = 'LIVE'`, `actual_started_at = NOW()`). |
-| `POST /api/v1/sessions/:id/live/end` | Host / `ADMIN` | Kết thúc buổi học (`actual_ended_at = NOW()`). **Nếu thời lượng `< 5 phút (300s)`**: tự động hủy bản ghi thử nghiệm và giữ trạng thái `SCHEDULED`. **Nếu `>= 5 phút`**: chuyển sang `PROCESSING_REPLAY` và đẩy job vào `ARQ Worker`. |
+| `POST /api/v1/sessions/:id/live/guest-link` | Host / `ADMIN` | **Sinh Link Mời Diễn Giả 1 chạm (`createGuestSpeakerToken`):** Tạo URL `/live/guest?token=...` có hiệu lực 24h cho phép chuyên gia khách mời bên ngoài vào thẳng phòng Live chia sẻ màn hình/bật mic mà không cần tạo tài khoản DB. |
+| `POST /api/v1/sessions/:id/live/start` | Host / `ADMIN` | Bắt đầu buổi học trực tiếp (`status = 'LIVE'`). |
+| `POST /api/v1/sessions/:id/live/end` | Host / `ADMIN` | Kết thúc buổi học, chuyển sang `PROCESSING_REPLAY` và đẩy job hậu kỳ vào `ARQ Worker`. |
 | `POST /api/v1/sessions/:id/video` | Host / `TA` / `ADMIN` | Tải lên hoặc thay thế Video quay sẵn cho buổi học -> Đẩy job chuyển mã HLS AES-128, tạo phụ đề `.vtt` và **xóa + lập chỉ mục lại `knowledge_chunks`** của buổi học đó. |
 | `POST /api/v1/sessions/:id/replay/approve` | Host / `TA` / `ADMIN` | Duyệt xuất bản bản ghi buổi học (`status = 'REPLAY_READY'`) và kích hoạt nạp kiến thức vào RAG. |
 
 ### 5. Module Đơn hàng Trực tiếp, VNPay Lũy đẳng & Chứng chỉ (`src/modules/orders/`)
 | Phương thức & Đường dẫn | Quyền | Chức năng & Yêu cầu Nghiệp vụ |
 | :--- | :---: | :--- |
-| `POST /api/v1/orders/checkout` | `STUDENT` | Tạo đơn hàng trực tiếp cho 1 `Cohort` (kiểm tra cửa sổ đăng ký, kiểm tra còn chỗ trống, áp dụng `idempotencyKey`) và trả về URL thanh toán VNPay ký `HMAC-SHA512`. |
+| `POST /api/v1/orders/checkout` | `STUDENT` | Tạo đơn hàng trực tiếp cho 1 `Cohort` (kiểm tra đã tới `enrollment_open_at` và đợt học chưa `COMPLETED`, áp dụng `idempotencyKey`) và trả về URL thanh toán VNPay ký `HMAC-SHA512`. |
 | `GET /api/v1/payments/vnpay-ipn` | Public (Webhook) | Xác minh chữ ký `HMAC-SHA512` bằng `crypto.timingSafeEqual`, khóa dòng đơn hàng `FOR UPDATE`, kiểm tra khớp số tiền `amount_vnd`, cập nhật `PAID`, tạo `enrollments` và tăng `enrolled_count`. |
-| `POST /api/v1/admin/certificates/issue` | `ADMIN` | Cấp chứng chỉ số ký `HMAC-SHA256` cho học viên đủ điều kiện (hoàn thành $\ge 80\%$ buổi học + đỗ `FINAL_EXAM` + `integrity_status = 'CLEAN'`). |
+| `POST /api/v1/admin/certificates/issue` | `ADMIN` | Cấp chứng chỉ số ký `HMAC-SHA256` cho học viên đủ điều kiện (hoàn thành các buổi học + đỗ `FINAL_EXAM` + `integrity_status = 'CLEAN'`). |
 | `GET /api/v1/certificates/verify/:code` | Public | Tra cứu công khai tính hợp lệ của chứng chỉ và kiểm tra trạng thái thu hồi (`revoked_at`). |
 
-### 6. Module Khảo thí, Code Lab, Code Review & Giám sát Thi (`src/modules/assessments/`)
+### 6. Module Khảo thí 6 Dạng, AI Co-Grader & Giám sát Thi (`src/modules/assessments/`)
 | Phương thức & Đường dẫn | Quyền | Chức năng & Yêu cầu Nghiệp vụ |
 | :--- | :---: | :--- |
 | `POST /api/v1/assessments/:id/start` | `STUDENT` | Tạo lượt làm bài (`assessment_attempts`), trả về danh sách câu hỏi **đã lọc bỏ hoàn toàn `grading_config`**. |
-| `PUT /api/v1/attempts/:id/answers` | `STUDENT` | Lưu tự động (Autosave) câu trả lời của học viên. |
-| `POST /api/v1/attempts/:id/submit` | `STUDENT` | Nộp bài: Chấm tự động các câu trắc nghiệm/code test case; đẩy các câu tự luận/code cần chấm tay sang AI Service để tạo `ai_suggestion`; cập nhật `student_skill_states` và gọi Micro-RecSys tạo lộ trình video ôn tập (`remedial_recommendations`). |
-| `POST /api/v1/code/run` | Auth | Chuyển tiếp yêu cầu chạy code sang sandbox cô lập của `ai-service`, trả về `stdout`, `stderr`, `timeMs`, `memoryKb`. |
-| `POST /api/v1/teach/answers/:id/grade` | `INSTRUCTOR` / `TA` | Giảng viên chấm điểm thủ công, lưu nhận xét tổng quan và lưu mảng **nhận xét theo dòng code (`review_comments JSONB`)**. |
+| `PUT /api/v1/attempts/:id/answers` | `STUDENT` | Lưu tự động (Autosave) câu trả lời của học viên (Trắc nghiệm, Tự luận Markdown / Code snippet / Link GitHub, hoặc File đính kèm). |
+| `POST /api/v1/attempts/:id/submit` | `STUDENT` | Nộp bài: Chấm tự động các câu trắc nghiệm (`5ms`); đẩy các câu tự luận/dự án cần chấm tay sang AI Service (`/api/v1/ai/assessments/co-grade`) để tạo `ai_suggestion`; nếu đạt `SESSION_ASSIGNMENT` thì tự động cập nhật `session_progress.is_completed = TRUE`, cập nhật `student_skill_states` và gọi Micro-RecSys tạo lộ trình video ôn tập (`remedial_recommendations`). |
+| `POST /api/v1/teach/answers/:id/grade` | `INSTRUCTOR` / `TA` | Giảng viên duyệt hoặc điều chỉnh điểm từ gợi ý của AI (`ai_suggestion`), lưu nhận xét `feedback_md` chỉ với 1 chạm. |
 | `POST /api/v1/attempts/:id/proctor-events` | `STUDENT` | Ghi nhận sự kiện cảnh báo từ MediaPipe (Edge) hoặc gửi ảnh chụp bất thường sang AI Service (Server) để kiểm tra bằng YOLO11n + ArcFace. |
 | `PATCH /api/v1/teach/attempts/:id/verdict` | `INSTRUCTOR` / `ADMIN` | Giảng viên duyệt bằng chứng giám sát thi và chốt phán quyết (`CLEAN`, `CONFIRMED_CHEAT`, `CLEARED_BY_INSTRUCTOR`). |
 
@@ -106,13 +106,13 @@ Toàn bộ API được đặt dưới tiền tố `/api/v1`. Mọi phản hồi
 ### Trụ cột 5: AI Scheduler Xếp Lịch Bằng Ràng Buộc (`src/scheduler_ai/`)
 1. **Phân tích yêu cầu ngôn ngữ tự nhiên (`nl_parser.py`):** Chuyển câu lệnh tiếng Việt của Admin (VD: *"Không xếp lịch tối Chủ nhật, mỗi giảng viên dạy tối đa 3 buổi/tuần"*) thành cấu trúc JSON ràng buộc.
 2. **Bộ giải tối ưu (`solver.py`):** Dùng **Google OR-Tools CP-SAT** giải bài toán phân bổ lịch học thỏa mãn:
-   - Ràng buộc cứng: Không trùng giờ giảng viên giữa các lớp, nằm trong khung giờ rảnh `instructor_availabilities`, giữ cố định lịch của chuyên gia khách mời (`GUEST`).
+   - Ràng buộc cứng: Không trùng giờ giảng viên giữa các lớp, nằm trong khung giờ rảnh `instructor_availabilities`.
    - Ràng buộc mềm: Phân bổ đều các buổi học trong tuần, tối ưu tải giảng dạy.
    - Nếu bài toán vô nghiệm (`INFEASIBLE`), trả về nguyên nhân xung đột cụ thể bằng tiếng Việt để Admin điều chỉnh.
 
-### Trụ cột 6: Sandbox Thực Thi Code & Trợ Lý Chấm Bài (`src/api/routes/code_runner.py`)
-1. **Stateless Code Runner:** Chạy mã nguồn học viên trong tiến trình cô lập có giới hạn thời gian (`timeout_sec`) và bộ nhớ, đối chiếu với bộ `publicTestCases` và `hiddenTestCases`.
-2. **AI Grading & Code Review Assistant:** Phân tích bài làm tự luận (`ESSAY`) hoặc mã nguồn (`CODING`) theo `rubric` của giảng viên để sinh điểm đề xuất (`ai_suggestion`) và các bình luận nhận xét theo từng dòng code (`isAiDraft: true`).
+### Trụ cột 6: AI Quiz Generator & AI Co-Grader (`LLM-as-a-Judge` - `src/api/routes/grading_ai.py`)
+1. **AI Session Quiz Generator (`/api/v1/ai/assessments/generate-quiz`):** Tự động đọc phụ đề/nội dung buổi học để sinh bộ câu hỏi kiểm tra hiểu bài gắn với `skill_id`, phục vụ xác nhận hoàn thành buổi học (`session_progress.is_completed = TRUE`).
+2. **AI Co-Grader & Code/Project Reviewer (`/api/v1/ai/assessments/co-grade`):** Phân tích bài làm tự luận (`ESSAY` — bao gồm bài viết Markdown, đoạn code dán vào hoặc link GitHub Repo) và tệp đính kèm (`FILE_SUBMISSION`) theo `rubric` của giảng viên để sinh điểm đề xuất và nhận xét chi tiết vào `submission_answers.ai_suggestion` cho Giảng viên duyệt 1 chạm.
 
 ---
 
