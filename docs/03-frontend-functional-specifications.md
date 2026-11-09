@@ -1,13 +1,13 @@
 # ĐẶC TẢ CHỨC NĂNG TOÀN DIỆN FRONTEND (SRS FRONTEND)
-## Nền Tảng Đào Tạo Công Nghệ Trực Tuyến Thế Hệ Mới (EduTech AI Platform v2)
+## Nền Tảng Đào Tạo Công Nghệ Trực Tuyến (EduTech AI Platform)
 
 ---
 
 ## PHẦN I: TỔNG QUAN CHUYỂN DỊCH & RÀNG BUỘC KỸ THUẬT
 
-### 1.1. So Sánh Kiến Trúc Nghiệp Vụ: Hệ Thống Cũ (v1) vs Hệ Thống Mới (v2)
+### 1.1. So Sánh Kiến Trúc Nghiệp Vụ: Hệ Thống Cũ vs Hệ Thống Mới
 
-| Hạng mục | Hệ thống cũ (v1) | Hệ thống mới (v2) | Ràng buộc Frontend cần nhớ |
+| Hạng mục | Hệ thống cũ | Hệ thống mới | Ràng buộc Frontend cần nhớ |
 | :--- | :--- | :--- | :--- |
 | **Mô hình kinh doanh** | Chợ khóa học mở (Udemy Marketplace) cho GV tự do đăng bán video lẻ. | **Học viện Tổ chức (Live Cohort Academy)**. Tổ chức sở hữu khóa học, chia thành các Đợt học (`Cohort`) theo kỳ/năm. | Học viên mua **Đợt học (`Cohort`)**, học theo lịch trình với Giảng viên và bạn cùng lớp. |
 | **Đơn vị học tập** | Video bài giảng ghi sẵn cắt vụn. | **Buổi học (`Class Session`)**: Có thể là Buổi Livestream thực tế hoặc Buổi học dùng Video quay sẵn chất lượng cao làm học liệu. | Cùng 1 giao diện Buổi học quản lý thống nhất cả Live, Replay và Pre-recorded Video. |

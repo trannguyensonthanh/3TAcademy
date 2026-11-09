@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="EduTech AI Service",
-    version="2.0.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

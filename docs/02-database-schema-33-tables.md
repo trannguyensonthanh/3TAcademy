@@ -1,6 +1,6 @@
 # 02. Thiết Kế Cơ Sở Dữ Liệu PostgreSQL 16 + `pgvector` (33 Bảng Chuẩn Hóa)
 
-> **File SQL DDL gốc:** `apps/api/src/db/migrations/0000_baseline_v2.sql`  
+> **File SQL DDL gốc:** `apps/api/src/db/migrations/0000_baseline.sql`  
 > **Định nghĩa Drizzle ORM:** `apps/api/src/db/schema/`
 
 ---

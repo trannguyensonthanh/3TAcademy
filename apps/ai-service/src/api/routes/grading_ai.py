@@ -74,3 +74,4 @@ async def co_grade_submission(req: CoGradeSubmissionRequest):
             "rubric_scores": {"logic": 0.9, "clean_code_or_clarity": 0.8},
         },
     }
+

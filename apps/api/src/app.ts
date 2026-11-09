@@ -38,7 +38,7 @@ app.get('/health/ready', async (_req, res) => {
 app.get('/api/v1', (_req, res) => {
   res.json({
     name: 'EduTech AI Platform API',
-    version: '2.0.0',
+    version: '1.0.0',
     status: 'ONLINE',
   });
 });

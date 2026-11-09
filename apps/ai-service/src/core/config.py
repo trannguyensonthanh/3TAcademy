@@ -5,7 +5,7 @@ from pydantic import Field
 class Settings(BaseSettings):
     ENV: str = Field(default="development")
     PORT: int = Field(default=8000)
-    DATABASE_URL: str = Field(default="postgresql://edutech_user:edutech_secret_2026@localhost:5432/edutech_v2")
+    DATABASE_URL: str = Field(default="postgresql://edutech_user:edutech_secret_2026@localhost:5432/edutech_db")
     REDIS_URL: str = Field(default="redis://localhost:6379")
 
     INTERNAL_API_KEY: str = Field(min_length=16)

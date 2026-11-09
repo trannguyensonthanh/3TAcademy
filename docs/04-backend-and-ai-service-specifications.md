@@ -1,4 +1,4 @@
-# 04. Đặc Tả Kỹ Thuật Backend API & AI Service (EduTech AI Platform v2)
+# 04. Đặc Tả Kỹ Thuật Backend API & AI Service (EduTech AI Platform)
 
 > **Tài liệu này quy định chi tiết danh sách Endpoints của `apps/api` (Node.js 22 + Express 5 + Drizzle ORM), 6 Trụ cột Trí tuệ Nhân tạo của `apps/ai-service` (Python 3.12 + FastAPI + ARQ), và Bảng Ánh Xạ Kế Thừa Thuật Toán từ dự án cũ (`Dự_án_CNPM`).**
 
@@ -120,7 +120,7 @@ Toàn bộ API được đặt dưới tiền tố `/api/v1`. Mọi phản hồi
 
 Khi triển khai chi tiết từng module trong dự án mới, hãy tham chiếu các tệp sau đây ở thư mục cũ `d:\Lap_Trinh_ST\web\Dự_án_CNPM` để tái sử dụng các thuật toán đã kiểm chứng và khắc phục triệt để các lỗi cũ:
 
-| Hạng mục triển khai ở v2 | File tham chiếu tại `d:\Lap_Trinh_ST\web\Dự_án_CNPM` | Logic cần kế thừa & Điểm bắt buộc nâng cấp ở v2 |
+| Hạng mục triển khai ở hệ thống mới | File tham chiếu tại `d:\Lap_Trinh_ST\web\Dự_án_CNPM` | Logic cần kế thừa & Điểm điều chỉnh ở hệ thống mới |
 | :--- | :--- | :--- |
 | **1. Bóc tách PDF / DOCX / PPTX an toàn** | `ai-service/src/rag/document_parser.py`<br/>`ai-service/src/api/routes/extract.py` | **Kế thừa:** Logic đọc XML trong RAM, chặn thực thể ngoại lai (XXE) và giới hạn dung lượng giải nén chống Zip-bomb.<br/>**Nâng cấp:** Đưa toàn bộ tác vụ bóc tệp nặng vào `ARQ Worker` chạy nền. |
 | **2. Điều phối đa mô hình Gemini ↔ vLLM Qwen** | `ai-service/src/core/llm_provider.py`<br/>`vllm-server/docker-compose.yml` | **Kế thừa:** Cơ chế tự động chuyển đổi dự phòng (`auto fallback`) kèm thời gian nghỉ (`cooldown`).<br/>**Nâng cấp:** Dùng chung 1 `httpx.AsyncClient` trong `lifespan`, truyền đầy đủ header xác thực khi kiểm tra healthcheck vLLM và hỗ trợ Structured JSON Output. |

@@ -8,7 +8,7 @@ Tài liệu gồm **1 Master Prompt** (bối cảnh, design system, kiến trúc
 
 1. **Vì sao chia nhiều phase?** AI Studio (chế độ Build) có giới hạn độ dài đầu ra cho mỗi lượt. Một prompt duy nhất đòi "toàn bộ hệ thống" gần như chắc chắn sẽ bị cắt giữa chừng hoặc làm nông mọi trang. Chia phase giúp mỗi lượt làm sâu một phân hệ trên cùng một nền móng.
 2. **Thứ tự:** Dán **Master Prompt** ở lượt đầu (hoặc vào *System Instructions* nếu dùng chế độ Chat), sau đó gửi **Phase 0 → Phase 8** từng lượt. Chỉ gửi phase tiếp theo khi phase trước chạy được và qua checklist.
-3. **Giữ nguyên phần `Data Contracts`:** Các kiểu TypeScript trong Master Prompt được đặt tên và giá trị khớp với lược đồ PostgreSQL v2.1. Khi nối Backend thật, chỉ cần tắt mock (`VITE_USE_MOCKS=false`).
+3. **Giữ nguyên phần `Data Contracts`:** Các kiểu TypeScript trong Master Prompt được đặt tên và giá trị khớp với lược đồ PostgreSQL của dự án. Khi nối Backend thật, chỉ cần tắt mock (`VITE_USE_MOCKS=false`).
 4. **Không để AI Studio gọi Gemini trực tiếp từ trình duyệt.** Mọi tính năng AI đi qua API Backend (giai đoạn này là mock). Prompt đã khóa điều này.
 
 ---

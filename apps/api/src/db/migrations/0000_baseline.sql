@@ -1,5 +1,5 @@
 -- =============================================================================
--- EduTech AI Platform v2.1 — Baseline PostgreSQL 16 + pgvector Schema (33 Tables)
+-- EduTech AI Platform — Baseline PostgreSQL 16 + pgvector Schema (33 Tables)
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- UUIDv4 generation (gen_random_uuid)

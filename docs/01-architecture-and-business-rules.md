@@ -1,12 +1,12 @@
-# 01. Kiến Trúc Tổng Thể & 12 Quyết Định Nghiệp Vụ Cốt Lõi (EduTech AI Platform v2)
+# 01. Kiến Trúc Tổng Thể & 12 Quyết Định Nghiệp Vụ Cốt Lõi (EduTech AI Platform)
 
 > **Tài liệu này là nguồn sự thật duy nhất (Single Source of Truth) về mô hình kinh doanh, phân quyền, luồng nghiệp vụ và kiến trúc hệ thống.** Mọi kỹ sư và AI Coding Agent trước khi viết code cho Frontend, Backend hay AI Service đều bắt buộc phải đọc và tuân thủ nghiêm ngặt tài liệu này.
 
 ---
 
-## 1. Mục Tiêu Dự Án & Chiến Lược Tái Kiến Trúc Phòng Sạch (Clean-Room Re-architecture)
+## 1. Mục Tiêu Dự Án & Kiến Trúc Hệ Thống
 
-Dự án **EduTech AI Platform v2** (`d:\Lap_Trinh_ST\web\edutech-ai-platform`) được xây dựng mới hoàn toàn từ con số 0 nhằm thay thế hệ thống cũ (`d:\Lap_Trinh_ST\web\Dự_án_CNPM` - 47 bảng rời rạc, pha trộn chợ khóa học Udemy và lớp học trực tiếp).
+Dự án **EduTech AI Platform** (`d:\Lap_Trinh_ST\web\edutech-ai-platform`) là một dự án độc lập được thiết kế theo mô hình Học viện đào tạo trực tuyến kết hợp AI đa phương thức, tách biệt với hệ thống cũ (`d:\Lap_Trinh_ST\web\Dự_án_CNPM`).
 
 ### Nguyên tắc kế thừa:
 - **Dự án cũ (`Dự_án_CNPM`)** được giữ nguyên vẹn 100% ở thư mục bên cạnh để làm **Kho tham chiếu thuật toán (Reference Repository)** và bản dự phòng (Fallback).

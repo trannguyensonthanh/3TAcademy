@@ -29,11 +29,11 @@ flowchart TD
 - **Hạng mục thực hiện:**
   - Cấu trúc Monorepo (`apps/api`, `apps/ai-service`, `apps/web`, `infra`, `docs`).
   - `docker-compose.dev.yml` chạy PostgreSQL 16 (`pgvector/pgvector:pg16`) và Redis 7 (`redis:7-alpine`).
-  - Định nghĩa đầy đủ 33 bảng trong `apps/api/src/db/migrations/0000_baseline_v2.sql` và `apps/api/src/db/schema/`.
+  - Định nghĩa đầy đủ 33 bảng trong `apps/api/src/db/migrations/0000_baseline.sql` và `apps/api/src/db/schema/`.
   - Hợp đồng dữ liệu TypeScript tại `apps/web/src/shared/types/contracts.ts`.
 - **Cách kiểm tra nghiệm thu:**
   - Chạy `npm run dev:infra` lên container Postgres và Redis trạng thái `healthy`.
-  - Chạy file SQL migration `0000_baseline_v2.sql` tạo thành công 33 bảng và các chỉ mục HNSW/GIN/GiST.
+  - Chạy file SQL migration `0000_baseline.sql` tạo thành công 33 bảng và các chỉ mục HNSW/GIN/GiST.
   - Chạy `npm run db:seed` tạo tài khoản Admin mặc định (`admin@edutech.vn` / `Admin@2026!`).
 
 ---
