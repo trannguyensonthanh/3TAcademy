@@ -114,7 +114,7 @@ flowchart TD
 * **Mục tiêu duy nhất:** Cung cấp thông tin chương trình học và cho phép chọn 1 Đợt học (`Cohort`) để đăng ký.
 * **Bố cục 2 cột (Nội dung chính 8 cột + Thẻ Đăng ký cố định 4 cột):**
   * **Cột chính:**
-    1. *Header & Video Giới thiệu*: Tên khóa học, cấp độ, video giới thiệu (YouTube).
+    1. *Header & Tổng quan khóa học*: Tên khóa học, danh mục, cấp độ, mô tả mục tiêu chương trình.
     2. *Chuẩn Kỹ năng*: Kỹ năng cần biết trước (`Prerequisites`) và Kỹ năng đạt được sau khóa học (`Learning Outcomes`).
     3. *Khung Chương trình học (`Syllabus Template`)*: Danh sách tuần tự các buổi học dạng Accordion gọn gàng kèm nhãn hoạt động (`Lý thuyết`, `Thực hành`, `Workshop`).
     4. *Danh sách các Đợt khai giảng (`Cohorts`)*: Hiển thị rõ Mã đợt, Ngày bắt đầu – kết thúc, Lịch học trong tuần, Giảng viên & Trợ giảng phụ trách, Ngày mở cổng đăng ký (`enrollment_open_at`), Số học viên đã tham gia (`enrolled_count`), và Học phí.

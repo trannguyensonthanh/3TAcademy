@@ -9,7 +9,7 @@ export const courseStatusEnum = pgEnum('course_status', ['DRAFT', 'PUBLISHED', '
 export const cohortStatusEnum = pgEnum('cohort_status', ['DRAFT', 'OPENING', 'ONGOING', 'COMPLETED', 'ARCHIVED']);
 export const cohortStaffRoleEnum = pgEnum('cohort_staff_role', ['INSTRUCTOR', 'TA']);
 export const sessionStatusEnum = pgEnum('session_status', ['SCHEDULED', 'LIVE', 'PROCESSING_REPLAY', 'REPLAY_READY']);
-export const videoSourceProviderEnum = pgEnum('video_source_provider', ['R2_HLS_AES128', 'YOUTUBE_PUBLIC', 'BUNNY_STREAM']);
+export const videoSourceProviderEnum = pgEnum('video_source_provider', ['R2_HLS_AES128', 'BUNNY_STREAM']);
 
 export const orderStatusEnum = pgEnum('order_status', ['PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELED']);
 export const enrollmentStatusEnum = pgEnum('enrollment_status', ['ACTIVE', 'COMPLETED', 'REVOKED']);

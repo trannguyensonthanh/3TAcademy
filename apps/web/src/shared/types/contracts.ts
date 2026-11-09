@@ -8,7 +8,7 @@ export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 export type CohortStatus = 'DRAFT' | 'OPENING' | 'ONGOING' | 'COMPLETED' | 'ARCHIVED';
 export type SessionStatus = 'SCHEDULED' | 'LIVE' | 'PROCESSING_REPLAY' | 'REPLAY_READY';
 export type ActivityTag = 'THEORY' | 'EXERCISE_REVIEW' | 'LIVE_CODING' | 'WORKSHOP';
-export type VideoProvider = 'R2_HLS_AES128' | 'YOUTUBE_PUBLIC' | 'BUNNY_STREAM';
+export type VideoProvider = 'R2_HLS_AES128' | 'BUNNY_STREAM';
 export type OrderStatus = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED' | 'CANCELED';
 export type EnrollmentStatus = 'ACTIVE' | 'COMPLETED' | 'REVOKED';
 export type AssessmentPurpose = 'SESSION_ASSIGNMENT' | 'FINAL_EXAM';
@@ -82,7 +82,6 @@ export interface Course {
   shortDescription: string;
   descriptionMd: string;
   thumbnailUrl: string | null;
-  previewYoutubeUrl: string | null;
   difficultyLevel: 1 | 2 | 3 | 4 | 5;
   category: Category;
   skills: CourseSkill[];
@@ -138,7 +137,6 @@ export interface ClassSession {
   title: string;
   descriptionMd: string | null;
   activityTags: ActivityTag[];
-  isFreePreview: boolean;
   host: { id: ID; fullName: string; avatarUrl: string | null };
   scheduledStart: ISODate | null;
   scheduledEnd: ISODate | null;

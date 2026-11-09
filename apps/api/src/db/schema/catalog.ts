@@ -27,7 +27,6 @@ export const courses = pgTable('courses', {
   shortDescription: varchar('short_description', { length: 500 }).notNull(),
   descriptionMd: text('description_md').notNull(),
   thumbnailUrl: text('thumbnail_url'),
-  previewYoutubeUrl: text('preview_youtube_url'),
   difficultyLevel: smallint('difficulty_level').notNull().default(1),
   syllabusTemplate: jsonb('syllabus_template').notNull().default([]),
   status: courseStatusEnum('status').notNull().default('DRAFT'),

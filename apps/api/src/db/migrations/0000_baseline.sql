@@ -19,7 +19,7 @@ CREATE TYPE course_status         AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
 CREATE TYPE skill_relation_role   AS ENUM ('PREREQUISITE', 'LEARNING_OUTCOME');
 CREATE TYPE cohort_status         AS ENUM ('DRAFT', 'OPENING', 'ONGOING', 'COMPLETED', 'ARCHIVED');
 CREATE TYPE session_status        AS ENUM ('SCHEDULED', 'LIVE', 'PROCESSING_REPLAY', 'REPLAY_READY');
-CREATE TYPE video_source_provider AS ENUM ('R2_HLS_AES128', 'YOUTUBE_PUBLIC', 'BUNNY_STREAM');
+CREATE TYPE video_source_provider AS ENUM ('R2_HLS_AES128', 'BUNNY_STREAM');
 
 CREATE TYPE order_status          AS ENUM ('PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELED');
 CREATE TYPE enrollment_status     AS ENUM ('ACTIVE', 'COMPLETED', 'REVOKED');
@@ -118,7 +118,6 @@ CREATE TABLE courses (
     short_description       VARCHAR(500) NOT NULL,
     description_md          TEXT NOT NULL,
     thumbnail_url           TEXT,
-    preview_youtube_url     TEXT,
     difficulty_level        SMALLINT NOT NULL CHECK (difficulty_level BETWEEN 1 AND 5),
     syllabus_template       JSONB NOT NULL DEFAULT '[]',
     status                  course_status NOT NULL DEFAULT 'DRAFT',
@@ -176,7 +175,6 @@ CREATE TABLE class_sessions (
     activity_tags           TEXT[] NOT NULL DEFAULT '{}',
     title                   VARCHAR(255) NOT NULL,
     description_md          TEXT,
-    is_free_preview         BOOLEAN NOT NULL DEFAULT FALSE,
     scheduled_start         TIMESTAMPTZ,
     scheduled_end           TIMESTAMPTZ,
     status                  session_status NOT NULL DEFAULT 'SCHEDULED',
@@ -184,7 +182,6 @@ CREATE TABLE class_sessions (
     video_provider          video_source_provider,
     hls_manifest_r2_key     TEXT,
     hls_aes_key_hex         CHAR(32),
-    external_youtube_id     VARCHAR(32),
     duration_seconds        INT CHECK (duration_seconds >= 0),
     ai_summary_md           TEXT,
     last_updated_by         BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
