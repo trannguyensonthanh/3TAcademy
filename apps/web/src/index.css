@@ -4,36 +4,58 @@
 
 @layer base {
   :root {
-    --background: 40 20% 98%;
-    --foreground: 24 10% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 24 10% 10%;
+    /* Light Mode — Fresh Botanical & Mint Surface */
+    --background: 150 33% 98%;          /* #F7FBF9 */
+    --foreground: 222 47% 11%;          /* #0F172A */
+    --card: 0 0% 100%;                  /* #FFFFFF */
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 24 10% 10%;
-    --primary: 174 81% 27%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Primary Emerald Green (#10B981 -> hover #059669) */
+    --primary: 160 84% 39%;             /* #10B981 */
     --primary-foreground: 0 0% 100%;
-    --muted: 30 10% 95%;
-    --muted-foreground: 25 5% 45%;
-    --border: 30 10% 90%;
-    --input: 30 10% 90%;
-    --ring: 174 81% 27%;
-    --radius: 0.5rem;
+    --secondary: 152 81% 90%;           /* #D1FAE5 (Soft Mint) */
+    --secondary-foreground: 163 94% 24%;/* #047857 */
+
+    --muted: 150 25% 94%;
+    --muted-foreground: 215 16% 47%;
+    --border: 149 40% 88%;
+    --input: 149 40% 88%;
+    --ring: 160 84% 39%;
+    --radius: 0.75rem;
+
+    /* Semantic Spectrum (Green -> Amber/Yellow -> Red/Coral) */
+    --spectrum-safe: 160 84% 39%;       /* #10B981 Emerald */
+    --spectrum-warn: 38 92% 50%;        /* #F59E0B Amber */
+    --spectrum-danger: 0 84% 60%;       /* #EF4444 Coral Red */
   }
 
   .dark {
-    --background: 220 7% 6%;
-    --foreground: 40 5% 92%;
-    --card: 220 7% 9%;
-    --card-foreground: 40 5% 92%;
-    --popover: 220 7% 9%;
-    --popover-foreground: 40 5% 92%;
-    --primary: 173 50% 47%;
-    --primary-foreground: 220 7% 6%;
-    --muted: 220 7% 14%;
-    --muted-foreground: 40 5% 60%;
-    --border: 220 7% 16%;
-    --input: 220 7% 16%;
-    --ring: 173 50% 47%;
+    /* Dark Mode — Deep Forest Night */
+    --background: 150 25% 5%;           /* #090F0C */
+    --foreground: 152 81% 96%;          /* #ECFDF5 */
+    --card: 147 21% 8%;                 /* #111A15 */
+    --card-foreground: 152 81% 96%;
+    --popover: 147 21% 8%;
+    --popover-foreground: 152 81% 96%;
+
+    /* Primary Mint Emerald (#34D399 -> hover #10B981) */
+    --primary: 158 64% 52%;             /* #34D399 */
+    --primary-foreground: 150 25% 5%;
+    --secondary: 164 86% 16%;           /* #064E3B */
+    --secondary-foreground: 152 76% 80%;
+
+    --muted: 148 20% 13%;
+    --muted-foreground: 150 12% 65%;
+    --border: 148 20% 15%;              /* #1E2D24 */
+    --input: 148 20% 15%;
+    --ring: 158 64% 52%;
+
+    /* Semantic Spectrum in Dark Mode */
+    --spectrum-safe: 158 64% 52%;       /* #34D399 */
+    --spectrum-warn: 43 96% 56%;        /* #FBBF24 */
+    --spectrum-danger: 0 91% 71%;       /* #F87171 */
   }
 }
 
@@ -42,6 +64,18 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground transition-colors duration-200;
+  }
+}
+
+@layer utilities {
+  /* Green Tonal Gradient (Light Green -> Deep Emerald) */
+  .bg-gradient-emerald {
+    background: linear-gradient(135deg, #6ee7b7 0%, #10b981 55%, #047857 100%);
+  }
+
+  /* Semantic Spectrum Gradient (Green -> Yellow/Amber -> Red/Coral) */
+  .bg-gradient-spectrum {
+    background: linear-gradient(90deg, #10b981 0%, #f59e0b 55%, #ef4444 100%);
   }
 }

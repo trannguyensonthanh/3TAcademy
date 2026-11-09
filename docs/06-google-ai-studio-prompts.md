@@ -102,38 +102,42 @@ Security rules in UI:
 ==================================================================
 4. DESIGN SYSTEM & VISUAL IDENTITY
 ==================================================================
-Direction: calm, precise, editorial, engineering-grade. A real product people use for hours every day. Information first, decoration last. The interface should feel like a carefully crafted SaaS tool built by a design-literate team — NOT like an AI-generated template.
+Direction: Modern, Friendly, Approachable, and Structured EdTech (combining the clean layout hierarchy of Linear/Notion with the warm, motivating, friendly vibe of Duolingo).
+Strict Layout Rule ("1 Page — 1 Core Purpose"):
+- NEVER bloat a single page with widgets from multiple pages.
+- Keep maximum 3–4 primary blocks per dashboard and maximum 3 tabs in any panel. Split large cohort workspaces into clean dedicated sub-routes.
 
-ANTI-"AI LOOK" RULES (strict):
-- No purple/indigo-to-blue gradients, no gradient text, no glowing blobs, no glassmorphism panels, no aurora backgrounds.
-- No sparkle/✨ icons or "AI-powered" badges sprinkled everywhere. AI features are identified by a single consistent, subtle marker: a small monochrome label "AI" in a rounded-sm outline badge, used only where content is machine-generated.
-- No emoji in UI copy. No generic hero with a laptop mockup and floating cards. No centered-everything landing pages.
-- No excessive shadows; prefer 1px borders and tonal surfaces. Shadows only for overlays (popover, dialog, dropdown).
-- No stock illustration packs. Empty states use a simple line icon + precise copy + one primary action.
+Color tokens (CSS variables, shadcn HSL format; full Light Mode & Dark Mode support):
+- Primary Brand Palette (Vibrant Emerald / Botanical Green):
+  - Light Mode: Background #F7FBF9 (fresh mint-tinted ivory), Surface #FFFFFF, Subtle surface #ECFDF5, Border #DCFCE7 / #E2E8F0, Text #0F172A, Muted #64748B, Primary #10B981 (hover #059669), Secondary Mint #D1FAE5.
+  - Dark Mode: Background #090F0C (deep forest night), Surface #111A15, Border #1E2D24, Text #ECFDF5, Muted #94A3B8, Primary #34D399 (hover #10B981), Secondary #064E3B.
+- Dynamic Gradients & Semantic Color Transitions (Green -> Amber/Yellow -> Red/Coral):
+  - Green Tonal Gradient: `#6EE7B7 -> #10B981 -> #047857` for hero accents, progress rings, mastered skill cards, and active AI streaming glow.
+  - Semantic Spectrum Transition (`#10B981 Emerald Green` -> `#F59E0B Amber Yellow` -> `#EF4444 Coral Red`): used dynamically for exam countdown timers, assignment deadlines, proctoring status indicators, password strength meters, and video confusion heatmaps.
+- Contrast must meet WCAG AA in both Light and Dark themes.
 
-Color tokens (CSS variables, shadcn HSL format; provide light and dark themes):
-- Neutrals: warm stone scale. Light background #FAFAF9, surface #FFFFFF, subtle surface #F5F5F4, border #E7E5E4, text #1C1917, muted text #78716C. Dark background #0E0F10, surface #151617, border #26282A, text #ECECEA, muted #9A9A96.
-- Primary (brand): deep teal #0D7C72 (hover #0A6A61; dark theme #3DB4A6). Used for primary actions, active nav, focus rings, links.
-- Live/recording accent: #E5484D (only for LIVE states, recording dot, live badges).
-- Semantic: success #2F855A, warning #B7791F, danger #C53030, info #2B6CB0 (with 10% tint backgrounds for badges/alerts).
-- Chart palette (ordered): #0D7C72, #2B6CB0, #B7791F, #8B5E3C, #64748B. Never rely on color alone; add labels/patterns.
-- Contrast must meet WCAG AA in both themes.
+Stickers, Badges & Friendly Illustrations:
+- Include cohesive 2D vector stickers/badges in the green palette for emotional touchpoints:
+  - Session completion & milestone celebration badges.
+  - Learning streak flame/leaf sticker on the student dashboard.
+  - Friendly AI Companion avatar for the Course Advisor and Session Tutor.
+  - Warm, encouraging vector illustrations for Empty States.
 
 Typography:
-- UI font: "Be Vietnam Pro" (excellent Vietnamese diacritics), weights 400/500/600. Monospace: "JetBrains Mono" for code, IDs, timestamps, numbers in tables (use tabular-nums).
-- Scale (px): 12, 13, 14 (default app body), 16 (reading/public body), 18, 20, 24, 30, 36. Line-height 1.5 body, 1.25 headings. Letter-spacing -0.01em for headings ≥24px.
+- UI font: "Be Vietnam Pro" (excellent Vietnamese diacritics), weights 400/500/600/700. Monospace: "JetBrains Mono" for code, IDs, timestamps, numbers in tables (use tabular-nums).
+- Scale (px): 12, 13, 14 (default app body), 16 (reading/public body), 18, 20, 24, 30, 36. Line-height 1.5 body, 1.25 headings.
 - Long-form reading (session description, AI summary, markdown): max-width 70ch, 16px, comfortable paragraph spacing.
 
 Spacing, radius, layout:
-- 4px base grid. Common gaps 8/12/16/24/32. Radius: 6px controls, 8px cards, 12px dialogs. Hairline borders.
-- App shell: left sidebar 248px (collapsible to 64px icon rail, state persisted), top bar 56px with breadcrumbs, global search (⌘K / Ctrl+K command palette), "Đang LIVE" pill when a session the user can join is live, notifications bell (realtime via SSE mock), user menu with theme switch.
-- Content widths: dashboards fluid up to 1440px with 12-column grid; forms up to 720px; reading 70ch.
-- Density: comfortable by default; tables offer a compact toggle.
+- 4px base grid. Generous whitespace (20px–24px card padding, 24px grid gaps). Radius: 8px controls, 12px cards, 16px dialogs.
+- App shell: left sidebar 248px (collapsible to 64px icon rail, state persisted), top bar 56px with breadcrumbs, global search (⌘K / Ctrl+K command palette), "Đang LIVE" pulsing pill when a session is live, notifications bell, and Light/Dark theme switch.
+- Content widths: dashboards up to 1360px with 12-column grid; forms up to 680px; reading 70ch.
 
-Motion & micro-interactions:
-- Durations 120ms (hover/press), 180ms (popover, tabs), 240ms (dialog, drawer). Easing cubic-bezier(0.2, 0, 0, 1). No bouncy springs except tiny scale on drag handles.
-- Meaningful only: optimistic check animation on "mark complete", number count-up on stat cards (once), progress bar fills, skeleton shimmer (subtle), toast slide-in, live dot pulse.
-- Respect prefers-reduced-motion (disable non-essential motion).
+Motion & micro-interactions (Framer Motion & CSS Transitions):
+- Smooth color morphing along the Green -> Yellow -> Red spectrum for timers, progress bars, and heatmaps.
+- Subtle celebratory bounce/glow on session completion badges and streak counters.
+- Gentle card lift (`-2px` translateY with soft emerald border glow) on interactive course and session cards.
+- Respect `prefers-reduced-motion` (disable non-essential motion when requested).
 
 Component states (every interactive/data component must implement):
 - Loading: layout-matching skeletons (never a lone spinner on full pages; spinners only inside buttons).
@@ -396,7 +400,7 @@ PHASE 8 — Polish & audit. Do a full pass over every route and fix gaps:
 | Hạng mục | Cách kiểm tra nhanh |
 | :--- | :--- |
 | Trạng thái giao diện | Thêm `?chaos=1` vào URL để ép lỗi ngẫu nhiên; xem có ErrorState + nút thử lại + `requestId` không |
-| Không "mùi AI" | Không gradient tím/xanh, không ✨, không glassmorphism, không emoji trong chữ |
+| Bảng màu & Bố cục | Tông Xanh lá Emerald chủ đạo (Light/Dark Mode), dải chuyển sắc Xanh ➔ Vàng ➔ Đỏ đúng ngữ cảnh, sticker 2D thân thiện, mỗi trang chỉ tập trung 1 mục tiêu rõ ràng |
 | Hợp đồng dữ liệu | Tên kiểu và giá trị enum trong `contracts.ts` không bị AI đổi tên |
 | Bảo mật UI | Trang làm bài của học viên không hề có `grading`/đáp án trong dữ liệu mock trả về |
 | Responsive | DevTools ở 375px và 1280px cho mỗi trang mới |

@@ -1,5 +1,5 @@
 import { db, pool } from './index.js';
-import { accounts, userProfiles, categories, skills, courses, systemSettings } from './schema/index.js';
+import { accounts, userProfiles, categories, skills, systemSettings } from './schema/index.js';
 import argon2 from 'argon2';
 import { logger } from '../config/logger.js';
 
