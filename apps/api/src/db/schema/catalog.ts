@@ -1,10 +1,10 @@
-import { pgTable, serial, bigserial, varchar, text, integer, smallint, timestamp, real, jsonb, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, serial, bigserial, bigint, varchar, text, integer, smallint, timestamp, real, jsonb, primaryKey } from 'drizzle-orm/pg-core';
 import { courseStatusEnum, skillRelationRoleEnum } from './enums.js';
 
 export const categories = pgTable('categories', {
   id: serial('id').primaryKey(),
-  name: varchar('name', { length: 100 }).notNull(),
-  slug: varchar('slug', { length: 120 }).notNull().unique(),
+  name: varchar('name', { length: 120 }).notNull(),
+  slug: varchar('slug', { length: 140 }).notNull().unique(),
   description: text('description'),
   parentId: integer('parent_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -36,11 +36,10 @@ export const courses = pgTable('courses', {
 });
 
 export const courseSkills = pgTable('course_skills', {
-  courseId: bigserial('course_id', { mode: 'number' }).notNull().references(() => courses.id, { onDelete: 'cascade' }),
+  courseId: bigint('course_id', { mode: 'number' }).notNull().references(() => courses.id, { onDelete: 'cascade' }),
   skillId: integer('skill_id').notNull().references(() => skills.id, { onDelete: 'restrict' }),
   skillRole: skillRelationRoleEnum('skill_role').notNull(),
   targetWeight: real('target_weight').notNull().default(1.0),
 }, (table) => [
   primaryKey({ columns: [table.courseId, table.skillId, table.skillRole] }),
 ]);
-
