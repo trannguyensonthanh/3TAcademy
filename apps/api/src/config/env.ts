@@ -31,9 +31,48 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   HMAC_CERTIFICATE_SECRET: z.string().default('3t-academy-hmac-certificate-secret-key-2026'),
   AI_SERVICE_URL: z.string().default('http://localhost:8000'),
-  LIVEKIT_API_URL: z.string().optional(),
-  LIVEKIT_API_KEY: z.string().optional(),
-  LIVEKIT_API_SECRET: z.string().optional(),
+  LIVEKIT_API_URL: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .default('wss://project-3t-academy-live-3vunmpp5.livekit.cloud')
+  ),
+  LIVEKIT_API_KEY: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('APIAK2UGEYhMadd')
+  ),
+  LIVEKIT_API_SECRET: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('KVR8YFo2c2FwZEwCAOMhP2sFzQlwZ7ylmgTdPeRKavV')
+  ),
+  R2_ACCOUNT_ID: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('e3075f23d1126bc8bfb3bb679a533e58')
+  ),
+  R2_ACCESS_KEY_ID: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('371c3ac7558bb2bb64f62df8aca59deb')
+  ),
+  R2_SECRET_ACCESS_KEY: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .default('12c612ace0b0fc2ad6a41d062695cb0cf419938bc5eeb1cc5ae9fc994dc58114')
+  ),
+  R2_BUCKET_NAME: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('edutech-storage')
+  ),
+  R2_PUBLIC_DOMAIN: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .default('https://pub-7ab9c21bfa214570bd20463f8f4522c2.r2.dev')
+      .transform((val) => val.replace(/\/+$/, ''))
+  ),
   SEPAY_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   SEPAY_WEBHOOK_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
   PUBLIC_API_URL: z.preprocess(

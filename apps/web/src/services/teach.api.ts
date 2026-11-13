@@ -144,6 +144,93 @@ export const teachApi = {
       body: JSON.stringify(payload),
     }),
 
+  muteSessionParticipant: (
+    sessionId: string,
+    payload: {
+      targetIdentity?: string;
+      accountId?: string;
+      muteAllStudents?: boolean;
+      muted?: boolean;
+    }
+  ) =>
+    httpRequest<{
+      sessionId: string;
+      roomName: string;
+      muted: boolean;
+      muteAllStudents: boolean;
+      mutedIdentities: string[];
+      sfuMutedTracks: number;
+      sfuSynced: boolean;
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/mute-participant`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  startSessionRecording: (sessionId: string) =>
+    httpRequest<{
+      sessionId: string;
+      roomName: string;
+      recording: {
+        isRecording: boolean;
+        egressId?: string;
+        objectKey?: string;
+        publicUrl?: string;
+        mode?: 'LIVEKIT_EGRESS' | 'BROWSER_R2';
+        startedAt?: string;
+      };
+      presignedUploadUrl?: string;
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/recording/start`, {
+      method: 'POST',
+    }),
+
+  stopSessionRecording: (
+    sessionId: string,
+    payload?: { objectKey?: string; markReplayReady?: boolean }
+  ) =>
+    httpRequest<{
+      sessionId: string;
+      status: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      recording: {
+        isRecording: boolean;
+        egressId?: string;
+        objectKey?: string;
+        publicUrl?: string;
+        stoppedAt?: string;
+      };
+      videoUrl: string;
+      playbackType: 'MP4' | 'HLS' | 'NONE';
+      r2PublicUrl: string;
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/recording/stop`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+
+  uploadSessionRecordingToR2: (
+    sessionId: string,
+    payload: {
+      fileName?: string;
+      contentType?: string;
+      base64Data: string;
+      markReplayReady?: boolean;
+    }
+  ) =>
+    httpRequest<{
+      sessionId: string;
+      status: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      objectKey: string;
+      videoUrl: string;
+      sizeBytes: number;
+      recording: {
+        isRecording: boolean;
+        objectKey?: string;
+        publicUrl?: string;
+        stoppedAt?: string;
+      };
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/recording/upload`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   generateSessionQuizByAi: (sessionId: string) =>
     httpRequest<{
       assessmentId: string;

@@ -51,7 +51,9 @@ import {
   setHandRaiseState,
   addLiveReaction,
   upvoteLiveDiscussion,
+  updateLiveRecordingState,
 } from './liveRoom.helpers.js';
+import { getR2PublicObjectUrl } from '../../integrations/r2.service.js';
 
 export const learningRouter = Router();
 
@@ -2349,3 +2351,68 @@ learningRouter.post(
     }
   }
 );
+
+// 3.18 POST /webhooks/livekit (LiveKit Cloud room & egress webhook receiver)
+learningRouter.post('/webhooks/livekit', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as {
+      event?: string;
+      room?: { name?: string };
+      egressInfo?: {
+        egressId?: string;
+        roomName?: string;
+        fileResults?: Array<{ filename?: string; location?: string }>;
+      };
+    };
+
+    const eventType = String(body.event || '');
+    const roomName = body.room?.name || body.egressInfo?.roomName || '';
+
+    if (roomName) {
+      const [session] = await db
+        .select()
+        .from(classSessions)
+        .where(eq(classSessions.livekitRoomName, roomName))
+        .limit(1);
+
+      if (session && eventType === 'egress_ended') {
+        const fileRes = body.egressInfo?.fileResults?.[0];
+        const objectKey = fileRes?.filename || '';
+        const publicUrl = objectKey ? getR2PublicObjectUrl(objectKey) : fileRes?.location || '';
+
+        if (publicUrl) {
+          await db
+            .update(classSessions)
+            .set({
+              videoR2Key: publicUrl,
+              status: 'REPLAY_READY',
+              updatedAt: new Date(),
+            })
+            .where(eq(classSessions.id, session.id));
+
+          updateLiveRecordingState(session.id, {
+            isRecording: false,
+            egressId: body.egressInfo?.egressId,
+            objectKey: objectKey || undefined,
+            publicUrl,
+            stoppedAt: new Date().toISOString(),
+          });
+
+          const roomState = getLiveRoomState(session.id);
+          broadcastLiveRoomEvent(session.id, 'session_status', {
+            sessionId: String(session.id),
+            status: 'REPLAY_READY',
+            videoUrl: publicUrl,
+            playbackType: 'MP4',
+            hostBroadcast: roomState.hostBroadcast,
+          });
+        }
+      }
+    }
+
+    res.status(200).json({ received: true, event: eventType });
+  } catch (err) {
+    next(err);
+  }
+});
+

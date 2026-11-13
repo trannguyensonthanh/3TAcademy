@@ -36,9 +36,22 @@ import {
 } from '../../db/helpers.js';
 import {
   broadcastLiveRoomEvent,
+  getLiveRoomState,
   updateHostBroadcastState,
+  updateLiveRecordingState,
+  updateMutedParticipantsState,
   resolvePlayableVideoSource,
 } from '../learning/liveRoom.helpers.js';
+import {
+  muteLiveKitParticipantsAudio,
+  startLiveKitRoomRecordingToR2,
+  stopLiveKitRoomRecording,
+} from '../../integrations/livekit.service.js';
+import {
+  createR2PresignedPutUrl,
+  getR2PublicObjectUrl,
+  uploadBufferToR2,
+} from '../../integrations/r2.service.js';
 
 export const teachRouter = Router();
 
@@ -1031,6 +1044,289 @@ teachRouter.put(
         playbackType: resolvedVideo.playbackType,
         hostBroadcast,
         updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 7.5c POST /teach/sessions/:sessionId/mute-participant (Host mutes 1 student or all students)
+const muteParticipantSchema = z.object({
+  targetIdentity: z.string().optional(),
+  accountId: z.union([z.string(), z.number()]).optional(),
+  muteAllStudents: z.boolean().optional(),
+  muted: z.boolean().optional(),
+});
+
+teachRouter.post(
+  '/teach/sessions/:sessionId/mute-participant',
+  validate(muteParticipantSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const { targetIdentity, accountId, muteAllStudents, muted = true } = req.body;
+      const roomName = session.livekitRoomName || `live-session-${session.id}`;
+      const normalizedIdentity = targetIdentity
+        ? targetIdentity.trim()
+        : accountId !== undefined
+          ? String(accountId).startsWith('acc-')
+            ? String(accountId)
+            : `acc-${accountId}`
+          : undefined;
+
+      const sfuResult = await muteLiveKitParticipantsAudio({
+        roomName,
+        targetIdentity: normalizedIdentity,
+        muteAllStudents: Boolean(muteAllStudents),
+        hostIdentity: `acc-${req.user!.id}`,
+        muted,
+      });
+
+      const targetList = normalizedIdentity
+        ? [normalizedIdentity, normalizedIdentity.replace(/^acc-/, '')]
+        : sfuResult.mutedIdentities;
+
+      const mutedIdentities = updateMutedParticipantsState(session.id, {
+        targetIdentities: targetList,
+        muteAllStudents: Boolean(muteAllStudents),
+        muted,
+        mutedBy: req.user!.email,
+      });
+
+      res.json({
+        sessionId: String(session.id),
+        roomName,
+        muted,
+        muteAllStudents: Boolean(muteAllStudents),
+        mutedIdentities,
+        sfuMutedTracks: sfuResult.mutedTrackCount,
+        sfuSynced: sfuResult.sfuSynced,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 7.5d POST /teach/sessions/:sessionId/recording/start (Start recording to Cloudflare R2)
+teachRouter.post('/teach/sessions/:sessionId/recording/start', async (req, res, next) => {
+  try {
+    const session = await resolveSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'SESSION_NOT_FOUND',
+        message: 'Không tìm thấy buổi học',
+      });
+      return;
+    }
+
+    const roomName = session.livekitRoomName || `live-session-${session.id}`;
+    const started = await startLiveKitRoomRecordingToR2({
+      roomName,
+      sessionId: session.id,
+    });
+
+    const presigned = createR2PresignedPutUrl({
+      objectKey: started.objectKey,
+      contentType: 'video/webm',
+      expiresInSeconds: 7200,
+    });
+
+    const recording = updateLiveRecordingState(session.id, {
+      isRecording: true,
+      egressId: started.egressId,
+      objectKey: started.objectKey,
+      publicUrl: started.publicUrl,
+      mode: started.mode,
+      startedAt: new Date().toISOString(),
+      stoppedAt: undefined,
+    });
+
+    res.json({
+      sessionId: String(session.id),
+      roomName,
+      recording,
+      presignedUploadUrl: presigned.uploadUrl,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 7.5e POST /teach/sessions/:sessionId/recording/stop (Stop recording & persist R2 replay URL)
+const stopRecordingSchema = z.object({
+  objectKey: z.string().optional(),
+  markReplayReady: z.boolean().optional(),
+});
+
+teachRouter.post(
+  '/teach/sessions/:sessionId/recording/stop',
+  validate(stopRecordingSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const currentRoomState = getLiveRoomState(session.id);
+      const activeRec = currentRoomState.recording;
+      await stopLiveKitRoomRecording(activeRec.egressId);
+
+      const finalObjectKey =
+        req.body.objectKey?.trim() ||
+        activeRec.objectKey ||
+        `recordings/session-${session.id}/live-${Date.now()}.mp4`;
+      const finalPublicUrl = getR2PublicObjectUrl(finalObjectKey);
+
+      const recording = updateLiveRecordingState(session.id, {
+        isRecording: false,
+        objectKey: finalObjectKey,
+        publicUrl: finalPublicUrl,
+        stoppedAt: new Date().toISOString(),
+      });
+
+      const nextStatus =
+        req.body.markReplayReady === false ? session.status : 'REPLAY_READY';
+      const nextVideoKey =
+        activeRec.mode === 'LIVEKIT_EGRESS' || req.body.objectKey
+          ? finalPublicUrl
+          : session.videoR2Key || finalPublicUrl;
+
+      const [updated] = await db
+        .update(classSessions)
+        .set({
+          videoR2Key: nextVideoKey,
+          status: nextStatus,
+          lastUpdatedBy: req.user!.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(classSessions.id, session.id))
+        .returning();
+
+      const resolvedVideo = resolvePlayableVideoSource(
+        updated?.videoR2Key,
+        updated?.sessionOrder ?? session.sessionOrder
+      );
+
+      broadcastLiveRoomEvent(session.id, 'session_status', {
+        sessionId: String(session.id),
+        status: nextStatus,
+        videoUrl: resolvedVideo.videoUrl,
+        playbackType: resolvedVideo.playbackType,
+        hostBroadcast: currentRoomState.hostBroadcast,
+      });
+
+      res.json({
+        sessionId: String(session.id),
+        status: nextStatus,
+        recording,
+        videoUrl: resolvedVideo.videoUrl,
+        playbackType: resolvedVideo.playbackType,
+        r2PublicUrl: finalPublicUrl,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 7.5f POST /teach/sessions/:sessionId/recording/upload (Direct upload recorded video to Cloudflare R2)
+const uploadRecordingSchema = z.object({
+  fileName: z.string().optional(),
+  contentType: z.string().optional(),
+  base64Data: z.string().min(1),
+  markReplayReady: z.boolean().optional(),
+});
+
+teachRouter.post(
+  '/teach/sessions/:sessionId/recording/upload',
+  validate(uploadRecordingSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const contentType = (req.body.contentType || 'video/webm').trim();
+      const ext = contentType.includes('mp4') ? 'mp4' : 'webm';
+      const safeName = (req.body.fileName || `live-session-${session.id}-${Date.now()}.${ext}`)
+        .replace(/[^a-zA-Z0-9._-]/g, '_');
+      const objectKey = `recordings/session-${session.id}/${safeName}`;
+
+      const rawBase64 = req.body.base64Data.includes(',')
+        ? req.body.base64Data.split(',')[1]!
+        : req.body.base64Data;
+      const buffer = Buffer.from(rawBase64, 'base64');
+
+      const uploaded = await uploadBufferToR2({
+        objectKey,
+        body: buffer,
+        contentType,
+      });
+
+      const nextStatus =
+        req.body.markReplayReady === false ? session.status : 'REPLAY_READY';
+
+      await db
+        .update(classSessions)
+        .set({
+          videoR2Key: uploaded.publicUrl,
+          status: nextStatus,
+          lastUpdatedBy: req.user!.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(classSessions.id, session.id));
+
+      const recording = updateLiveRecordingState(session.id, {
+        isRecording: false,
+        objectKey: uploaded.objectKey,
+        publicUrl: uploaded.publicUrl,
+        stoppedAt: new Date().toISOString(),
+      });
+
+      const currentRoomState = getLiveRoomState(session.id);
+      broadcastLiveRoomEvent(session.id, 'session_status', {
+        sessionId: String(session.id),
+        status: nextStatus,
+        videoUrl: uploaded.publicUrl,
+        playbackType: 'MP4',
+        hostBroadcast: currentRoomState.hostBroadcast,
+      });
+
+      res.status(201).json({
+        sessionId: String(session.id),
+        status: nextStatus,
+        objectKey: uploaded.objectKey,
+        videoUrl: uploaded.publicUrl,
+        sizeBytes: uploaded.sizeBytes,
+        recording,
       });
     } catch (err) {
       next(err);

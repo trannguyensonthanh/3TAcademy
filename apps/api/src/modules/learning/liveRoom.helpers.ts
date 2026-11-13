@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { env } from '../../config/env.js';
 
 export interface PlayableVideoSource {
   videoUrl: string;
@@ -11,6 +12,8 @@ const SAMPLE_MP4_VIDEOS = [
   'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
   'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
 ];
+
+const SEED_PLACEHOLDER_KEY_REGEX = /^recordings\/(ai|py|swe)-k0\d\/s0\d\/master\.m3u8$/i;
 
 export function resolvePlayableVideoSource(
   videoR2Key?: string | null,
@@ -34,9 +37,17 @@ export function resolvePlayableVideoSource(
     };
   }
 
-  const publicDomain = (r2PublicDomain || process.env.R2_PUBLIC_DOMAIN || '').trim().replace(/\/+$/, '');
-  if (publicDomain) {
-    const resolved = `${publicDomain}/${key.replace(/^\/+/, '')}`;
+  const explicitDomainProvided = r2PublicDomain !== undefined;
+  const configuredDomain = (
+    explicitDomainProvided ? r2PublicDomain : env.R2_PUBLIC_DOMAIN || process.env.R2_PUBLIC_DOMAIN || ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+
+  const isSeedPlaceholder = !explicitDomainProvided && SEED_PLACEHOLDER_KEY_REGEX.test(key);
+
+  if (configuredDomain && !isSeedPlaceholder) {
+    const resolved = `${configuredDomain}/${key.replace(/^\/+/, '')}`;
     return {
       videoUrl: resolved,
       playbackType: key.toLowerCase().includes('.m3u8') ? 'HLS' : 'MP4',
@@ -66,10 +77,22 @@ export interface LiveReactionEvent {
   createdAt: string;
 }
 
+export interface LiveRecordingState {
+  isRecording: boolean;
+  egressId?: string;
+  objectKey?: string;
+  publicUrl?: string;
+  mode?: 'LIVEKIT_EGRESS' | 'BROWSER_R2';
+  startedAt?: string;
+  stoppedAt?: string;
+}
+
 export interface LiveRoomRuntimeState {
   raisedHands: LiveHandRaiseEntry[];
   recentReactions: LiveReactionEvent[];
   questionVotes: Record<string, number>;
+  mutedIdentities: string[];
+  recording: LiveRecordingState;
   hostBroadcast: {
     activeSlideLabel: string;
     liveTopicNote: string;
@@ -93,6 +116,10 @@ function getOrCreateBucket(sessionId: string | number): InternalLiveRoomBucket {
         raisedHands: [],
         recentReactions: [],
         questionVotes: {},
+        mutedIdentities: [],
+        recording: {
+          isRecording: false,
+        },
         hostBroadcast: {
           activeSlideLabel: '',
           liveTopicNote: '',
@@ -116,6 +143,8 @@ export function getLiveRoomState(sessionId: string | number): LiveRoomRuntimeSta
     raisedHands: [...bucket.state.raisedHands],
     recentReactions: [...bucket.state.recentReactions],
     questionVotes: { ...bucket.state.questionVotes },
+    mutedIdentities: [...bucket.state.mutedIdentities],
+    recording: { ...bucket.state.recording },
     hostBroadcast: { ...bucket.state.hostBroadcast },
   };
 }
@@ -215,4 +244,56 @@ export function updateHostBroadcastState(
   };
   broadcastLiveRoomEvent(sessionId, 'host_broadcast', bucket.state.hostBroadcast);
   return { ...bucket.state.hostBroadcast };
+}
+
+export function updateMutedParticipantsState(
+  sessionId: string | number,
+  params: {
+    targetIdentities?: string[];
+    muteAllStudents?: boolean;
+    muted: boolean;
+    mutedBy: string;
+  }
+): string[] {
+  const bucket = getOrCreateBucket(sessionId);
+  const set = new Set(bucket.state.mutedIdentities);
+  if (params.muteAllStudents && params.muted) {
+    set.add('ALL_STUDENTS');
+  } else if (params.muteAllStudents && !params.muted) {
+    set.clear();
+  }
+
+  for (const id of params.targetIdentities || []) {
+    const clean = id.trim();
+    if (!clean) continue;
+    if (params.muted) {
+      set.add(clean);
+    } else {
+      set.delete(clean);
+    }
+  }
+
+  bucket.state.mutedIdentities = Array.from(set);
+  broadcastLiveRoomEvent(sessionId, 'participant_muted', {
+    mutedIdentities: bucket.state.mutedIdentities,
+    targetIdentities: params.targetIdentities || [],
+    muteAllStudents: Boolean(params.muteAllStudents),
+    muted: params.muted,
+    mutedBy: params.mutedBy,
+    timestamp: new Date().toISOString(),
+  });
+  return [...bucket.state.mutedIdentities];
+}
+
+export function updateLiveRecordingState(
+  sessionId: string | number,
+  patch: Partial<LiveRecordingState>
+): LiveRecordingState {
+  const bucket = getOrCreateBucket(sessionId);
+  bucket.state.recording = {
+    ...bucket.state.recording,
+    ...patch,
+  };
+  broadcastLiveRoomEvent(sessionId, 'recording_status', bucket.state.recording);
+  return { ...bucket.state.recording };
 }

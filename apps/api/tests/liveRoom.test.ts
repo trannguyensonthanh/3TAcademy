@@ -412,4 +412,68 @@ describe('live classroom & video HTTP routes', () => {
     expect(body.videoUrl).toBe('https://cdn.3t.edu.vn/replays/ai-s05.mp4');
     expect(body.hostBroadcast.activeSlideLabel).toBe('Slide Tổng Kết');
   });
+
+  it('lets instructor mute a specific student or all students and start/stop R2 recording', async () => {
+    const instructorToken = signToken({
+      id: 2,
+      email: 'khoa@3t.edu.vn',
+      role: 'INSTRUCTOR',
+    });
+
+    const muteRes = await fetch(`${baseUrl}/api/v1/teach/sessions/5/mute-participant`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${instructorToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        targetIdentity: 'acc-4',
+        muteAllStudents: true,
+        muted: true,
+      }),
+    });
+    const muteBody = (await muteRes.json()) as {
+      muted: boolean;
+      muteAllStudents: boolean;
+      mutedIdentities: string[];
+    };
+    expect(muteRes.status).toBe(200);
+    expect(muteBody.muted).toBe(true);
+    expect(muteBody.muteAllStudents).toBe(true);
+    expect(muteBody.mutedIdentities).toContain('ALL_STUDENTS');
+    expect(muteBody.mutedIdentities).toContain('acc-4');
+
+    const startRecRes = await fetch(`${baseUrl}/api/v1/teach/sessions/5/recording/start`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${instructorToken}`,
+      },
+    });
+    const startRecBody = (await startRecRes.json()) as {
+      recording: { isRecording: boolean; publicUrl: string };
+      presignedUploadUrl: string;
+    };
+    expect(startRecRes.status).toBe(200);
+    expect(startRecBody.recording.isRecording).toBe(true);
+    expect(startRecBody.recording.publicUrl).toContain('.r2.dev/recordings/session-5/');
+    expect(startRecBody.presignedUploadUrl).toContain('r2.cloudflarestorage.com');
+
+    const stopRecRes = await fetch(`${baseUrl}/api/v1/teach/sessions/5/recording/stop`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${instructorToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ markReplayReady: true }),
+    });
+    const stopRecBody = (await stopRecRes.json()) as {
+      status: string;
+      recording: { isRecording: boolean };
+      r2PublicUrl: string;
+    };
+    expect(stopRecRes.status).toBe(200);
+    expect(stopRecBody.status).toBe('REPLAY_READY');
+    expect(stopRecBody.recording.isRecording).toBe(false);
+    expect(stopRecBody.r2PublicUrl).toContain('.r2.dev/recordings/session-5/');
+  });
 });

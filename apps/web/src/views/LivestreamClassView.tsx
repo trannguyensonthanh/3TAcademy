@@ -19,15 +19,28 @@ import {
   Users,
   Video,
   VideoOff,
+  VolumeX,
 } from 'lucide-react';
-import { Room, RoomEvent, Track, type RemoteTrack } from 'livekit-client';
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type Participant,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type RemoteTrackPublication,
+} from 'livekit-client';
 import { useAcademy } from '../context/AcademyContext';
 import { AvatarWithFallback } from '../components/BotanicalStickers';
-import { SessionVideoPlayer } from '../components/SessionVideoPlayer';
+import {
+  LiveKitClassroomStage,
+  type AttachedRemoteTrackItem,
+} from '../components/LiveKitClassroomStage';
 import {
   learningApi,
   type LiveHandRaiseItem,
   type LiveParticipantItem,
+  type LiveRecordingState,
   type LiveRoomRuntimeState,
   type LiveSessionChatMessage,
   type LiveSessionRoomPayload,
@@ -55,6 +68,10 @@ const DEFAULT_ROOM_STATE: LiveRoomRuntimeState = {
   raisedHands: [],
   recentReactions: [],
   questionVotes: {},
+  mutedIdentities: [],
+  recording: {
+    isRecording: false,
+  },
   hostBroadcast: {
     activeSlideLabel: '',
     liveTopicNote: '',
@@ -118,10 +135,11 @@ export const LivestreamClassView: React.FC<{
 
   // LiveKit remote stream tracking
   const [livekitConnected, setLivekitConnected] = useState<boolean>(false);
-  const [hasRemoteVideoTrack, setHasRemoteVideoTrack] = useState<boolean>(false);
+  const [remoteVideoTracks, setRemoteVideoTracks] = useState<AttachedRemoteTrackItem[]>([]);
+  const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<string[]>([]);
 
-  // Stage mode toggle when recording video exists alongside live stage
-  const [stageViewMode, setStageViewMode] = useState<'STAGE' | 'VIDEO'>('STAGE');
+  // Stage mode toggle: STAGE | GRID | VIDEO
+  const [stageViewMode, setStageViewMode] = useState<'STAGE' | 'GRID' | 'VIDEO'>('STAGE');
 
   // Realtime collaboration state
   const [runtimeState, setRuntimeState] = useState<LiveRoomRuntimeState>(DEFAULT_ROOM_STATE);
@@ -137,12 +155,17 @@ export const LivestreamClassView: React.FC<{
   const [lateJoinAiSummaryText, setLateJoinAiSummaryText] = useState<string | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
 
-  // Host broadcast controls (for INSTRUCTOR / ADMIN)
+  // Host broadcast & R2 recording controls (for INSTRUCTOR / ADMIN)
   const [hostSlideDraft, setHostSlideDraft] = useState<string>('');
   const [hostNoteDraft, setHostNoteDraft] = useState<string>('');
   const [replayUrlDraft, setReplayUrlDraft] = useState<string>('');
   const [hostActionFeedback, setHostActionFeedback] = useState<string | null>(null);
   const [isUpdatingHostState, setIsUpdatingHostState] = useState<boolean>(false);
+  const [isRecordingBusy, setIsRecordingBusy] = useState<boolean>(false);
+  const [isUploadingR2, setIsUploadingR2] = useState<boolean>(false);
+  const [recordingElapsedSec, setRecordingElapsedSec] = useState<number>(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   const activeSessionId = guestMeta?.sessionId || roomData?.session.id || sessionId;
   const activeSession = roomData?.session;
@@ -262,6 +285,7 @@ export const LivestreamClassView: React.FC<{
     const lkInfo = joinedAsVerifiedGuest ? guestMeta?.livekit : roomData?.livekit;
     if (!lkInfo?.enabled || !lkInfo.serverUrl || !lkInfo.token) {
       setLivekitConnected(false);
+      setRemoteVideoTracks([]);
       return;
     }
 
@@ -269,27 +293,63 @@ export const LivestreamClassView: React.FC<{
     const room = new Room({ adaptiveStream: true, dynacast: true });
     livekitRoomRef.current = room;
 
-    const attachRemoteTrack = (track: RemoteTrack) => {
-      if (track.kind === Track.Kind.Video && remoteStageVideoRef.current) {
-        track.attach(remoteStageVideoRef.current);
-        setHasRemoteVideoTrack(true);
+    const handleTrackSubscribed = (
+      track: RemoteTrack,
+      publication: RemoteTrackPublication,
+      participant: RemoteParticipant
+    ) => {
+      if (track.kind === Track.Kind.Video) {
+        const sid = publication.trackSid || `${participant.identity}-${publication.source}`;
+        const sourceType: 'camera' | 'screen_share' =
+          publication.source === Track.Source.ScreenShare ? 'screen_share' : 'camera';
+        setRemoteVideoTracks((prev) => [
+          ...prev.filter((item) => item.sid !== sid),
+          {
+            sid,
+            participantIdentity: participant.identity,
+            participantName: participant.name || participant.identity,
+            source: sourceType,
+            track,
+          },
+        ]);
       } else if (track.kind === Track.Kind.Audio && remoteAudioContainerRef.current) {
         const audioEl = track.attach();
         remoteAudioContainerRef.current.appendChild(audioEl);
       }
     };
 
-    room.on(RoomEvent.TrackSubscribed, attachRemoteTrack);
-    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+    const handleTrackUnsubscribed = (
+      track: RemoteTrack,
+      publication: RemoteTrackPublication
+    ) => {
       track.detach();
       if (track.kind === Track.Kind.Video) {
-        setHasRemoteVideoTrack(false);
+        const sid = publication.trackSid;
+        setRemoteVideoTracks((prev) => prev.filter((item) => item.sid !== sid));
+      }
+    };
+
+    room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+    room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
+    room.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+      if (!cancelled) {
+        setActiveSpeakerIdentities(speakers.map((s) => s.identity));
+      }
+    });
+    room.on(RoomEvent.TrackMuted, (pub, participant) => {
+      if (
+        participant.identity === room.localParticipant.identity &&
+        pub.kind === Track.Kind.Audio
+      ) {
+        setMicOn(false);
+        setMediaNotice('Micro của bạn đã được tắt.');
       }
     });
     room.on(RoomEvent.Disconnected, () => {
       if (!cancelled) {
         setLivekitConnected(false);
-        setHasRemoteVideoTrack(false);
+        setRemoteVideoTracks([]);
+        setActiveSpeakerIdentities([]);
       }
     });
 
@@ -312,6 +372,24 @@ export const LivestreamClassView: React.FC<{
       livekitRoomRef.current = null;
     };
   }, [roomData?.livekit, guestMeta?.livekit, joinedAsVerifiedGuest]);
+
+  // Recording elapsed clock ticker
+  useEffect(() => {
+    if (!runtimeState.recording?.isRecording) {
+      setRecordingElapsedSec(0);
+      return;
+    }
+    const startMs = runtimeState.recording.startedAt
+      ? Date.parse(runtimeState.recording.startedAt)
+      : Date.now();
+    const updateClock = () => {
+      const diff = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+      setRecordingElapsedSec(diff);
+    };
+    updateClock();
+    const timer = window.setInterval(updateClock, 1000);
+    return () => window.clearInterval(timer);
+  }, [runtimeState.recording?.isRecording, runtimeState.recording?.startedAt]);
 
   // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions & Session Status
   useEffect(() => {
@@ -476,11 +554,63 @@ export const LivestreamClassView: React.FC<{
       }
     });
 
+    source.addEventListener('participant_muted', (evt) => {
+      try {
+        const payload = JSON.parse((evt as MessageEvent).data) as {
+          mutedIdentities: string[];
+          targetIdentities: string[];
+          muteAllStudents: boolean;
+          muted: boolean;
+        };
+        setRuntimeState((prev) => ({
+          ...prev,
+          mutedIdentities: payload.mutedIdentities || [],
+        }));
+
+        const myId = currentUser?.id ? String(currentUser.id) : '';
+        const shouldMuteMe =
+          !isHost &&
+          payload.muted &&
+          (payload.muteAllStudents ||
+            payload.targetIdentities.includes(myId) ||
+            payload.targetIdentities.includes(`acc-${myId}`));
+
+        if (shouldMuteMe) {
+          if (localMediaStreamRef.current) {
+            localMediaStreamRef.current.getAudioTracks().forEach((t) => {
+              t.enabled = false;
+            });
+          }
+          if (livekitRoomRef.current) {
+            void livekitRoomRef.current.localParticipant
+              .setMicrophoneEnabled(false)
+              .catch(() => {});
+          }
+          setMicOn(false);
+          setMediaNotice('Giảng viên đã cắt micro của bạn để đảm bảo chất lượng lớp học.');
+        }
+      } catch {
+        // Ignore
+      }
+    });
+
+    source.addEventListener('recording_status', (evt) => {
+      try {
+        const recording = JSON.parse((evt as MessageEvent).data) as LiveRecordingState;
+        setRuntimeState((prev) => ({
+          ...prev,
+          recording,
+        }));
+      } catch {
+        // Ignore
+      }
+    });
+
     return () => {
       source.close();
       setSseConnected(false);
     };
-  }, [roomData?.session.id, spawnFloatingReaction]);
+  }, [roomData?.session.id, spawnFloatingReaction, currentUser?.id, isHost]);
 
   // Real browser camera & microphone control
   const handleToggleCamera = async () => {
@@ -734,6 +864,226 @@ export const LivestreamClassView: React.FC<{
       setHostActionFeedback('Không cập nhật được trạng thái phòng học.');
     } finally {
       setIsUpdatingHostState(false);
+    }
+  };
+
+  const handleMuteParticipant = async (
+    targetIdentity?: string,
+    muteAllStudents = false
+  ) => {
+    try {
+      const res = await teachApi.muteSessionParticipant(activeSessionId, {
+        targetIdentity,
+        muteAllStudents,
+        muted: true,
+      });
+      setRuntimeState((prev) => ({
+        ...prev,
+        mutedIdentities: res.mutedIdentities,
+      }));
+      setHostActionFeedback(
+        muteAllStudents
+          ? 'Đã cắt micro của toàn bộ học viên trong lớp.'
+          : 'Đã cắt micro của học viên được chọn.'
+      );
+      window.setTimeout(() => setHostActionFeedback(null), 3500);
+    } catch {
+      setHostActionFeedback('Không thể gửi lệnh cắt micro.');
+    }
+  };
+
+  const handleStartRecordingToR2 = async () => {
+    setIsRecordingBusy(true);
+    setHostActionFeedback(null);
+    try {
+      const res = await teachApi.startSessionRecording(activeSessionId);
+      setRuntimeState((prev) => ({
+        ...prev,
+        recording: res.recording,
+      }));
+
+      // If instructor has an active screen share or camera stream, also capture locally via MediaRecorder
+      const captureStream =
+        screenShareStreamRef.current || localMediaStreamRef.current;
+      if (
+        captureStream &&
+        typeof MediaRecorder !== 'undefined' &&
+        captureStream.getTracks().length > 0
+      ) {
+        try {
+          recordedChunksRef.current = [];
+          const recorder = new MediaRecorder(captureStream);
+          recorder.ondataavailable = (ev) => {
+            if (ev.data && ev.data.size > 0) {
+              recordedChunksRef.current.push(ev.data);
+            }
+          };
+          recorder.start(1000);
+          mediaRecorderRef.current = recorder;
+        } catch {
+          // Ignore if browser codec doesn't match stream tracks
+        }
+      }
+
+      setHostActionFeedback(
+        'Đã bắt đầu ghi hình buổi học (Cloudflare R2 · edutech-storage).'
+      );
+    } catch {
+      setHostActionFeedback('Không thể bắt đầu ghi hình lên Cloudflare R2.');
+    } finally {
+      setIsRecordingBusy(false);
+    }
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          resolve(reader.result);
+        } else {
+          reject(new Error('Failed to read blob'));
+        }
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
+  const handleStopRecordingToR2 = async () => {
+    setIsRecordingBusy(true);
+    setHostActionFeedback(null);
+    try {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== 'inactive'
+      ) {
+        await new Promise<void>((resolve) => {
+          const rec = mediaRecorderRef.current!;
+          rec.onstop = () => resolve();
+          rec.stop();
+        });
+      }
+      mediaRecorderRef.current = null;
+
+      if (recordedChunksRef.current.length > 0) {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        recordedChunksRef.current = [];
+        const base64Data = await blobToBase64(blob);
+        const uploaded = await teachApi.uploadSessionRecordingToR2(
+          activeSessionId,
+          {
+            fileName: `live-session-${activeSessionId}-${Date.now()}.webm`,
+            contentType: 'video/webm',
+            base64Data,
+            markReplayReady: true,
+          }
+        );
+        setReplayUrlDraft(uploaded.videoUrl);
+        setRuntimeState((prev) => ({
+          ...prev,
+          recording: uploaded.recording,
+        }));
+        setRoomData((prev) =>
+          prev
+            ? {
+                ...prev,
+                session: {
+                  ...prev.session,
+                  status: uploaded.status,
+                  videoR2Key: uploaded.videoUrl,
+                },
+                video: {
+                  ...prev.video,
+                  videoUrl: uploaded.videoUrl,
+                  playbackType: 'MP4',
+                },
+              }
+            : prev
+        );
+        setHostActionFeedback(
+          `Đã đẩy trực tiếp bản ghi lên Cloudflare R2: ${uploaded.videoUrl}`
+        );
+        return;
+      }
+
+      const stopped = await teachApi.stopSessionRecording(activeSessionId, {
+        markReplayReady: true,
+      });
+      setReplayUrlDraft(stopped.r2PublicUrl);
+      setRuntimeState((prev) => ({
+        ...prev,
+        recording: stopped.recording,
+      }));
+      setRoomData((prev) =>
+        prev
+          ? {
+              ...prev,
+              session: {
+                ...prev.session,
+                status: stopped.status,
+                videoR2Key: stopped.r2PublicUrl,
+              },
+              video: {
+                ...prev.video,
+                videoUrl: stopped.videoUrl,
+                playbackType: stopped.playbackType,
+              },
+            }
+          : prev
+      );
+      setHostActionFeedback(
+        `Đã dừng ghi hình và lưu thông tin bản ghi R2: ${stopped.r2PublicUrl}`
+      );
+    } catch {
+      setHostActionFeedback('Không thể dừng hoặc lưu bản ghi lên R2.');
+    } finally {
+      setIsRecordingBusy(false);
+    }
+  };
+
+  const handleUploadVideoFileToR2 = async (file: File) => {
+    setIsUploadingR2(true);
+    setHostActionFeedback('Đang tải file video trực tiếp lên Cloudflare R2...');
+    try {
+      const base64Data = await blobToBase64(file);
+      const uploaded = await teachApi.uploadSessionRecordingToR2(
+        activeSessionId,
+        {
+          fileName: file.name,
+          contentType: file.type || 'video/mp4',
+          base64Data,
+          markReplayReady: true,
+        }
+      );
+      setReplayUrlDraft(uploaded.videoUrl);
+      setRuntimeState((prev) => ({
+        ...prev,
+        recording: uploaded.recording,
+      }));
+      setRoomData((prev) =>
+        prev
+          ? {
+              ...prev,
+              session: {
+                ...prev.session,
+                status: uploaded.status,
+                videoR2Key: uploaded.videoUrl,
+              },
+              video: {
+                ...prev.video,
+                videoUrl: uploaded.videoUrl,
+                playbackType: 'MP4',
+              },
+            }
+          : prev
+      );
+      setHostActionFeedback(
+        `Đã tải video lên Cloudflare R2 thành công: ${uploaded.videoUrl}`
+      );
+    } catch {
+      setHostActionFeedback('Không thể tải file video lên Cloudflare R2.');
+    } finally {
+      setIsUploadingR2(false);
     }
   };
 
@@ -1163,182 +1513,71 @@ export const LivestreamClassView: React.FC<{
             </div>
           )}
 
-          {/* MAIN STAGE: Video Mode OR Live WebRTC / Topic Stage */}
-          {stageViewMode === 'VIDEO' && playableVideoUrl ? (
-            <div className="relative">
-              <SessionVideoPlayer
-                src={playableVideoUrl}
-                title={sessionTitle}
-                compact
-                watermarkText={`${selfName}${cohortCode ? ` · ${cohortCode}` : ''}`}
-              />
-              {floatingReactions.map((r) => (
-                <div
-                  key={r.id}
-                  style={{ left: `${r.leftPct}%` }}
-                  className="bottom-20 absolute px-3 py-1 rounded-lg bg-black/70 border border-white/20 text-xs font-bold text-white animate-bounce pointer-events-none z-20"
-                >
-                  {r.label}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden shadow-xl relative">
-              <div className="px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="font-mono text-emerald-400 font-semibold">
-                  {screenSharing
-                    ? `Đang chia sẻ màn hình trực tiếp — ${selfName}`
-                    : hasRemoteVideoTrack
-                      ? `Luồng phát trực tiếp từ ${hostName}`
-                      : `Bảng trình bày trực tuyến · ${hostName}`}
-                </span>
-                {runtimeState.hostBroadcast.activeSlideLabel && (
-                  <span className="font-mono text-[11px] text-slate-300">
-                    {runtimeState.hostBroadcast.activeSlideLabel}
-                  </span>
-                )}
-              </div>
+          {/* PROFESSIONAL LIVEKIT + R2 CLASSROOM STAGE COMPONENT */}
+          <LiveKitClassroomStage
+            sessionId={activeSessionId}
+            sessionOrder={sessionOrder}
+            sessionTitle={sessionTitle}
+            sessionStatus={sessionStatus}
+            aiSummaryMd={activeSession?.aiSummaryMd}
+            cohortCode={cohortCode}
+            hostName={hostName}
+            selfName={selfName}
+            selfAccountId={currentAccountId}
+            selfRoleLabel={
+              isHost
+                ? 'Giảng viên / Chủ phòng'
+                : joinedAsVerifiedGuest
+                  ? 'Diễn giả khách mời'
+                  : 'Học viên'
+            }
+            isHost={isHost}
+            livekitConnected={livekitConnected}
+            livekitRoomName={roomData?.livekit?.roomName}
+            sseConnected={sseConnected}
+            stageViewMode={stageViewMode}
+            onChangeStageViewMode={setStageViewMode}
+            playableVideoUrl={playableVideoUrl}
+            webcamActive={webcamActive}
+            camOn={camOn}
+            micOn={micOn}
+            screenSharing={screenSharing}
+            handRaised={handRaised}
+            localMediaStream={localMediaStreamRef.current}
+            screenShareStream={screenShareStreamRef.current}
+            remoteVideoTracks={remoteVideoTracks}
+            activeSpeakerIdentities={activeSpeakerIdentities}
+            mutedIdentities={runtimeState.mutedIdentities || []}
+            raisedHands={runtimeState.raisedHands}
+            participants={participantList}
+            recordingState={runtimeState.recording}
+            recordingElapsedSec={recordingElapsedSec}
+            isRecordingBusy={isRecordingBusy}
+            isUploadingR2={isUploadingR2}
+            hostSlideLabel={runtimeState.hostBroadcast.activeSlideLabel}
+            hostTopicNote={runtimeState.hostBroadcast.liveTopicNote}
+            transcriptPreview={roomData?.transcript || []}
+            floatingReactions={floatingReactions}
+            onMuteParticipant={(targetIdentity, muteAll) =>
+              void handleMuteParticipant(targetIdentity, muteAll)
+            }
+            onStartRecordingToR2={() => void handleStartRecordingToR2()}
+            onStopRecordingToR2={() => void handleStopRecordingToR2()}
+            onUploadVideoFileToR2={(file) => void handleUploadVideoFileToR2(file)}
+          />
 
-              <div className="p-5 sm:p-6 relative min-h-[340px] flex flex-col justify-between space-y-4">
-                {screenSharing ? (
-                  <video
-                    ref={screenShareStreamRef.current ? screenStageVideoRef : undefined}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-contain"
-                  />
-                ) : hasRemoteVideoTrack ? (
-                  <video
-                    ref={remoteStageVideoRef}
-                    autoPlay
-                    playsInline
-                    className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-contain"
-                  />
-                ) : (
-                  <>
-                    {/* Hidden element ready to receive remote LiveKit video if it arrives */}
-                    <video ref={remoteStageVideoRef} autoPlay playsInline className="hidden" />
-                    <div className="space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-mono text-xs text-emerald-400 font-bold">
-                          BUỔI {String(sessionOrder).padStart(2, '0')} · {sessionTitle}
-                        </span>
-                        {playableVideoUrl && (
-                          <button
-                            type="button"
-                            onClick={() => setStageViewMode('VIDEO')}
-                            className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                          >
-                            Phát Video Bài Giảng →
-                          </button>
-                        )}
-                      </div>
-
-                      {runtimeState.hostBroadcast.liveTopicNote && (
-                        <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-[#10B981]/50 text-xs sm:text-sm text-emerald-100">
-                          <span className="font-bold text-emerald-300">Chủ đề đang giảng: </span>
-                          {runtimeState.hostBroadcast.liveTopicNote}
-                        </div>
-                      )}
-
-                      <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
-                        <div className="text-xs font-mono font-bold text-slate-400">
-                          NỘI DUNG TRỌNG TÂM BUỔI HỌC
-                        </div>
-                        <p className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">
-                          {activeSession?.aiSummaryMd ||
-                            'Giảng viên đang chuẩn bị trình chiếu nội dung buổi học. Bạn có thể đặt câu hỏi hoặc bật chia sẻ màn hình / phát video bài giảng.'}
-                        </p>
-                      </div>
-
-                      {roomData?.transcript && roomData.transcript.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          {roomData.transcript.slice(0, 4).map((cue) => (
-                            <div
-                              key={cue.id || cue.sec}
-                              className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs space-y-1"
-                            >
-                              <div className="font-mono text-[11px] text-emerald-400 font-bold">
-                                [{cue.timeLabel}] · Slide {cue.slidePage}
-                              </div>
-                              <p className="text-slate-300 line-clamp-2">{cue.text}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {/* Floating Reactions */}
-                {floatingReactions.map((r) => (
-                  <div
-                    key={r.id}
-                    style={{ left: `${r.leftPct}%` }}
-                    className="bottom-14 absolute px-3 py-1 rounded-lg bg-black/75 border border-white/20 text-xs font-bold text-white animate-bounce pointer-events-none z-10"
-                  >
-                    {r.label}
-                  </div>
-                ))}
-
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800/80 text-xs text-slate-300">
-                  <span>
-                    {runtimeState.raisedHands.length > 0
-                      ? `${runtimeState.raisedHands.length} thành viên đang giơ tay phát biểu`
-                      : 'Chưa có thành viên nào giơ tay phát biểu'}
-                  </span>
-                  {handRaised && (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 border border-amber-400/50 text-amber-300 font-bold">
-                      <Hand className="w-3.5 h-3.5" />
-                      Bạn đang giơ tay xin phát biểu
-                    </span>
-                  )}
-                </div>
-              </div>
+          {mediaNotice && (
+            <div className="px-4 py-2.5 rounded-xl bg-emerald-950/60 border border-[#10B981]/40 text-xs text-emerald-200 flex items-center justify-between gap-2">
+              <span>{mediaNotice}</span>
+              <button
+                type="button"
+                onClick={() => setMediaNotice(null)}
+                className="text-[11px] font-mono text-emerald-400 hover:underline cursor-pointer"
+              >
+                Đóng
+              </button>
             </div>
           )}
-
-          {/* Camera Cards: Host + Local Student/Guest */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div className="p-3.5 rounded-xl bg-[#111A15] border-2 border-[#10B981] flex items-center gap-3">
-              <AvatarWithFallback
-                name={hostName}
-                className="w-11 h-11 rounded-full shrink-0"
-              />
-              <div className="min-w-0">
-                <div className="text-xs font-bold text-white truncate">{hostName}</div>
-                <div className="text-[11px] text-emerald-400 font-semibold">
-                  Giảng viên phụ trách · {sessionStatus === 'LIVE' ? 'Đang điều phối lớp' : 'Chủ phòng'}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-[#111A15] border border-[#1E2D24] space-y-2">
-              {webcamActive && camOn ? (
-                <video
-                  ref={liveSelfVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-24 rounded-lg object-cover border border-[#10B981]"
-                />
-              ) : (
-                <div className="flex items-center gap-3">
-                  <AvatarWithFallback name={selfName} className="w-11 h-11 rounded-full shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">{selfName}</div>
-                    <div className="text-[11px] text-emerald-300 truncate">
-                      {isHost ? 'Giảng viên / Chủ phòng' : joinedAsVerifiedGuest ? 'Diễn giả khách mời' : 'Học viên'} · Mic {micOn ? 'Bật' : 'Tắt'} · Cam {camOn ? 'Bật' : 'Tắt'}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {mediaNotice && (
-                <div className="text-[11px] text-emerald-300 truncate">{mediaNotice}</div>
-              )}
-            </div>
-          </div>
 
           {/* THANH ĐIỀU KHIỂN PHÍA DƯỚI */}
           <div className="rounded-2xl bg-[#111A15] border border-[#1E2D24] p-4 flex flex-wrap items-center justify-between gap-3">
@@ -1687,28 +1926,64 @@ export const LivestreamClassView: React.FC<{
               )}
 
               <div className="space-y-2">
-                <div className="text-xs font-bold text-slate-300">
-                  Danh sách lớp học ({participantList.length})
-                </div>
-                {participantList.map((p) => (
-                  <div
-                    key={p.accountId}
-                    className="p-2.5 rounded-xl bg-[#090F0C] border border-[#1E2D24] flex items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <AvatarWithFallback name={p.fullName} className="w-7 h-7 rounded-full shrink-0" />
-                      <div className="min-w-0">
-                        <div className="font-bold text-white truncate">{p.fullName}</div>
-                        <div className="text-[11px] text-slate-400">{p.roleLabel}</div>
-                      </div>
-                    </div>
-                    {p.isHost && (
-                      <span className="font-mono text-[10px] font-bold text-emerald-400 shrink-0">
-                        HOST
-                      </span>
-                    )}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-slate-300">
+                    Danh sách lớp học ({participantList.length})
                   </div>
-                ))}
+                  {isHost && (
+                    <button
+                      type="button"
+                      onClick={() => void handleMuteParticipant(undefined, true)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-200 text-[11px] font-bold cursor-pointer"
+                    >
+                      <VolumeX className="w-3 h-3" />
+                      <span>Cắt Mic Cả Lớp</span>
+                    </button>
+                  )}
+                </div>
+                {participantList.map((p) => {
+                  const isMutedStudent =
+                    !p.isHost &&
+                    ((runtimeState.mutedIdentities || []).includes('ALL_STUDENTS') ||
+                      (runtimeState.mutedIdentities || []).includes(p.accountId) ||
+                      (runtimeState.mutedIdentities || []).includes(`acc-${p.accountId}`));
+                  return (
+                    <div
+                      key={p.accountId}
+                      className="p-2.5 rounded-xl bg-[#090F0C] border border-[#1E2D24] flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AvatarWithFallback
+                          name={p.fullName}
+                          className="w-7 h-7 rounded-full shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-bold text-white truncate">{p.fullName}</div>
+                          <div className="text-[11px] text-slate-400">
+                            {p.roleLabel}
+                            {isMutedStudent ? ' · Đã cắt mic' : ''}
+                          </div>
+                        </div>
+                      </div>
+                      {p.isHost ? (
+                        <span className="font-mono text-[10px] font-bold text-emerald-400 shrink-0">
+                          HOST
+                        </span>
+                      ) : isHost ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleMuteParticipant(`acc-${p.accountId}`, false)
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-red-500/15 hover:bg-red-500/30 border border-red-500/30 text-red-300 text-[11px] font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <MicOff className="w-3 h-3" />
+                          <span>Cắt Mic</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

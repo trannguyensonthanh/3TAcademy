@@ -73,10 +73,22 @@ export interface LiveReactionPayload {
   createdAt: string;
 }
 
+export interface LiveRecordingState {
+  isRecording: boolean;
+  egressId?: string;
+  objectKey?: string;
+  publicUrl?: string;
+  mode?: 'LIVEKIT_EGRESS' | 'BROWSER_R2';
+  startedAt?: string;
+  stoppedAt?: string;
+}
+
 export interface LiveRoomRuntimeState {
   raisedHands: LiveHandRaiseItem[];
   recentReactions: LiveReactionPayload[];
   questionVotes: Record<string, number>;
+  mutedIdentities?: string[];
+  recording?: LiveRecordingState;
   hostBroadcast: {
     activeSlideLabel: string;
     liveTopicNote: string;
