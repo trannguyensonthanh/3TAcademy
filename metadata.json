@@ -1,0 +1,6 @@
+{
+  "name": "3T Academy — Học Viện Công Nghệ & AI Thực Chiến",
+  "description": "Học trực tiếp cùng chuyên gia theo từng đợt khai giảng, làm dự án thực tế và luôn có Trợ giảng AI đồng hành giải đáp 24/7.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

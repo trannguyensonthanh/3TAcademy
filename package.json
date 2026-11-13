@@ -7,13 +7,18 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "docker compose -f docker-compose.dev.yml up",
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm --prefix apps/web run build",
+    "start": "npm --prefix apps/web run dev",
+    "preview": "npm --prefix apps/web run preview",
+    "dev:docker": "docker compose -f docker-compose.dev.yml up",
     "dev:down": "docker compose -f docker-compose.dev.yml down",
     "dev:infra": "docker compose -f docker-compose.dev.yml up -d postgres redis",
     "dev:api": "npm --prefix apps/api run dev",
     "dev:web": "npm --prefix apps/web run dev",
     "build:api": "npm --prefix apps/api run build",
     "build:web": "npm --prefix apps/web run build",
+    "build:all": "npm --prefix apps/api run build && npm --prefix apps/web run build",
     "typecheck": "npm --prefix apps/api run typecheck && npm --prefix apps/web run typecheck",
     "lint": "npm --prefix apps/api run lint && npm --prefix apps/web run lint",
     "test": "npm --prefix apps/api run test && npm --prefix apps/web run test"
