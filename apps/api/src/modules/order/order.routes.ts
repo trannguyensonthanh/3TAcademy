@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db/index.js';
@@ -14,8 +14,23 @@ import { requireAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { resolveCohort } from '../../db/helpers.js';
 import { env } from '../../config/env.js';
+import {
+  buildSepayWebhookUrls,
+  extractOrderCodeFromSepayPayload,
+  isIncomingSepayTransfer,
+  isSepaySecretAuthorized,
+} from './sepay.helpers.js';
 
 export const orderRouter = Router();
+export const sepayWebhookRouter = Router();
+
+export function getConfiguredSepayWebhookUrls() {
+  return buildSepayWebhookUrls(
+    env.PUBLIC_API_URL,
+    env.SEPAY_WEBHOOK_URL,
+    env.SEPAY_WEBHOOK_BACKUP_URL
+  );
+}
 
 const createOrderSchema = z.object({
   cohortId: z.union([z.number(), z.string()]),
@@ -360,20 +375,64 @@ async function fulfillOrderPayment(
   };
 }
 
-// 6.4 POST /webhooks/sepay
-orderRouter.post('/webhooks/sepay', async (req, res, next) => {
+async function handleSepayWebhookHealth(_req: Request, res: Response) {
+  const webhookUrls = getConfiguredSepayWebhookUrls();
+  res.status(200).json({
+    success: true,
+    service: 'sepay-webhook',
+    status: 'READY',
+    gateway: 'SEPAY_VIETQR',
+    ...webhookUrls,
+  });
+}
+
+async function handleSepayWebhook(req: Request, res: Response, next: NextFunction) {
   try {
+    if (!isSepaySecretAuthorized(req.headers, env.SEPAY_WEBHOOK_SECRET)) {
+      res.status(401).json({
+        success: false,
+        status: 401,
+        code: 'INVALID_WEBHOOK_SECRET',
+        message: 'SePay webhook secret không hợp lệ',
+      });
+      return;
+    }
+
     const payload = (req.body || {}) as Record<string, unknown>;
-    const content: string = String(
-      payload.content || payload.description || payload.orderCode || ''
-    );
+
+    if (!isIncomingSepayTransfer(payload)) {
+      res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: 'OUTGOING_TRANSFER',
+        gateway: 'SEPAY_VIETQR',
+      });
+      return;
+    }
+
     const transferAmount = Number(payload.transferAmount || payload.amount || 0);
     const gatewayTxnId = String(
       payload.id || payload.referenceCode || payload.referenceNumber || `SEPAY_${Date.now()}`
     );
 
-    const match = content.match(/(?:3T|ET)[A-Z0-9-]+/i);
-    const extractedCode = match ? match[0].toUpperCase() : null;
+    const [existingTxn] = await db
+      .select()
+      .from(paymentTransactions)
+      .where(eq(paymentTransactions.gatewayTxnId, gatewayTxnId))
+      .limit(1);
+
+    if (existingTxn) {
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        gateway: 'SEPAY_VIETQR',
+        matchStatus: existingTxn.matchStatus,
+        transactionRef: existingTxn.gatewayTxnId,
+      });
+      return;
+    }
+
+    const extractedCode = extractOrderCodeFromSepayPayload(payload);
 
     if (!extractedCode) {
       await db.insert(paymentTransactions).values({
@@ -458,4 +517,13 @@ orderRouter.post('/webhooks/sepay', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
+}
+
+// 6.4 Primary + Backup SePay Webhook Endpoints
+const SEPAY_WEBHOOK_PATHS = ['/webhooks/sepay', '/webhooks/sepay/backup', '/sepay/webhook'];
+for (const path of SEPAY_WEBHOOK_PATHS) {
+  sepayWebhookRouter.get(path, handleSepayWebhookHealth);
+  sepayWebhookRouter.post(path, handleSepayWebhook);
+}
+
+orderRouter.use('/', sepayWebhookRouter);

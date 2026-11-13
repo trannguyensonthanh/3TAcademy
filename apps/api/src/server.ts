@@ -3,9 +3,13 @@ import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { pool } from './db/index.js';
 import { redis } from './config/redis.js';
+import { getConfiguredSepayWebhookUrls } from './modules/order/order.routes.js';
 
 const server = app.listen(env.PORT, () => {
+  const sepayUrls = getConfiguredSepayWebhookUrls();
   logger.info(`EduTech API server running on port ${env.PORT} [${env.NODE_ENV}]`);
+  logger.info(`SePay primary webhook URL: ${sepayUrls.primaryWebhookUrl}`);
+  logger.info(`SePay backup webhook URL: ${sepayUrls.backupWebhookUrl}`);
 });
 
 const gracefulShutdown = async (signal: string) => {

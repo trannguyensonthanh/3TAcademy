@@ -20,6 +20,13 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   SEPAY_API_KEY: z.string().optional(),
   SEPAY_WEBHOOK_SECRET: z.string().optional(),
+  PUBLIC_API_URL: z
+    .string()
+    .trim()
+    .default('https://guided-wallaby-measured.ngrok-free.app')
+    .transform((val) => val.replace(/\/+$/, '')),
+  SEPAY_WEBHOOK_URL: z.string().trim().optional(),
+  SEPAY_WEBHOOK_BACKUP_URL: z.string().trim().optional(),
   SEPAY_BANK_NAME: z.string().default('MBBank'),
   SEPAY_ACCOUNT_NUMBER: z.string().default('0389998888'),
   SEPAY_ACCOUNT_HOLDER: z.string().default('HOC VIEN CONG NGHE 3T ACADEMY'),

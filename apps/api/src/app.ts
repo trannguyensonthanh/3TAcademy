@@ -6,7 +6,11 @@ import { correlationIdMiddleware } from './middlewares/correlationId.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { catalogRouter } from './modules/catalog/catalog.routes.js';
-import { orderRouter } from './modules/order/order.routes.js';
+import {
+  orderRouter,
+  sepayWebhookRouter,
+  getConfiguredSepayWebhookUrls,
+} from './modules/order/order.routes.js';
 import { learningRouter } from './modules/learning/learning.routes.js';
 import { assessmentRouter } from './modules/assessment/assessment.routes.js';
 import { profileRouter } from './modules/profile/profile.routes.js';
@@ -14,6 +18,7 @@ import { teachRouter } from './modules/teach/teach.routes.js';
 import { adminRouter } from './modules/admin/admin.routes.js';
 
 export const app = express();
+app.set('trust proxy', 1);
 
 app.use(
   helmet({
@@ -55,6 +60,7 @@ app.get('/api/v1', (_req, res) => {
     name: '3T AI Academy Backend API',
     version: '3.1.0',
     status: 'ONLINE',
+    sepayWebhook: getConfiguredSepayWebhookUrls(),
   });
 });
 
@@ -71,6 +77,8 @@ v1Router.use('/', adminRouter);
 
 app.use('/api/v1', v1Router);
 app.use('/api', v1Router);
+// Root-level backup mount for SePay webhooks (e.g. https://<ngrok>/webhooks/sepay & /webhooks/sepay/backup)
+app.use('/', sepayWebhookRouter);
 
 // 404 Fallback for unmatched API routes
 app.use((req, res) => {
