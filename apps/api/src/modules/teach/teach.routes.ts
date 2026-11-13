@@ -34,6 +34,11 @@ import {
   formatScheduleLabels,
   buildInstructorStaffMap,
 } from '../../db/helpers.js';
+import {
+  broadcastLiveRoomEvent,
+  updateHostBroadcastState,
+  resolvePlayableVideoSource,
+} from '../learning/liveRoom.helpers.js';
 
 export const teachRouter = Router();
 
@@ -785,6 +790,13 @@ teachRouter.get(
           quizQuestions: [],
           aiCitations: [],
         },
+        ...(() => {
+          const v = resolvePlayableVideoSource(session.videoR2Key, session.sessionOrder);
+          return {
+            videoUrl: v.videoUrl,
+            playbackType: v.playbackType,
+          };
+        })(),
         assessmentId: quiz ? String(quiz.id) : undefined,
         attachments: materials,
         materials,
@@ -806,6 +818,9 @@ const updateMaterialsSchema = z.object({
   descriptionMd: z.string().optional(),
   aiSummaryMd: z.string().optional(),
   scheduledStart: z.string().optional(),
+  videoR2Key: z.string().optional(),
+  status: z.enum(['LIVE', 'SCHEDULED', 'REPLAY_READY']).optional(),
+  durationSeconds: z.number().int().positive().optional(),
   cohortId: z.union([z.string(), z.number()]).optional(),
   sessionOrder: z.number().int().optional(),
   materialTitle: z.string().optional(),
@@ -822,12 +837,24 @@ teachRouter.put(
   async (req, res, next) => {
     try {
       const session = await resolveSession(req.params.sessionId);
-      const sessionId = session?.id ?? Number(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+      const sessionId = session.id;
       const {
         title,
         descriptionMd,
         aiSummaryMd,
         scheduledStart,
+        videoR2Key,
+        status,
+        durationSeconds,
         materialTitle,
         fileType,
         fileName,
@@ -839,15 +866,26 @@ teachRouter.put(
       const parsedStart =
         scheduledStart && !Number.isNaN(Date.parse(scheduledStart))
           ? new Date(scheduledStart)
-          : session?.scheduledStart;
+          : session.scheduledStart;
+
+      const nextVideoKey =
+        videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key;
+      const nextStatus =
+        status ??
+        (videoR2Key && videoR2Key.trim() && session.status === 'SCHEDULED'
+          ? 'REPLAY_READY'
+          : session.status);
 
       const [updatedSession] = await db
         .update(classSessions)
         .set({
-          title: title || session?.title,
-          descriptionMd: descriptionMd ?? session?.descriptionMd,
-          aiSummaryMd: aiSummaryMd ?? session?.aiSummaryMd,
+          title: title || session.title,
+          descriptionMd: descriptionMd ?? session.descriptionMd,
+          aiSummaryMd: aiSummaryMd ?? session.aiSummaryMd,
           scheduledStart: parsedStart,
+          videoR2Key: nextVideoKey,
+          status: nextStatus,
+          durationSeconds: durationSeconds ?? session.durationSeconds,
           lastUpdatedBy: req.user!.id,
           updatedAt: new Date(),
         })
@@ -902,10 +940,17 @@ teachRouter.put(
         }
       }
 
+      const resolvedVideo = resolvePlayableVideoSource(
+        updatedSession?.videoR2Key,
+        updatedSession?.sessionOrder ?? session.sessionOrder
+      );
+
       res.json({
         sessionId: String(sessionId),
         updated: true,
         updatedAt: new Date().toISOString(),
+        videoUrl: resolvedVideo.videoUrl,
+        playbackType: resolvedVideo.playbackType,
         session: updatedSession
           ? {
               ...updatedSession,
@@ -914,6 +959,78 @@ teachRouter.put(
             }
           : null,
         material: createdMaterial,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 7.5b PUT /teach/sessions/:sessionId/live-status
+const updateLiveStatusSchema = z.object({
+  status: z.enum(['LIVE', 'SCHEDULED', 'REPLAY_READY']).optional(),
+  videoR2Key: z.string().optional(),
+  activeSlideLabel: z.string().max(160).optional(),
+  liveTopicNote: z.string().max(500).optional(),
+});
+
+teachRouter.put(
+  '/teach/sessions/:sessionId/live-status',
+  validate(updateLiveStatusSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const { status, videoR2Key, activeSlideLabel, liveTopicNote } = req.body;
+      const nextStatus = status ?? session.status;
+      const nextVideoKey =
+        videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key;
+
+      const [updated] = await db
+        .update(classSessions)
+        .set({
+          status: nextStatus,
+          videoR2Key: nextVideoKey,
+          lastUpdatedBy: req.user!.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(classSessions.id, session.id))
+        .returning();
+
+      const hostBroadcast = updateHostBroadcastState(session.id, {
+        activeSlideLabel,
+        liveTopicNote,
+      });
+
+      const resolvedVideo = resolvePlayableVideoSource(
+        updated?.videoR2Key,
+        updated?.sessionOrder ?? session.sessionOrder
+      );
+
+      broadcastLiveRoomEvent(session.id, 'session_status', {
+        sessionId: String(session.id),
+        status: nextStatus,
+        videoUrl: resolvedVideo.videoUrl,
+        playbackType: resolvedVideo.playbackType,
+        hostBroadcast,
+      });
+
+      res.json({
+        sessionId: String(session.id),
+        status: nextStatus,
+        videoUrl: resolvedVideo.videoUrl,
+        playbackType: resolvedVideo.playbackType,
+        hostBroadcast,
+        updatedAt: new Date().toISOString(),
       });
     } catch (err) {
       next(err);
@@ -1227,6 +1344,9 @@ teachRouter.post(
         if (sess) {
           const allFormatted = await buildFormattedDiscussionsForSessions([sess]);
           updatedThread = allFormatted.find((t) => t.id === String(threadId));
+          if (updatedThread) {
+            broadcastLiveRoomEvent(sess.id, 'qa_verified', updatedThread);
+          }
         }
       }
 

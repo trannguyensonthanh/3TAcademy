@@ -1,35 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Play,
-  Pause,
   CheckCircle2,
   FileText,
   Download,
   Search,
   Send,
   Sparkles,
-  MessageSquare,
   ArrowLeft,
-  Subtitles,
   Award,
   BookOpen,
 } from 'lucide-react';
 import { useAcademy } from '../context/AcademyContext';
 import { formatTimestamp } from '../utils/academyLogic';
 import { AiTutorCompanionSticker } from '../components/BotanicalStickers';
+import {
+  SessionVideoPlayer,
+  type VideoChapterItem,
+} from '../components/SessionVideoPlayer';
 import { studentLearningApi } from '../services/learning.api';
 import { useAsyncQuery } from '../hooks/useAsyncData';
 import type { ClassSession } from '../types/domain';
-
-interface VideoChapter {
-  id: string;
-  title: string;
-  startSec: number;
-  endSec: number;
-  label: string;
-}
-
-const VIDEO_CHAPTERS: VideoChapter[] = [];
 
 interface TranscriptLine {
   sec: number;
@@ -38,8 +29,6 @@ interface TranscriptLine {
   text: string;
   slidePage: number;
 }
-
-const TRANSCRIPT_LINES: TranscriptLine[] = [];
 
 interface AiTutorMessage {
   id: string;
@@ -51,10 +40,6 @@ interface AiTutorMessage {
     slideLabel?: string;
   }[];
 }
-
-const INITIAL_AI_MESSAGES: AiTutorMessage[] = [];
-
-const SAMPLE_VIDEO_URL = '';
 
 export const SessionVideoRoomView: React.FC<{
   cohortId: string;
@@ -72,7 +57,6 @@ export const SessionVideoRoomView: React.FC<{
     navigate,
   } = useAcademy();
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastSyncedSecRef = useRef<number>(0);
 
   const cohort =
@@ -132,8 +116,8 @@ export const SessionVideoRoomView: React.FC<{
     () => studentLearningApi.getSessionDetail(cohortId, sessionId),
     {
       session: fallbackSession,
-      videoUrl: SAMPLE_VIDEO_URL,
-      transcript: TRANSCRIPT_LINES,
+      videoUrl: '',
+      transcript: [],
       attachments: [],
       quizSummary: {
         assessmentId: `quiz-${fallbackSession.id}`,
@@ -147,6 +131,8 @@ export const SessionVideoRoomView: React.FC<{
     } as {
       session: typeof fallbackSession;
       videoUrl: string;
+      playbackType?: 'MP4' | 'HLS' | 'NONE';
+      storageKey?: string;
       chapters?: { sec: number; timeLabel: string; title: string; slideRange: string }[];
       aiChatHistory?: {
         id: string;
@@ -156,7 +142,7 @@ export const SessionVideoRoomView: React.FC<{
       }[];
       accessDenied?: boolean;
       isPlaceholder?: boolean;
-      transcript: typeof TRANSCRIPT_LINES;
+      transcript: TranscriptLine[];
       attachments: typeof materials;
       quizSummary: {
         assessmentId: string;
@@ -175,11 +161,8 @@ export const SessionVideoRoomView: React.FC<{
     sessionDetail.quizSummary?.assessmentId ||
     session.assessmentId ||
     `quiz-${session.id}`;
-  const videoUrl = sessionDetail.videoUrl || SAMPLE_VIDEO_URL;
-  const transcriptLines =
-    sessionDetail.transcript && sessionDetail.transcript.length > 0
-      ? sessionDetail.transcript
-      : TRANSCRIPT_LINES;
+  const videoUrl = sessionDetail.videoUrl || '';
+  const transcriptLines = sessionDetail.transcript ?? [];
   const sessionAttachments =
     sessionDetail.attachments && sessionDetail.attachments.length > 0
       ? sessionDetail.attachments
@@ -196,37 +179,41 @@ export const SessionVideoRoomView: React.FC<{
       ? sessionDiscussions
       : sessionDetail.discussions ?? discussions;
 
-  // Parse initial timestamp from query string if navigated from Assessment Results
-  const initialQuerySec = (() => {
-    if (typeof window === 'undefined') return 10;
+  const querySeekSec = (() => {
+    if (typeof window === 'undefined') return null;
     const tParam = new URLSearchParams(window.location.search).get('t');
-    return tParam ? Number(tParam) || 10 : 10;
+    if (!tParam) return null;
+    const parsed = Number(tParam);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
   })();
 
-  const [currentSec, setCurrentSec] = useState<number>(initialQuerySec);
-  const [videoDuration, setVideoDuration] = useState<number>(596);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState<'1x' | '1.25x' | '1.5x'>('1x');
-  const [subtitlesOn, setSubtitlesOn] = useState<boolean>(true);
-  const [watermarkPosIndex, setWatermarkPosIndex] = useState<number>(0);
+  const initialResumeSec =
+    querySeekSec !== null ? querySeekSec : Math.max(0, session.lastPositionSec || 0);
 
-  const videoChapters: VideoChapter[] =
+  const [currentSec, setCurrentSec] = useState<number>(initialResumeSec);
+  const [seekRequest, setSeekRequest] = useState<{
+    sec: number;
+    label?: string;
+    nonce: number;
+  } | null>(null);
+
+  const videoChapters: VideoChapterItem[] =
     sessionDetail.chapters && sessionDetail.chapters.length > 0
       ? sessionDetail.chapters.map((ch, idx, arr) => ({
           id: `chap-api-${idx + 1}`,
           title: ch.title,
           startSec: ch.sec,
-          endSec: arr[idx + 1] ? arr[idx + 1].sec - 1 : 600,
+          endSec: arr[idx + 1] ? arr[idx + 1].sec - 1 : Math.max(session.durationSeconds || 600, ch.sec + 60),
           label: `${ch.timeLabel} · ${ch.slideRange}`,
         }))
-      : VIDEO_CHAPTERS;
+      : [];
 
-  // Right column 3 tabs: TRANSCRIPT | AI_TUTOR | CLASS_QA
   const [rightTab, setRightTab] = useState<'TRANSCRIPT' | 'AI_TUTOR' | 'CLASS_QA'>('AI_TUTOR');
   const [transcriptSearch, setTranscriptSearch] = useState<string>('');
-  const [aiMessages, setAiMessages] = useState<AiTutorMessage[]>(INITIAL_AI_MESSAGES);
+  const [aiMessages, setAiMessages] = useState<AiTutorMessage[]>([]);
   const [aiInput, setAiInput] = useState<string>('');
   const [seekBanner, setSeekBanner] = useState<string | null>(null);
+  const [qaTitle, setQaTitle] = useState<string>('');
 
   useEffect(() => {
     if (sessionDetail.aiChatHistory && sessionDetail.aiChatHistory.length > 0) {
@@ -241,59 +228,24 @@ export const SessionVideoRoomView: React.FC<{
     }
   }, [sessionDetail.aiChatHistory]);
 
-  // Class Q&A new question form
-  const [qaTitle, setQaTitle] = useState<string>('');
+  const persistProgress = (sec: number, completed?: boolean) => {
+    const rounded = Math.max(0, Math.floor(sec));
+    lastSyncedSecRef.current = rounded;
+    updateWatchSec(session.id, rounded);
+    void studentLearningApi.updateVideoProgress(session.id, rounded, completed);
+  };
 
-  // Gently drift watermark across the 4 corners every 6 seconds
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setWatermarkPosIndex((prev) => (prev + 1) % 4);
-    }, 6000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  // Seek HTML5 <video> element to exact second and play immediately
   const handleJumpToSecond = async (sec: number, labelInfo?: string) => {
-    setCurrentSec(sec);
-    updateWatchSec(session.id, sec);
-    void studentLearningApi.updateVideoProgress(session.id, sec);
-    if (videoRef.current) {
-      try {
-        videoRef.current.currentTime = sec;
-        const playPromise = videoRef.current.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(() => {});
-        }
-      } catch {
-        // Ignore media seek errors before metadata is loaded
-      }
-    }
-    setIsPlaying(true);
+    const targetSec = Math.max(0, Math.floor(sec));
+    setCurrentSec(targetSec);
+    setSeekRequest({ sec: targetSec, label: labelInfo, nonce: Date.now() });
+    persistProgress(targetSec);
     setSeekBanner(
       labelInfo
-        ? `Đã tua video tới mốc ${formatTimestamp(sec)} (${labelInfo}) và phát tiếp`
-        : `Đã tua video tới đúng giây ${formatTimestamp(sec)} và phát tiếp`
+        ? `Đã tua video tới mốc ${formatTimestamp(targetSec)} (${labelInfo})`
+        : `Đã tua video tới mốc ${formatTimestamp(targetSec)}`
     );
     setTimeout(() => setSeekBanner(null), 4000);
-  };
-
-  const handleSpeedChange = (sp: '1x' | '1.25x' | '1.5x') => {
-    setPlaybackSpeed(sp);
-    const numericRate = sp === '1x' ? 1 : sp === '1.25x' ? 1.25 : 1.5;
-    if (videoRef.current) {
-      videoRef.current.playbackRate = numericRate;
-    }
-  };
-
-  const handleTogglePlay = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play()?.catch(() => {});
-      setIsPlaying(true);
-    } else {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    }
   };
 
   const handleSendAiQuestion = async (e: React.FormEvent) => {
@@ -309,7 +261,11 @@ export const SessionVideoRoomView: React.FC<{
     };
     setAiMessages((prev) => [...prev, userMsg]);
 
-    const res = await studentLearningApi.askSessionAiTutor(session.id, q);
+    const res = await studentLearningApi.askSessionAiTutor(
+      session.id,
+      q,
+      Math.floor(currentSec)
+    );
     const aiReply: AiTutorMessage = {
       id: `a-${Date.now()}`,
       sender: 'AI_TUTOR',
@@ -327,22 +283,20 @@ export const SessionVideoRoomView: React.FC<{
     setQaTitle('');
     await studentLearningApi.createSessionQuestion(
       session.id,
-      'Em đang xem lại video ở mốc thời gian này và mong thầy giải đáp thêm giúp em ạ.',
+      title,
       Math.floor(currentSec),
       title
     );
     await refetchDiscussions();
   };
 
-  const activeChapter =
-    videoChapters.find((c) => currentSec >= c.startSec && currentSec <= c.endSec) ??
-    videoChapters[0];
-
   const activeSubtitleLine =
-    transcriptLines
-      .slice()
-      .reverse()
-      .find((line) => currentSec >= line.sec - 4) ?? transcriptLines[0];
+    transcriptLines.length > 0
+      ? transcriptLines
+          .slice()
+          .reverse()
+          .find((line) => currentSec >= line.sec - 4) ?? transcriptLines[0]
+      : null;
 
   const filteredTranscript = transcriptLines.filter(
     (line) =>
@@ -350,13 +304,6 @@ export const SessionVideoRoomView: React.FC<{
       line.text.toLowerCase().includes(transcriptSearch.toLowerCase()) ||
       line.timeLabel.includes(transcriptSearch)
   );
-
-  const watermarkCornerClasses = [
-    'top-4 right-5',
-    'bottom-20 right-5',
-    'bottom-20 left-5',
-    'top-4 left-5',
-  ][watermarkPosIndex];
 
   const hasCohortInContext = enrolledCohortIds.some(
     (id) => String(id) === String(cohort.id) || String(id) === String(cohortId)
@@ -478,6 +425,16 @@ export const SessionVideoRoomView: React.FC<{
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0">
+          {session.status === 'LIVE' && (
+            <button
+              type="button"
+              onClick={() => navigate(`/live/${session.id}`)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Vào Phòng Live</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => navigate(`/app/assessments/${quizAssessmentId}`)}
@@ -491,176 +448,52 @@ export const SessionVideoRoomView: React.FC<{
 
       {/* Main 2-Column Workspace (Left 70% = 8 cols | Right 30% = 4 cols) */}
       <div className="max-w-[1400px] mx-auto px-6 pt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* ====================================================================
-            CỘT TRÁI (70% CHIỀU RỘNG) — TRÌNH PHÁT <VIDEO> HTML5 THẬT & MỞ KHÓA BUỔI HỌC
-           ==================================================================== */}
+        {/* CỘT TRÁI (70% CHIỀU RỘNG) — TRÌNH PHÁT VIDEO TÁI SỬ DỤNG & MỞ KHÓA BUỔI HỌC */}
         <div className="lg:col-span-8 space-y-6">
-          {/* 1. TRÌNH PHÁT VIDEO HTML5 THẬT (<video controls>) */}
-          <div className="rounded-2xl bg-[#090F0C] text-white border border-slate-800 overflow-hidden shadow-md">
-            <div className="relative bg-black">
-              <video
-                ref={videoRef}
-                controls
-                playsInline
-                preload="metadata"
-                src={videoUrl}
-                onLoadedMetadata={(e) => {
-                  const vid = e.currentTarget;
-                  if (vid.duration && !Number.isNaN(vid.duration)) {
-                    setVideoDuration(Math.floor(vid.duration));
-                  }
-                  if (initialQuerySec > 0) {
-                    vid.currentTime = initialQuerySec;
-                  }
-                }}
-                onTimeUpdate={(e) => {
-                  const sec = Math.floor(e.currentTarget.currentTime);
-                  setCurrentSec(sec);
-                  if (Math.abs(sec - lastSyncedSecRef.current) >= 10) {
-                    lastSyncedSecRef.current = sec;
-                    updateWatchSec(session.id, sec);
-                  }
-                }}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                className="w-full aspect-video bg-black object-cover"
-              >
-                <source src={videoUrl} type="video/mp4" />
-                Trình duyệt của bạn không hỗ trợ thẻ video HTML5.
-              </video>
-
-              {/* Moving Copyright Watermark (Student Email) */}
-              <div
-                aria-label="Dòng chữ bảo vệ bản quyền hiển thị email học viên"
-                className={`pointer-events-none select-none absolute ${watermarkCornerClasses} transition-all duration-1000 px-2.5 py-1 rounded bg-black/45 text-white/50 font-mono text-[11px] z-10`}
-              >
-                {currentUser?.email || currentUser?.fullName || 'Học viên'} · Học viên {cohort.code}
-              </div>
-
-              {/* Top Overlay Pill showing current timestamp & chapter */}
-              <div className="pointer-events-none absolute top-3 left-4 flex flex-wrap items-center gap-2 z-10">
-                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-black/65 backdrop-blur-xs border border-[#10B981]/50 text-emerald-300 font-mono text-xs font-semibold">
-                  <span>Đang phát tại {formatTimestamp(Math.floor(currentSec))}</span>
-                  {activeChapter && (
-                    <>
-                      <span>·</span>
-                      <span>{activeChapter.title}</span>
-                    </>
-                  )}
-                </span>
-                {seekBanner && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#10B981] text-white text-xs font-bold shadow-sm">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{seekBanner}</span>
-                  </span>
-                )}
-              </div>
-
-              {/* Vietnamese Subtitle Overlay */}
-              {subtitlesOn && activeSubtitleLine && (
-                <div className="pointer-events-none absolute bottom-14 inset-x-4 flex justify-center z-10">
-                  <div className="max-w-2xl px-4 py-2 rounded-lg bg-black/80 text-center text-xs sm:text-sm text-emerald-100 border border-white/15">
-                    <span className="font-semibold text-emerald-400">
-                      [{activeSubtitleLine.timeLabel}] {activeSubtitleLine.speaker}:
-                    </span>{' '}
-                    “{activeSubtitleLine.text}”
-                  </div>
-                </div>
-              )}
+          {seekBanner && (
+            <div className="px-4 py-2.5 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950/70 border border-[#10B981]/50 text-[#065F46] dark:text-emerald-200 text-xs font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+              <span>{seekBanner}</span>
             </div>
+          )}
 
-            {/* Chapter Scrubber & Video Controls Bar */}
-            <div className="p-4 bg-slate-950 border-t border-slate-800 space-y-3">
-              {/* Chapter Segmented Progress Bar */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                  <span>Thanh tua nhanh theo các phần chính của buổi học (Chapters):</span>
-                  <span>
-                    {formatTimestamp(Math.floor(currentSec))} / {formatTimestamp(videoDuration)}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                  {videoChapters.map((chap) => {
-                    const isCurrent =
-                      currentSec >= chap.startSec && currentSec <= chap.endSec;
-                    return (
-                      <button
-                        key={chap.id}
-                        type="button"
-                        onClick={() => handleJumpToSecond(chap.startSec, chap.title)}
-                        className={`p-2 rounded-lg text-left border transition-all cursor-pointer ${
-                          isCurrent
-                            ? 'bg-emerald-950/90 border-[#10B981] text-emerald-200'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="font-mono text-[10px] text-emerald-400">{chap.label}</div>
-                        <div className="text-[11px] font-semibold truncate">{chap.title}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Controls Row: Play/Pause, Speed (1x, 1.25x, 1.5x), Vietnamese Subtitles Toggle */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-900">
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleTogglePlay}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                  >
-                    {isPlaying ? (
-                      <>
-                        <Pause className="w-3.5 h-3.5" />
-                        <span>Tạm dừng</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Phát bài giảng</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Speed selector */}
-                  <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
-                    <span className="px-2 text-slate-400">Tốc độ:</span>
-                    {(['1x', '1.25x', '1.5x'] as const).map((sp) => (
-                      <button
-                        key={sp}
-                        type="button"
-                        onClick={() => handleSpeedChange(sp)}
-                        className={`px-2.5 py-1 rounded font-mono font-bold cursor-pointer ${
-                          playbackSpeed === sp
-                            ? 'bg-[#10B981] text-white'
-                            : 'text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        {sp}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Subtitle Toggle */}
-                <button
-                  type="button"
-                  onClick={() => setSubtitlesOn((prev) => !prev)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${
-                    subtitlesOn
-                      ? 'bg-emerald-950 border-[#10B981] text-emerald-300'
-                      : 'bg-slate-900 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  <Subtitles className="w-4 h-4" />
-                  <span>
-                    {subtitlesOn ? 'Phụ đề Tiếng Việt: Đang bật' : 'Phụ đề Tiếng Việt: Đang tắt'}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
+          <SessionVideoPlayer
+            src={videoUrl}
+            title={session.title}
+            initialPositionSec={initialResumeSec}
+            seekRequest={seekRequest}
+            watermarkText={`${currentUser?.email || currentUser?.fullName || 'Học viên'} · Học viên ${cohort.code}`}
+            chapters={videoChapters}
+            activeSubtitle={
+              activeSubtitleLine
+                ? {
+                    timeLabel: activeSubtitleLine.timeLabel,
+                    speaker: activeSubtitleLine.speaker,
+                    text: activeSubtitleLine.text,
+                  }
+                : null
+            }
+            onTimeUpdate={(sec) => {
+              setCurrentSec(sec);
+              if (Math.abs(sec - lastSyncedSecRef.current) >= 10) {
+                persistProgress(sec);
+              }
+            }}
+            onPauseSave={(sec) => {
+              if (sec > 0 && sec !== lastSyncedSecRef.current) {
+                persistProgress(sec);
+              }
+            }}
+            onEnded={(dur) => {
+              persistProgress(dur > 0 ? dur : currentSec);
+            }}
+            onJumpChapter={(sec, labelTitle) => {
+              setCurrentSec(sec);
+              persistProgress(sec);
+              setSeekBanner(`Đã tua video tới mốc ${formatTimestamp(sec)} (${labelTitle})`);
+              setTimeout(() => setSeekBanner(null), 4000);
+            }}
+          />
 
           {/* 2. THẺ "BÀI TẬP MỞ KHÓA BUỔI HỌC" (ĐẶT NGAY DƯỚI VIDEO — 10 CÂU TRẮC NGHIỆM A, B, C, D) */}
           <div className="rounded-2xl bg-white dark:bg-[#111A15] border-2 border-[#10B981] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-5 shadow-xs">

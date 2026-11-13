@@ -457,7 +457,10 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                       </h2>
 
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                        {sess.aiSummaryMd}
+                        {(sess.aiSummaryMd || '')
+                          .replace(/^#{1,6}\s*/gm, '')
+                          .replace(/\*\*(.*?)\*\*/g, '$1')
+                          .trim()}
                       </p>
 
                       <div className="flex flex-wrap items-center gap-4 text-[11px] text-[#475569] dark:text-[#94A3B8] pt-1">

@@ -45,6 +45,7 @@ import {
 } from '../services/teach.api';
 import { authApi } from '../services/auth.api';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { SessionVideoPlayer } from '../components/SessionVideoPlayer';
 
 interface BehindScheduleStudent {
   id: string;
@@ -242,7 +243,10 @@ export const InstructorPortalView: React.FC = () => {
 
   // Cấp 3: Khối 1 (Livestream / Bản ghi), Khối 2 (Tài liệu & Tóm tắt), Khối 3 (Bài kiểm tra 10 câu của buổi)
   const [isPlayingReplayPreview, setIsPlayingReplayPreview] = useState<boolean>(false);
-  const [supplementaryVideoName, setSupplementaryVideoName] = useState<string>('');
+  const [sessionVideoUrlById, setSessionVideoUrlById] = useState<Record<string, string>>({});
+  const [videoInputUrl, setVideoInputUrl] = useState<string>('');
+  const [videoSaveMsg, setVideoSaveMsg] = useState<string | null>(null);
+  const [isSavingVideo, setIsSavingVideo] = useState<boolean>(false);
   const [editSessionSummary, setEditSessionSummary] = useState<string>(
     activeSession.aiSummaryMd
   );
@@ -361,6 +365,12 @@ export const InstructorPortalView: React.FC = () => {
             [selectedSessionId]: prev[selectedSessionId] ?? detail.publishStatus,
           }));
         }
+        if (detail.videoUrl !== undefined) {
+          setSessionVideoUrlById((prev) => ({
+            ...prev,
+            [selectedSessionId]: detail.videoUrl || '',
+          }));
+        }
       })
       .catch(() => {});
     return () => {
@@ -400,15 +410,26 @@ export const InstructorPortalView: React.FC = () => {
     const found = displayCohortSessions.find((s) => s.id === sessId);
     if (found) {
       setEditSessionSummary(found.aiSummaryMd);
+      setVideoInputUrl(found.videoR2Key || '');
     }
     setIsPlayingReplayPreview(false);
     setSessionSavedMsg(null);
+    setVideoSaveMsg(null);
     setUploadSavedMsg(null);
     setQuizNotice(null);
     setEditingQuestionIdx(null);
     setShowAddSessionQForm(false);
     setCohortFlowLevel('LEVEL_3_SESSION_DETAIL');
     const detail = await teachApi.getInstructorSessionDetail(selectedCohortId, sessId);
+    if (detail.session?.videoR2Key !== undefined) {
+      setVideoInputUrl(detail.session.videoR2Key || '');
+    }
+    if (detail.videoUrl !== undefined) {
+      setSessionVideoUrlById((prev) => ({
+        ...prev,
+        [sessId]: detail.videoUrl || '',
+      }));
+    }
     if (detail.assessmentId) {
       setSessionAssessmentIdById((prev) => ({
         ...prev,
@@ -420,6 +441,35 @@ export const InstructorPortalView: React.FC = () => {
         ...prev,
         [sessId]: prev[sessId] ?? detail.questions,
       }));
+    }
+  };
+
+  const handleSaveSessionVideoAndStatus = async (
+    nextStatus?: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY'
+  ) => {
+    setIsSavingVideo(true);
+    setVideoSaveMsg(null);
+    try {
+      const res = await teachApi.updateSessionMaterials(activeSession.id, {
+        videoR2Key: videoInputUrl.trim(),
+        ...(nextStatus ? { status: nextStatus } : {}),
+      });
+      if (res.videoUrl !== undefined) {
+        setSessionVideoUrlById((prev) => ({
+          ...prev,
+          [activeSession.id]: res.videoUrl || '',
+        }));
+      }
+      updateSessionDetails(activeSession.id, {
+        videoR2Key: videoInputUrl.trim(),
+        ...(res.session?.status ? { status: res.session.status } : {}),
+      });
+      setVideoSaveMsg(
+        `Đã lưu nguồn video & cập nhật trạng thái Buổi ${activeSession.sessionOrder} lên hệ thống.`
+      );
+      setTimeout(() => setVideoSaveMsg(null), 4000);
+    } finally {
+      setIsSavingVideo(false);
     }
   };
 
@@ -456,7 +506,10 @@ export const InstructorPortalView: React.FC = () => {
     e.preventDefault();
     const summaryMd = editSessionSummary.trim() || activeSession.aiSummaryMd;
     const matTitle = newMatTitle.trim();
-    await teachApi.updateSessionSummary(activeSession.id, summaryMd);
+    await teachApi.updateSessionMaterials(activeSession.id, {
+      aiSummaryMd: summaryMd,
+      ...(matTitle ? { materialTitle: matTitle, fileType: newMatType } : {}),
+    });
     updateSessionDetails(activeSession.id, {
       aiSummaryMd: summaryMd,
     });
@@ -1632,52 +1685,37 @@ export const InstructorPortalView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Trường hợp 2: Buổi học đã dạy xong (REPLAY_READY) -> Trình xem Bản ghi tự động từ Livestream (KHÔNG có nút ghi đè video) */}
+                  {/* Trường hợp 2: Buổi học đã dạy xong (REPLAY_READY) -> Trình xem Bản ghi Video thật */}
                   {activeSession.status === 'REPLAY_READY' && (
                     <div className="space-y-4">
-                      <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden text-white">
-                        <div className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <span className="font-mono text-emerald-400 font-semibold">
-                            Bản ghi tự động từ buổi Livestream · Buổi {activeSession.sessionOrder}: {activeSession.title}
-                          </span>
-                          <span className="font-mono text-slate-400">
-                            Độ phân giải 1080p · Thời lượng: 02:00:00
-                          </span>
-                        </div>
-
-                        <div className="p-6 min-h-[220px] flex flex-col justify-between bg-gradient-to-br from-slate-900 via-[#090F0C] to-emerald-950/40">
-                          <div className="space-y-2 max-w-2xl">
-                            <span className="inline-block px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-mono">
-                              Đã đồng bộ tự động sau khi kết thúc ca dạy trực tuyến
-                            </span>
+                      {isPlayingReplayPreview || sessionVideoUrlById[activeSession.id] ? (
+                        <SessionVideoPlayer
+                          src={sessionVideoUrlById[activeSession.id] || ''}
+                          title={activeSession.title}
+                          compact
+                          emptyTitle="Chưa gắn đường dẫn video bản ghi"
+                          emptyDescription="Hãy nhập URL video (.mp4 / .m3u8) hoặc R2 key ở khung bên dưới rồi bấm Lưu nguồn video."
+                        />
+                      ) : (
+                        <div className="rounded-2xl bg-[#0F172A] border border-slate-800 p-6 text-white flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1 max-w-2xl">
                             <h3 className="text-base sm:text-lg font-bold">
                               {activeSession.title}
                             </h3>
                             <p className="text-xs text-slate-300">
-                              Hệ thống tự động lưu giữ nguyên vẹn bản ghi buổi học trực tuyến cùng các mốc thời gian thảo luận để học viên trong lớp ôn tập.
+                              Bản ghi buổi học đã sẵn sàng để giảng viên kiểm tra lại trước khi học viên ôn tập.
                             </p>
                           </div>
-
-                          <div className="pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setIsPlayingReplayPreview((prev) => !prev)}
-                              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                              <span>
-                                {isPlayingReplayPreview
-                                  ? 'Đang phát bản ghi Livestream (00:14:20 / 02:00:00)'
-                                  : 'Xem lại bản ghi buổi Livestream'}
-                              </span>
-                            </button>
-
-                            <span className="text-[11px] font-mono text-slate-400">
-                              ✓ Bản ghi gốc từ Livestream được bảo toàn tự động
-                            </span>
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setIsPlayingReplayPreview(true)}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Xem trước bản ghi video</span>
+                          </button>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
@@ -1690,7 +1728,7 @@ export const InstructorPortalView: React.FC = () => {
                             Buổi học chưa diễn ra ({activeSession.scheduledStart})
                           </div>
                           <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                            Nếu đây là buổi học bổ trợ không dạy qua Livestream, giảng viên có thể tải lên video bài giảng bổ trợ bên dưới.
+                            Giảng viên có thể mở phòng Livestream dạy trực tiếp hoặc gắn link video bài giảng bổ trợ bên dưới.
                           </p>
                         </div>
 
@@ -1703,29 +1741,59 @@ export const InstructorPortalView: React.FC = () => {
                           <span>Mở Phòng Livestream Dạy Học</span>
                         </button>
                       </div>
-
-                      <div className="pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 text-xs font-mono">
-                          <Film className="w-4 h-4 text-[#10B981]" />
-                          <span>
-                            {supplementaryVideoName ||
-                              'Chưa có video bổ trợ (Mặc định sẽ tự động ghi hình khi Livestream)'}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSupplementaryVideoName(
-                              `Video-Bo-Tro-Buoi-0${activeSession.sessionOrder}-1080p.mp4`
-                            )
-                          }
-                          className="px-3.5 py-1.5 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer"
-                        >
-                          Tải video bổ trợ lên
-                        </button>
-                      </div>
                     </div>
                   )}
+
+                  {/* Khung quản lý Nguồn Video & Trạng thái Live đồng bộ API thật */}
+                  <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 font-bold">
+                        <Film className="w-4 h-4 text-[#10B981]" />
+                        <span>Cấu hình nguồn Video bài giảng &amp; Trạng thái buổi học (Đồng bộ học viên)</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(['SCHEDULED', 'LIVE', 'REPLAY_READY'] as const).map((st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            disabled={isSavingVideo}
+                            onClick={() => void handleSaveSessionVideoAndStatus(st)}
+                            className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold cursor-pointer ${
+                              activeSession.status === st
+                                ? 'bg-[#10B981] text-white'
+                                : 'bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]'
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={videoInputUrl}
+                        onChange={(e) => setVideoInputUrl(e.target.value)}
+                        placeholder="Nhập URL video (.mp4 / .m3u8) hoặc R2 key..."
+                        className="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-mono"
+                      />
+                      <button
+                        type="button"
+                        disabled={isSavingVideo}
+                        onClick={() => void handleSaveSessionVideoAndStatus()}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer shrink-0 disabled:opacity-60"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{isSavingVideo ? 'Đang lưu...' : 'Lưu nguồn video'}</span>
+                      </button>
+                    </div>
+                    {videoSaveMsg && (
+                      <div className="text-xs font-bold text-[#059669] dark:text-[#34D399]">
+                        ✓ {videoSaveMsg}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* KHỐI 2 (CẤP 3): TÀI LIỆU & TÓM TẮT BUỔI HỌC */}

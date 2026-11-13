@@ -444,3 +444,76 @@ test('App.tsx cohort workspace routes allow STUDENT, INSTRUCTOR, and ADMIN consi
     'Cohort workspace and live routes must align with backend permissions for STUDENT, INSTRUCTOR, and ADMIN'
   );
 });
+
+test('Live classroom and Video views wire to backend APIs without hardcoded static fallback mocks', async () => {
+  const liveViewContent = fs.readFileSync(
+    path.join(srcDir, 'views', 'LivestreamClassView.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    liveViewContent.includes('learningApi.getLiveSessionRoom'),
+    'LivestreamClassView must fetch authorization and room payload from backend'
+  );
+  assert.equal(
+    liveViewContent.includes('hybrid_search_pipeline.ts'),
+    false,
+    'LivestreamClassView must not hardcode static code snippets'
+  );
+  assert.equal(
+    liveViewContent.includes('cohorts[0]'),
+    false,
+    'LivestreamClassView must never fallback to cohorts[0] (DATA-PIPE) on authorization'
+  );
+
+  const videoViewContent = fs.readFileSync(
+    path.join(srcDir, 'views', 'SessionVideoRoomView.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    videoViewContent.includes('SessionVideoPlayer'),
+    'SessionVideoRoomView must use reusable SessionVideoPlayer component'
+  );
+
+  const originalFetch = globalThis.fetch;
+  const captured: { url: string; method: string; body: unknown }[] = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    captured.push({
+      url: String(input),
+      method: init?.method || 'GET',
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+    });
+    return new Response(
+      JSON.stringify({ success: true, data: { ok: true, votes: 2, raisedHands: [] } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  try {
+    setAuthAccessToken('live-test-token');
+    await learningApi.getLiveSessionRoom('5');
+    assert.equal(captured.at(-1)?.url, '/api/v1/live/sessions/5');
+
+    await learningApi.setLiveHandRaise('5', true);
+    assert.equal(captured.at(-1)?.url, '/api/v1/live/sessions/5/hand-raise');
+    assert.deepEqual(captured.at(-1)?.body, { raised: true });
+
+    await learningApi.sendLiveReaction('5', '👏 Vỗ tay');
+    assert.equal(captured.at(-1)?.url, '/api/v1/live/sessions/5/reactions');
+
+    await learningApi.upvoteLiveDiscussion('77');
+    assert.equal(captured.at(-1)?.url, '/api/v1/live/discussions/77/upvote');
+
+    await teachApi.updateSessionLiveStatus('5', {
+      status: 'REPLAY_READY',
+      videoR2Key: 'https://cdn.3t.edu.vn/s05.mp4',
+    });
+    assert.equal(captured.at(-1)?.url, '/api/v1/teach/sessions/5/live-status');
+    assert.equal(captured.at(-1)?.method, 'PUT');
+
+    const eventsUrl = learningApi.getLiveEventsUrl('5');
+    assert.equal(eventsUrl, '/api/v1/live/sessions/5/events?token=live-test-token');
+  } finally {
+    clearAuthTokens();
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -65,6 +65,8 @@ export const teachApi = {
   getInstructorSessionDetail: (cohortId: string, sessionId: string) =>
     httpRequest<{
       session: ClassSession;
+      videoUrl?: string;
+      playbackType?: 'MP4' | 'HLS' | 'NONE';
       assessmentId?: string;
       questions: McqQuestionItem[];
       publishStatus: AssessmentPublishStatus;
@@ -82,6 +84,7 @@ export const teachApi = {
       sessionId: string;
       updated: boolean;
       updatedAt: string;
+      videoUrl?: string;
       session?: ClassSession;
     }>(`/teach/sessions/${encodeURIComponent(sessionId)}/materials`, {
       method: 'PUT',
@@ -94,6 +97,9 @@ export const teachApi = {
       title?: string;
       aiSummaryMd?: string;
       scheduledStart?: string;
+      videoR2Key?: string;
+      status?: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      durationSeconds?: number;
       cohortId?: string;
       sessionOrder?: number;
       materialTitle?: string;
@@ -104,9 +110,36 @@ export const teachApi = {
       sessionId: string;
       updated: boolean;
       updatedAt: string;
+      videoUrl?: string;
+      playbackType?: 'MP4' | 'HLS' | 'NONE';
       session?: ClassSession;
       material?: CohortMaterial;
     }>(`/teach/sessions/${encodeURIComponent(sessionId)}/materials`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  updateSessionLiveStatus: (
+    sessionId: string,
+    payload: {
+      status?: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      videoR2Key?: string;
+      activeSlideLabel?: string;
+      liveTopicNote?: string;
+    }
+  ) =>
+    httpRequest<{
+      sessionId: string;
+      status: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      videoUrl: string;
+      playbackType: 'MP4' | 'HLS' | 'NONE';
+      hostBroadcast: {
+        activeSlideLabel: string;
+        liveTopicNote: string;
+        updatedAt: string;
+      };
+      updatedAt: string;
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/live-status`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),

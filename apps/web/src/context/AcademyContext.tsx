@@ -92,7 +92,12 @@ interface AcademyContextValue {
   rescheduleSession: (sessionId: string, newDateText: string) => void;
   updateSessionDetails: (
     sessionId: string,
-    updates: { title?: string; aiSummaryMd?: string }
+    updates: {
+      title?: string;
+      aiSummaryMd?: string;
+      videoR2Key?: string;
+      status?: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+    }
   ) => void;
   addAiGeneratedQuizToSession: (sessionId: string) => void;
   enrolledCohortIds: string[];
@@ -686,13 +691,24 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const updateSessionDetails = useCallback(
-    (sessionId: string, updates: { title?: string; aiSummaryMd?: string }) => {
+    (
+      sessionId: string,
+      updates: {
+        title?: string;
+        aiSummaryMd?: string;
+        videoR2Key?: string;
+        status?: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
+      }
+    ) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, ...updates } : s))
       );
       void (async () => {
         const res =
-          updates.aiSummaryMd !== undefined && updates.title === undefined
+          updates.aiSummaryMd !== undefined &&
+          updates.title === undefined &&
+          updates.videoR2Key === undefined &&
+          updates.status === undefined
             ? await teachApi.updateSessionSummary(sessionId, updates.aiSummaryMd)
             : await teachApi.updateSessionMaterials(sessionId, updates);
         if (res.session) {

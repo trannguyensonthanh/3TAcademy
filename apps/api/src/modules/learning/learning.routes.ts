@@ -39,6 +39,19 @@ import {
   formatScheduleLabels,
   buildInstructorStaffMap,
 } from '../../db/helpers.js';
+import {
+  createLiveKitToken,
+  createGuestSpeakerToken,
+} from '../../integrations/livekit.service.js';
+import {
+  resolvePlayableVideoSource,
+  getLiveRoomState,
+  broadcastLiveRoomEvent,
+  registerLiveRoomClient,
+  setHandRaiseState,
+  addLiveReaction,
+  upvoteLiveDiscussion,
+} from './liveRoom.helpers.js';
 
 export const learningRouter = Router();
 
@@ -1085,6 +1098,11 @@ learningRouter.get(
         }));
       }
 
+      const videoSource = resolvePlayableVideoSource(
+        session.videoR2Key,
+        session.sessionOrder
+      );
+
       res.json({
         session: mapClassSessionDto(session, {
           hostInstructorName: staffInfo.instructorName,
@@ -1096,9 +1114,9 @@ learningRouter.get(
           quizQuestions,
           aiCitations,
         }),
-        videoUrl: session.videoR2Key
-          ? `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4`
-          : '',
+        videoUrl: videoSource.videoUrl,
+        playbackType: videoSource.playbackType,
+        storageKey: videoSource.storageKey,
         transcript,
         chapters,
         aiChatHistory,
@@ -1150,6 +1168,7 @@ learningRouter.get(
 const progressSchema = z.object({
   lastPositionSec: z.number().int().min(0),
   durationSeconds: z.number().int().positive().optional(),
+  completed: z.boolean().optional(),
 });
 
 learningRouter.put(
@@ -1161,7 +1180,7 @@ learningRouter.put(
       const session = await resolveSession(req.params.sessionId);
       const sessionId = session?.id ?? Number(req.params.sessionId);
       const accountId = req.user!.id;
-      const { lastPositionSec } = req.body;
+      const { lastPositionSec, completed } = req.body;
 
       const [existingProg] = await db
         .select()
@@ -1174,8 +1193,9 @@ learningRouter.put(
         )
         .limit(1);
 
-      const isCompleted = existingProg?.isCompleted ?? false;
+      const isCompleted = Boolean(existingProg?.isCompleted || completed);
       const now = new Date();
+      const completedAt = existingProg?.completedAt ?? (completed ? now : null);
 
       await db
         .insert(sessionProgress)
@@ -1184,13 +1204,15 @@ learningRouter.put(
           sessionId,
           lastPositionSec,
           isCompleted,
-          completedAt: existingProg?.completedAt ?? null,
+          completedAt,
           lastActivityAt: now,
         })
         .onConflictDoUpdate({
           target: [sessionProgress.accountId, sessionProgress.sessionId],
           set: {
             lastPositionSec,
+            isCompleted,
+            completedAt,
             lastActivityAt: now,
           },
         });
@@ -1577,6 +1599,9 @@ learningRouter.post(
         String(session.cohortId)
       );
       const createdThread = allThreads.find((t) => t.id === String(result.id)) || allThreads[0];
+      if (createdThread) {
+        broadcastLiveRoomEvent(session.id, 'qa_created', createdThread);
+      }
 
       res.status(201).json({
         threadId: String(result.id),
@@ -1743,6 +1768,8 @@ learningRouter.post(
         isStaff,
       };
 
+      broadcastLiveRoomEvent(session.id, 'chat_message', message);
+
       res.status(201).json(message);
     } catch (err) {
       next(err);
@@ -1750,7 +1777,483 @@ learningRouter.post(
   }
 );
 
-// 3.12 POST /live/guest/verify
+// 3.12 GET /live/sessions/:sessionId (Phòng học trực tuyến — check quyền + LiveKit token + state thật)
+learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, next) => {
+  try {
+    const session = await resolveSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'SESSION_NOT_FOUND',
+        message: 'Không tìm thấy buổi học trực tuyến',
+        error: {
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học trực tuyến',
+        },
+      });
+      return;
+    }
+
+    const accountId = req.user!.id;
+    const userRole = String(req.user!.role || '').trim().toUpperCase();
+    const [cohort] = await db
+      .select()
+      .from(cohorts)
+      .where(eq(cohorts.id, session.cohortId))
+      .limit(1);
+
+    if (userRole === 'STUDENT') {
+      await ensureEnrollmentsForPaidOrders(accountId);
+      const [enr] = await db
+        .select()
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.accountId, accountId),
+            eq(enrollments.cohortId, session.cohortId),
+            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+          )
+        )
+        .limit(1);
+
+      if (!enr) {
+        const message = 'Bạn chưa ghi danh hoặc chưa hoàn tất thanh toán học phí cho đợt học này';
+        res.status(403).json({
+          success: false,
+          status: 403,
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message,
+          cohort: cohort
+            ? { id: String(cohort.id), code: cohort.code, name: cohort.name }
+            : undefined,
+          error: {
+            code: 'NOT_ENROLLED_IN_COHORT',
+            message,
+          },
+        });
+        return;
+      }
+    }
+
+    const [
+      courseRows,
+      profileRows,
+      attachments,
+      chunks,
+      discussions,
+      liveChatRows,
+      participantRows,
+      getStaffForInstructor,
+    ] = await Promise.all([
+      cohort
+        ? db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1)
+        : Promise.resolve([]),
+      db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
+      db.select().from(sessionAttachments).where(eq(sessionAttachments.sessionId, session.id)),
+      db
+        .select()
+        .from(knowledgeChunks)
+        .where(eq(knowledgeChunks.sessionId, session.id))
+        .orderBy(asc(knowledgeChunks.chunkIndex)),
+      buildFormattedDiscussions(
+        session.id,
+        session.sessionOrder,
+        session.title,
+        String(session.cohortId)
+      ),
+      db
+        .select({
+          msgId: chatMessages.id,
+          content: chatMessages.content,
+          createdAt: chatMessages.createdAt,
+          accountId: chatSessions.accountId,
+          fullName: userProfiles.fullName,
+          role: accounts.role,
+        })
+        .from(chatMessages)
+        .innerJoin(chatSessions, eq(chatMessages.chatSessionId, chatSessions.id))
+        .leftJoin(userProfiles, eq(chatSessions.accountId, userProfiles.accountId))
+        .leftJoin(accounts, eq(chatSessions.accountId, accounts.id))
+        .where(and(eq(chatSessions.sessionId, session.id), eq(chatSessions.scope, 'LIVE_COPILOT')))
+        .orderBy(asc(chatMessages.createdAt)),
+      db
+        .select({
+          accountId: enrollments.accountId,
+          status: enrollments.status,
+          fullName: userProfiles.fullName,
+          avatarUrl: userProfiles.avatarUrl,
+          role: accounts.role,
+        })
+        .from(enrollments)
+        .leftJoin(userProfiles, eq(enrollments.accountId, userProfiles.accountId))
+        .leftJoin(accounts, eq(enrollments.accountId, accounts.id))
+        .where(
+          and(
+            eq(enrollments.cohortId, session.cohortId),
+            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+          )
+        ),
+      buildInstructorStaffMap(),
+    ]);
+
+    const course = courseRows[0];
+    const currentProfile = profileRows[0];
+    const staffInfo = getStaffForInstructor(session.instructorId);
+    const roomState = getLiveRoomState(session.id);
+    const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+    const roomName = session.livekitRoomName || `live-session-${session.id}`;
+    const livekitServerUrl = (env.LIVEKIT_API_URL || '').trim();
+    const livekitToken = await createLiveKitToken({
+      roomName,
+      participantIdentity: `acc-${accountId}`,
+      participantName: currentProfile?.fullName || req.user!.email,
+      isHost,
+    });
+    const videoSource = resolvePlayableVideoSource(session.videoR2Key, session.sessionOrder);
+    const labels = cohort
+      ? formatScheduleLabels(cohort.scheduleSlots)
+      : { scheduleLabel: '', timeRangeLabel: '' };
+
+    const chatMessagesDto = liveChatRows.map((m) => {
+      const isStaff = m.role === 'INSTRUCTOR' || m.role === 'ADMIN';
+      const roleLabel =
+        m.role === 'INSTRUCTOR'
+          ? 'Giảng viên'
+          : m.role === 'ADMIN'
+            ? 'Quản trị viên'
+            : 'Học viên';
+      const timeLabel = m.createdAt.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return {
+        id: String(m.msgId),
+        sessionId: String(session.id),
+        senderName: m.fullName || 'Học viên',
+        sender: m.fullName || 'Học viên',
+        senderRole: roleLabel,
+        roleLabel,
+        timeLabel,
+        time: timeLabel,
+        text: m.content,
+        isStaff,
+      };
+    });
+
+    const transcript = chunks.map((ch, idx) => {
+      const sec = ch.startSec ?? idx * 15 + 10;
+      const slidePage = ch.pageNumber ?? idx * 4 + 8;
+      return {
+        id: `cue-${ch.id}`,
+        sec,
+        timeLabel: formatSecondsToMmSs(sec),
+        speaker: staffInfo.instructorName,
+        text: ch.content,
+        slidePage,
+      };
+    });
+
+    const participants = [
+      {
+        accountId: String(session.instructorId),
+        fullName: staffInfo.instructorName,
+        role: 'INSTRUCTOR',
+        roleLabel: 'Giảng viên chính',
+        avatarUrl: staffInfo.instructorAvatarUrl,
+        isHost: true,
+      },
+      ...participantRows
+        .filter((p) => p.accountId !== session.instructorId)
+        .map((p) => ({
+          accountId: String(p.accountId),
+          fullName: p.fullName || 'Học viên',
+          role: p.role || 'STUDENT',
+          roleLabel: p.role === 'INSTRUCTOR' ? 'Trợ giảng' : 'Học viên',
+          avatarUrl: p.avatarUrl || undefined,
+          isHost: false,
+        })),
+    ];
+
+    res.json({
+      session: mapClassSessionDto(session, {
+        hostInstructorName: staffInfo.instructorName,
+        attachmentsCount: attachments.length,
+      }),
+      cohort: cohort
+        ? {
+            id: String(cohort.id),
+            courseId: String(cohort.courseId),
+            instructorId: String(cohort.instructorId),
+            courseTitle: course?.title || cohort.name,
+            code: cohort.code,
+            name: cohort.name,
+            status: cohort.status,
+            enrolledCount: cohort.enrolledCount,
+            scheduleLabel: labels.scheduleLabel,
+            timeRangeLabel: labels.timeRangeLabel,
+            instructorName: staffInfo.instructorName,
+            instructorHeadline: staffInfo.instructorHeadline,
+            instructorAvatarUrl: staffInfo.instructorAvatarUrl,
+            staff: staffInfo.staff,
+          }
+        : null,
+      participants,
+      participantCount: Math.max(participants.length, cohort?.enrolledCount || 0),
+      isHost,
+      video: videoSource,
+      livekit: {
+        roomName,
+        token: livekitToken,
+        serverUrl: livekitServerUrl,
+        enabled: Boolean(livekitServerUrl),
+      },
+      roomState,
+      chatMessages: chatMessagesDto,
+      discussions: discussions.map((d) => ({
+        ...d,
+        votes: roomState.questionVotes[d.id] ?? (d.verifiedByStaff ? 3 : 1),
+      })),
+      transcript,
+      attachments: attachments.map((att) => {
+        const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+        const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+        return {
+          id: String(att.id),
+          cohortId: String(session.cohortId),
+          sessionId: String(session.id),
+          sessionOrder: session.sessionOrder,
+          title: att.fileName,
+          fileName: att.fileName,
+          fileType,
+          type: fileType,
+          mimeType: att.mimeType,
+          fileSize: sizeStr,
+          sizeLabel: sizeStr,
+          fileSizeBytes: att.fileSizeBytes,
+          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+          updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3.13 GET /live/sessions/:sessionId/events (SSE stream for live chat, Q&A, hand-raise, reactions, status)
+learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req, res, next) => {
+  try {
+    let authUser = req.user;
+    if (!authUser && typeof req.query.token === 'string' && req.query.token.trim()) {
+      try {
+        const decoded = jwt.verify(req.query.token.trim(), env.JWT_ACCESS_SECRET) as {
+          sub?: string | number;
+          id?: number;
+          email?: string;
+          role?: string;
+        };
+        const uid = Number(decoded.sub ?? decoded.id);
+        if (Number.isFinite(uid) && uid > 0) {
+          authUser = {
+            id: uid,
+            email: decoded.email || '',
+            role: (decoded.role || 'STUDENT') as 'STUDENT' | 'INSTRUCTOR' | 'ADMIN',
+          };
+        }
+      } catch {
+        // Invalid token falls through to 401
+      }
+    }
+
+    if (!authUser) {
+      res.status(401).json({
+        success: false,
+        status: 401,
+        code: 'UNAUTHORIZED',
+        message: 'Vui lòng đăng nhập để kết nối phòng học trực tuyến',
+      });
+      return;
+    }
+
+    const session = await resolveSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'SESSION_NOT_FOUND',
+        message: 'Không tìm thấy buổi học',
+      });
+      return;
+    }
+
+    const userRole = String(authUser.role || '').trim().toUpperCase();
+    if (userRole === 'STUDENT') {
+      await ensureEnrollmentsForPaidOrders(authUser.id);
+      const [enr] = await db
+        .select()
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.accountId, authUser.id),
+            eq(enrollments.cohortId, session.cohortId),
+            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+          )
+        )
+        .limit(1);
+      if (!enr) {
+        res.status(403).json({
+          success: false,
+          status: 403,
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message: 'Bạn chưa ghi danh vào đợt học này',
+        });
+        return;
+      }
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const initialState = getLiveRoomState(session.id);
+    res.write(`event: room_state\ndata: ${JSON.stringify(initialState)}\n\n`);
+
+    const unregister = registerLiveRoomClient(session.id, res);
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': keepalive\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        unregister();
+      }
+    }, 25_000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unregister();
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3.14 POST /live/sessions/:sessionId/hand-raise
+const handRaiseSchema = z.object({
+  raised: z.boolean(),
+});
+
+learningRouter.post(
+  '/live/sessions/:sessionId/hand-raise',
+  requireAuth,
+  validate(handRaiseSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const [profile] = await db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, req.user!.id))
+        .limit(1);
+
+      const raisedHands = setHandRaiseState(session.id, {
+        accountId: String(req.user!.id),
+        fullName: profile?.fullName || req.user!.email,
+        role: req.user!.role,
+        raised: req.body.raised,
+      });
+
+      res.json({
+        raised: req.body.raised,
+        raisedHands,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 3.15 POST /live/sessions/:sessionId/reactions
+const reactionSchema = z.object({
+  label: z.string().min(1).max(60),
+});
+
+learningRouter.post(
+  '/live/sessions/:sessionId/reactions',
+  requireAuth,
+  validate(reactionSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const [profile] = await db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, req.user!.id))
+        .limit(1);
+
+      const reaction = addLiveReaction(
+        session.id,
+        profile?.fullName || req.user!.email,
+        req.body.label
+      );
+
+      res.status(201).json({ reaction });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 3.16 POST /live/discussions/:threadId/upvote
+learningRouter.post('/live/discussions/:threadId/upvote', requireAuth, async (req, res, next) => {
+  try {
+    const threadId = Number(req.params.threadId);
+    const [thread] = await db
+      .select()
+      .from(discussionThreads)
+      .where(eq(discussionThreads.id, threadId))
+      .limit(1);
+
+    if (!thread) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'THREAD_NOT_FOUND',
+        message: 'Không tìm thấy câu hỏi thảo luận',
+      });
+      return;
+    }
+
+    const votes = upvoteLiveDiscussion(thread.sessionId, thread.id);
+    res.json({ threadId: String(thread.id), votes });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3.17 POST /live/guest/verify
 const verifyGuestSchema = z.object({
   token: z.string().optional(),
   inviteToken: z.string().optional(),
@@ -1809,19 +2312,36 @@ learningRouter.post(
         return;
       }
 
-      const getStaffForInstructor = await buildInstructorStaffMap();
+      const [getStaffForInstructor, [cohort]] = await Promise.all([
+        buildInstructorStaffMap(),
+        db.select().from(cohorts).where(eq(cohorts.id, session.cohortId)).limit(1),
+      ]);
       const staffInfo = getStaffForInstructor(session.instructorId);
+      const roomName = session.livekitRoomName || `live-session-${session.id}`;
+      const livekitServerUrl = (env.LIVEKIT_API_URL || '').trim();
+      const guestLivekitToken = await createGuestSpeakerToken({
+        roomName,
+        guestName: guestDisplayName,
+      });
 
       res.json({
         valid: true,
         verified: true,
         sessionId: String(session.id),
         cohortId: String(session.cohortId),
+        cohortName: cohort?.name || '',
+        cohortCode: cohort?.code || '',
         sessionTitle: session.title,
         hostInstructorName: staffInfo.instructorName,
         guestDisplayName,
         guestRoleLabel: decodedRoleLabel,
         guestRoleHeadline: decodedRoleLabel,
+        livekit: {
+          roomName,
+          token: guestLivekitToken,
+          serverUrl: livekitServerUrl,
+          enabled: Boolean(livekitServerUrl),
+        },
         joinedAt: new Date().toISOString(),
       });
     } catch (err) {
