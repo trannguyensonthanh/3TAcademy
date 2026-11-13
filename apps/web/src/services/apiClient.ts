@@ -142,6 +142,20 @@ function shouldAttemptTokenRefresh(normalizedEndpoint: string): boolean {
   );
 }
 
+export class ApiHttpError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+
+  constructor(message: string, status: number, code?: string, details?: unknown) {
+    super(message);
+    this.name = 'ApiHttpError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 /**
  * Production HTTP Client:
  * Automatically attaches `Content-Type: application/json`, `X-Request-ID`,
@@ -190,17 +204,25 @@ export async function httpRequest<T>(
 
   if (!response.ok) {
     let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    let errorCode: string | undefined;
+    let errorDetails: unknown;
     try {
       const errorBody = await response.json();
+      errorDetails = errorBody;
       if (errorBody?.message) {
         errorMessage = errorBody.message;
       } else if (errorBody?.error?.message) {
         errorMessage = errorBody.error.message;
       }
+      if (typeof errorBody?.code === 'string') {
+        errorCode = errorBody.code;
+      } else if (typeof errorBody?.error?.code === 'string') {
+        errorCode = errorBody.error.code;
+      }
     } catch {
       // Keep status text
     }
-    throw new Error(errorMessage);
+    throw new ApiHttpError(errorMessage, response.status, errorCode, errorDetails);
   }
 
   const json = await response.json();

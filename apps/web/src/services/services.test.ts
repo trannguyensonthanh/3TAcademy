@@ -382,3 +382,65 @@ test('apiClient automatically refreshes expired access token via /auth/refresh a
     globalThis.fetch = originalFetch;
   }
 });
+
+test('apiClient throws ApiHttpError with status and code on 403 NOT_ENROLLED_IN_COHORT vs 500 errors', async () => {
+  const { ApiHttpError } = await import('./apiClient');
+  const originalFetch = globalThis.fetch;
+
+  try {
+    setAuthAccessToken('valid-student-token');
+
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          success: false,
+          status: 403,
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message: 'Bạn chưa ghi danh',
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }
+      );
+
+    await assert.rejects(
+      () => learningApi.getCohortWorkspace('1'),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiHttpError);
+        assert.equal(err.status, 403);
+        assert.equal(err.code, 'NOT_ENROLLED_IN_COHORT');
+        return true;
+      }
+    );
+
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          success: false,
+          status: 500,
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Lỗi máy chủ',
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+
+    await assert.rejects(
+      () => learningApi.getCohortWorkspace('1'),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiHttpError);
+        assert.equal(err.status, 500);
+        assert.equal(err.code, 'INTERNAL_SERVER_ERROR');
+        return true;
+      }
+    );
+  } finally {
+    clearAuthTokens();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('App.tsx cohort workspace routes allow STUDENT, INSTRUCTOR, and ADMIN consistently with backend', () => {
+  const appContent = fs.readFileSync(path.join(srcDir, 'App.tsx'), 'utf8');
+  assert.ok(
+    appContent.includes("allowedRoles={['STUDENT', 'INSTRUCTOR', 'ADMIN']}"),
+    'Cohort workspace and live routes must align with backend permissions for STUDENT, INSTRUCTOR, and ADMIN'
+  );
+});

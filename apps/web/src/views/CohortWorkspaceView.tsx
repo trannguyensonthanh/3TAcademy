@@ -37,34 +37,35 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
     certificates,
     enrolledCohortIds,
     role,
+    currentUser,
     setStudentSidebarTab,
     navigate,
   } = useAcademy();
 
-  const fallbackCohort =
-    cohorts.find(
-      (c) => c.id === cohortId || c.code.toLowerCase() === cohortId.toLowerCase()
-    ) ??
-    cohorts[0] ?? {
-      id: cohortId,
-      courseId: '',
-      code: cohortId,
-      name: '',
-      mode: 'HYBRID' as const,
-      startDate: '',
-      endDate: '',
-      scheduleLabel: '',
-      scheduleSlots: [],
-      tuitionVnd: 0,
-      capacity: 0,
-      enrolledCount: 0,
-      seatsRemaining: 0,
-      status: 'UPCOMING' as const,
-      staff: [],
-    };
+  const matchedCohort = cohorts.find(
+    (c) => String(c.id) === String(cohortId) || c.code.toLowerCase() === cohortId.toLowerCase()
+  );
+  const fallbackCohort = matchedCohort ?? {
+    id: cohortId,
+    courseId: '',
+    code: cohortId,
+    name: '',
+    mode: 'HYBRID' as const,
+    startDate: '',
+    endDate: '',
+    scheduleLabel: '',
+    scheduleSlots: [],
+    tuitionVnd: 0,
+    capacity: 0,
+    enrolledCount: 0,
+    seatsRemaining: 0,
+    status: 'UPCOMING' as const,
+    staff: [],
+  };
   const fallbackCourse =
-    courses.find((cr) => cr.id === fallbackCohort.courseId) ??
-    courses[0] ?? {
+    (fallbackCohort.courseId
+      ? courses.find((cr) => String(cr.id) === String(fallbackCohort.courseId))
+      : undefined) ?? {
       id: fallbackCohort.courseId,
       categoryId: '',
       categorySlug: 'ai',
@@ -87,14 +88,18 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
   const {
     data: workspaceData,
     isLoading: isWorkspaceLoading,
+    hasSettled: hasWorkspaceSettled,
     error: workspaceError,
+    errorStatus: workspaceErrorStatus,
+    errorCode: workspaceErrorCode,
+    refetch: refetchWorkspace,
   } = useAsyncQuery(
     () => studentLearningApi.getCohortWorkspace(cohortId),
     {
       cohort: fallbackCohort,
       course: fallbackCourse,
-      sessions,
-      materials,
+      sessions: [],
+      materials: [],
       finalExamPassed: false,
       isPlaceholder: true,
     } as {
@@ -108,7 +113,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
       accessDenied?: boolean;
       isPlaceholder?: boolean;
     },
-    [cohortId]
+    [cohortId, role, currentUser?.id]
   );
 
   const cohort = workspaceData.cohort ?? fallbackCohort;
@@ -117,18 +122,21 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
     workspaceData.finalExamId || `final-exam-${cohort.id}`;
 
   const { data: finalExamResult } = useAsyncData(
-    () => assessmentApi.getAssessmentResult(resolvedFinalExamId),
-    [resolvedFinalExamId]
+    () =>
+      !workspaceData.isPlaceholder && workspaceData.finalExamId
+        ? assessmentApi.getAssessmentResult(workspaceData.finalExamId)
+        : Promise.resolve(null),
+    [workspaceData.isPlaceholder, workspaceData.finalExamId]
   );
 
   const workspaceSessions =
     workspaceData.sessions && workspaceData.sessions.length > 0
       ? workspaceData.sessions
-      : sessions;
+      : [];
   const workspaceMaterials =
     workspaceData.materials && workspaceData.materials.length > 0
       ? workspaceData.materials
-      : materials;
+      : [];
 
   const [activeTab, setActiveTab] = useState<'SYLLABUS' | 'MATERIALS' | 'CERTIFICATE'>(
     'SYLLABUS'
@@ -145,6 +153,60 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
   const hasCohortInContext = enrolledCohortIds.some(
     (id) => String(id) === String(cohort.id) || String(id) === String(cohortId)
   );
+  const isPendingInitialLoad =
+    isWorkspaceLoading || (!hasWorkspaceSettled && Boolean(workspaceData.isPlaceholder));
+  const isExplicitNotEnrolled =
+    Boolean(workspaceData.accessDenied) ||
+    workspaceErrorCode === 'NOT_ENROLLED_IN_COHORT' ||
+    workspaceErrorStatus === 403;
+  const hasNonEnrollmentError =
+    Boolean(workspaceError) && !isExplicitNotEnrolled && Boolean(workspaceData.isPlaceholder);
+
+  if (isPendingInitialLoad) {
+    return (
+      <div className="max-w-2xl mx-auto px-6 py-20 text-center space-y-3">
+        <div className="w-8 h-8 rounded-full border-2 border-[#10B981] border-t-transparent animate-spin mx-auto" />
+        <p className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+          Đang tải không gian lớp học {cohort.code || ''}...
+        </p>
+      </div>
+    );
+  }
+
+  if (hasNonEnrollmentError) {
+    return (
+      <div className="max-w-2xl mx-auto px-6 py-16 text-center space-y-5">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-xs font-bold">
+            KHÔNG THỂ TẢI DỮ LIỆU LỚP HỌC
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+            Kết nối tới Không gian Lớp học {cohort.code || cohortId} tạm thời gián đoạn
+          </h1>
+          <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+            {workspaceError}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => void refetchWorkspace()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs"
+          >
+            <span>Thử tải lại lớp học</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/app')}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs sm:text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
+          >
+            <span>Quay lại Góc học tập</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const hasBackendAuthorizedWorkspace =
     !workspaceError &&
     !workspaceData.accessDenied &&
@@ -152,9 +214,8 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
   const isEnrolledInCohort =
     role === 'INSTRUCTOR' ||
     role === 'ADMIN' ||
-    isWorkspaceLoading ||
-    (hasCohortInContext && !workspaceError && !workspaceData.accessDenied) ||
-    hasBackendAuthorizedWorkspace;
+    hasBackendAuthorizedWorkspace ||
+    (hasCohortInContext && !isExplicitNotEnrolled);
 
   if (!isEnrolledInCohort) {
     return (
@@ -185,7 +246,9 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
           </button>
           <button
             type="button"
-            onClick={() => navigate(`/courses/${course.slug}`)}
+            onClick={() =>
+              navigate(course.slug ? `/courses/${course.slug}` : '/courses')
+            }
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs sm:text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
           >
             <span>Xem chi tiết khóa học</span>

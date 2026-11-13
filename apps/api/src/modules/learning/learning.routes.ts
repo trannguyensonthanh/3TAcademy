@@ -606,9 +606,10 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
     }
 
     const studentAccountId = req.user!.id;
+    const userRole = String(req.user!.role || '').trim().toUpperCase();
     let studentEnrollment: typeof enrollments.$inferSelect | undefined;
 
-    if (req.user!.role === 'STUDENT') {
+    if (userRole === 'STUDENT') {
       await ensureEnrollmentsForPaidOrders(studentAccountId);
       const [enr] = await db
         .select()
@@ -894,7 +895,8 @@ learningRouter.get(
       }
 
       const studentAccountId = req.user!.id;
-      if (req.user!.role === 'STUDENT') {
+      const userRole = String(req.user!.role || '').trim().toUpperCase();
+      if (userRole === 'STUDENT') {
         await ensureEnrollmentsForPaidOrders(studentAccountId);
         const [enr] = await db
           .select()

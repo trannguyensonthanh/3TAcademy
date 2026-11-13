@@ -156,10 +156,10 @@ const AppRouter: React.FC = () => {
   }
   if (cleanPath.startsWith('/live/')) {
     if (isAuthLoading) return <AuthRestoringScreen />;
-    if (role !== 'STUDENT' && role !== 'INSTRUCTOR') {
+    if (role !== 'STUDENT' && role !== 'INSTRUCTOR' && role !== 'ADMIN') {
       return (
         <RoleAccessGuard
-          allowedRoles={['STUDENT', 'INSTRUCTOR']}
+          allowedRoles={['STUDENT', 'INSTRUCTOR', 'ADMIN']}
           areaLabel="Phòng học trực tuyến"
         />
       );
@@ -168,13 +168,54 @@ const AppRouter: React.FC = () => {
     return <LivestreamClassView sessionId={liveSessionId} />;
   }
 
-  // 5. Toàn bộ các trang Học tập cá nhân của Học viên (/app*, /cohorts/*, /onboarding)
-  // BẮT BUỘC CHỈ HỌC VIÊN (STUDENT) ĐƯỢC PHÉP TRUY CẬP (Instructor, Admin và Guest đều bị chặn)
-  if (
-    cleanPath.startsWith('/app') ||
-    cleanPath.startsWith('/cohorts/') ||
-    cleanPath === '/onboarding'
-  ) {
+  // 4b. Không gian Lớp học & Phòng học Video (/app/cohorts/:cohortId, /app/cohorts/:cohortId/sessions/:sessionId, /cohorts/:cohortId)
+  // Đồng bộ phân quyền với Backend & View guards: Học viên đã ghi danh, Giảng viên và Quản trị viên đều được truy cập
+  if (cleanPath.startsWith('/app/cohorts/') && cleanPath.includes('/sessions/')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
+    if (role !== 'STUDENT' && role !== 'INSTRUCTOR' && role !== 'ADMIN') {
+      return (
+        <RoleAccessGuard
+          allowedRoles={['STUDENT', 'INSTRUCTOR', 'ADMIN']}
+          areaLabel="Phòng học Video & Trợ giảng AI"
+        />
+      );
+    }
+    const parts = cleanPath.replace('/app/cohorts/', '').split('/sessions/');
+    const cohortId = decodeURIComponent(parts[0] || '');
+    const sessionId = decodeURIComponent(parts[1] || '');
+    return <SessionVideoRoomView key={`${cohortId}-${sessionId}`} cohortId={cohortId} sessionId={sessionId} />;
+  }
+
+  if (cleanPath.startsWith('/app/cohorts/')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
+    if (role !== 'STUDENT' && role !== 'INSTRUCTOR' && role !== 'ADMIN') {
+      return (
+        <RoleAccessGuard
+          allowedRoles={['STUDENT', 'INSTRUCTOR', 'ADMIN']}
+          areaLabel="Không gian Lớp học"
+        />
+      );
+    }
+    const cohortId = decodeURIComponent(cleanPath.replace('/app/cohorts/', ''));
+    return <CohortWorkspaceView key={cohortId} cohortId={cohortId} />;
+  }
+
+  if (cleanPath.startsWith('/cohorts/')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
+    if (role !== 'STUDENT' && role !== 'INSTRUCTOR' && role !== 'ADMIN') {
+      return (
+        <RoleAccessGuard
+          allowedRoles={['STUDENT', 'INSTRUCTOR', 'ADMIN']}
+          areaLabel="Không gian Lớp học"
+        />
+      );
+    }
+    const cohortId = decodeURIComponent(cleanPath.replace('/cohorts/', ''));
+    return <CohortWorkspaceView key={cohortId} cohortId={cohortId} />;
+  }
+
+  // 5. Các trang Học tập cá nhân của Học viên (/app*, /onboarding)
+  if (cleanPath.startsWith('/app') || cleanPath === '/onboarding') {
     if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'STUDENT') {
       return (
@@ -187,14 +228,6 @@ const AppRouter: React.FC = () => {
 
     if (cleanPath === '/onboarding') {
       return <OnboardingWizardView />;
-    }
-
-    // Video Classroom & Second-by-Second AI Tutor (/app/cohorts/:cohortId/sessions/:sessionId)
-    if (cleanPath.startsWith('/app/cohorts/') && cleanPath.includes('/sessions/')) {
-      const parts = cleanPath.replace('/app/cohorts/', '').split('/sessions/');
-      const cohortId = parts[0] || 'cohort-ai-k01';
-      const sessionId = parts[1] || 'sess-k01-04';
-      return <SessionVideoRoomView cohortId={cohortId} sessionId={sessionId} />;
     }
 
     // Assessment Result & Exact Video Review Guide (/app/assessments/:assessmentId/result or /results)
@@ -218,16 +251,6 @@ const AppRouter: React.FC = () => {
     if (cleanPath.startsWith('/app/exams/')) {
       const examId = cleanPath.replace('/app/exams/', '') || 'exam-final-k01';
       return <ProctoredExamRoomView assessmentId={examId} />;
-    }
-
-    // Cohort Workspace (/app/cohorts/:cohortId or /cohorts/:cohortId)
-    if (cleanPath.startsWith('/app/cohorts/')) {
-      const cohortId = cleanPath.replace('/app/cohorts/', '');
-      return <CohortWorkspaceView cohortId={cohortId} />;
-    }
-    if (cleanPath.startsWith('/cohorts/')) {
-      const cohortId = cleanPath.replace('/cohorts/', '');
-      return <CohortWorkspaceView cohortId={cohortId} />;
     }
 
     return <StudentDashboardView />;

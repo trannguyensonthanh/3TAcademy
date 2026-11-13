@@ -55,12 +55,15 @@ export async function resolveCohort(idOrCode: string | string[] | number | undef
     .limit(1);
   if (byCode) return byCode;
 
-  const [byPartial] = await db
-    .select()
-    .from(cohorts)
-    .where(ilike(cohorts.code, `%${raw}%`))
-    .limit(1);
-  return byPartial;
+  if (raw.length >= 3) {
+    const [byPartial] = await db
+      .select()
+      .from(cohorts)
+      .where(ilike(cohorts.code, `%${raw}%`))
+      .limit(1);
+    return byPartial;
+  }
+  return undefined;
 }
 
 /**
@@ -154,7 +157,7 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
         .from(assessments)
         .where(and(eq(assessments.cohortId, cohort.id), eq(assessments.purpose, 'FINAL_EXAM')))
         .limit(1);
-      if (finalExam) return finalExam;
+      return finalExam;
     }
     const [anyFinalExam] = await db
       .select()

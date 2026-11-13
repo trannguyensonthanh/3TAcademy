@@ -62,6 +62,7 @@ interface AcademyContextValue {
   navigate: (path: string) => void;
   role: AppRole;
   isAuthLoading: boolean;
+  isEnrollmentsHydrated: boolean;
   setRole: (role: AppRole) => void;
   currentUser: AuthUserProfile | null;
   setCurrentUser: React.Dispatch<React.SetStateAction<AuthUserProfile | null>>;
@@ -188,6 +189,15 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       (p.startsWith('/live/') && p !== '/live/guest');
     return hasStoredAuthSession() || isProtected;
   });
+  const [isEnrollmentsHydrated, setIsEnrollmentsHydrated] = useState<boolean>(false);
+
+  const normalizeAppRole = (rawRole?: string | null): AppRole => {
+    const upper = String(rawRole || '').trim().toUpperCase();
+    if (upper === 'STUDENT' || upper === 'INSTRUCTOR' || upper === 'ADMIN') {
+      return upper;
+    }
+    return 'GUEST';
+  };
 
   const [theme, setThemeState] = useState<'light' | 'dark'>('light');
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -253,15 +263,17 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       .getMe()
       .then((meRes) => {
         if (!isMounted) return;
-        if (meRes && meRes.role) {
-          setCurrentUser(meRes);
-          setRoleState(meRes.role);
+        const normalizedRole = normalizeAppRole(meRes?.role);
+        if (meRes && normalizedRole !== 'GUEST') {
+          setCurrentUser({ ...meRes, role: normalizedRole });
+          setRoleState(normalizedRole);
           if (typeof meRes.interviewCredits === 'number') {
             setInterviewCredits(meRes.interviewCredits);
           }
         } else {
           setCurrentUser(null);
           setEnrolledCohortIds([]);
+          setIsEnrollmentsHydrated(false);
           setRoleState('GUEST');
         }
       })
@@ -348,31 +360,44 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const refreshEnrollments = useCallback(async () => {
     try {
       const [enrollmentsRes, ordersRes, cohortsRes] = await Promise.all([
-        learningApi.getMyEnrollments(),
-        orderApi.getMyOrderHistory(),
+        learningApi.getMyEnrollments().catch(() => null),
+        orderApi.getMyOrderHistory().catch(() => null),
         catalogApi.getCohorts().catch(() => [] as Cohort[]),
       ]);
-      if (Array.isArray(enrollmentsRes.enrolledCohortIds)) {
-        setEnrolledCohortIds(enrollmentsRes.enrolledCohortIds.map((id) => String(id)));
+      if (enrollmentsRes) {
+        const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
+          ? enrollmentsRes.cohorts
+          : [];
+        const rawIds = Array.isArray(enrollmentsRes.enrolledCohortIds)
+          ? enrollmentsRes.enrolledCohortIds.map((id) => String(id))
+          : enrolledCohortsList.map((c) => String(c.id));
+        const normalizedIds = Array.from(
+          new Set([
+            ...rawIds,
+            ...enrolledCohortsList.map((c) => String(c.id)),
+          ])
+        ).filter(Boolean);
+        setEnrolledCohortIds(normalizedIds);
+        setIsEnrollmentsHydrated(true);
+
+        if (cohortsRes.length > 0 || enrolledCohortsList.length > 0) {
+          setCohorts((prev) => {
+            const map = new Map<string, Cohort>();
+            for (const c of prev) map.set(String(c.id), c);
+            for (const c of cohortsRes) {
+              map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            }
+            for (const c of enrolledCohortsList) {
+              map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            }
+            return Array.from(map.values());
+          });
+        }
       }
       if (Array.isArray(ordersRes) && ordersRes.length > 0) {
         setReceipts(ordersRes);
-      } else if (Array.isArray(enrollmentsRes.receipts)) {
+      } else if (enrollmentsRes && Array.isArray(enrollmentsRes.receipts)) {
         setReceipts(enrollmentsRes.receipts);
-      }
-      const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
-        ? enrollmentsRes.cohorts
-        : [];
-      if (cohortsRes.length > 0 || enrolledCohortsList.length > 0) {
-        setCohorts((prev) => {
-          const map = new Map<string, Cohort>();
-          for (const c of prev) map.set(String(c.id), c);
-          for (const c of cohortsRes) map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
-          for (const c of enrolledCohortsList) {
-            map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
-          }
-          return Array.from(map.values());
-        });
       }
     } catch {
       // Ignore refresh error
@@ -387,28 +412,40 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       try {
         const [enrollmentsRes, ordersRes, meRes, dashboardRes, cohortsRes, coursesRes] =
           await Promise.all([
-            learningApi.getMyEnrollments(),
-            orderApi.getMyOrderHistory(),
-            authApi.getMe(),
-            learningApi.getStudentDashboard(),
+            learningApi.getMyEnrollments().catch(() => null),
+            orderApi.getMyOrderHistory().catch(() => null),
+            authApi.getMe().catch(() => null),
+            learningApi.getStudentDashboard().catch(() => null),
             catalogApi.getCohorts().catch(() => [] as Cohort[]),
             catalogApi.getCourses().catch(() => [] as Course[]),
           ]);
         if (!isMounted) return;
 
-        const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
-          ? enrollmentsRes.cohorts
-          : [];
-        const derivedIds = Array.isArray(enrollmentsRes.enrolledCohortIds)
-          ? enrollmentsRes.enrolledCohortIds.map((id) => String(id))
-          : enrolledCohortsList.map((c) => String(c.id));
-        setEnrolledCohortIds(derivedIds);
+        const enrolledCohortsList =
+          enrollmentsRes && Array.isArray(enrollmentsRes.cohorts)
+            ? enrollmentsRes.cohorts
+            : [];
+
+        if (enrollmentsRes) {
+          const derivedIds = Array.from(
+            new Set([
+              ...(Array.isArray(enrollmentsRes.enrolledCohortIds)
+                ? enrollmentsRes.enrolledCohortIds.map((id) => String(id))
+                : []),
+              ...enrolledCohortsList.map((c) => String(c.id)),
+            ])
+          ).filter(Boolean);
+          setEnrolledCohortIds(derivedIds);
+          setIsEnrollmentsHydrated(true);
+        }
 
         if (cohortsRes.length > 0 || enrolledCohortsList.length > 0) {
           setCohorts((prev) => {
             const map = new Map<string, Cohort>();
             for (const c of prev) map.set(String(c.id), c);
-            for (const c of cohortsRes) map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            for (const c of cohortsRes) {
+              map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            }
             for (const c of enrolledCohortsList) {
               map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
             }
@@ -421,14 +458,18 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
         if (Array.isArray(ordersRes) && ordersRes.length > 0) {
           setReceipts(ordersRes);
-        } else if (Array.isArray(enrollmentsRes.receipts)) {
+        } else if (enrollmentsRes && Array.isArray(enrollmentsRes.receipts)) {
           setReceipts(enrollmentsRes.receipts);
         }
-        if (dashboardRes.upcomingTasks) {
+        if (dashboardRes?.upcomingTasks) {
           setUpcomingTasks(dashboardRes.upcomingTasks);
         }
         if (meRes) {
-          setCurrentUser(meRes);
+          const normalizedRole = normalizeAppRole(meRes.role);
+          setCurrentUser({
+            ...meRes,
+            role: normalizedRole === 'GUEST' ? 'STUDENT' : normalizedRole,
+          });
           if (typeof meRes.interviewCredits === 'number') {
             setInterviewCredits(meRes.interviewCredits);
           }
@@ -504,9 +545,11 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const setRole = useCallback((newRole: AppRole) => {
-    if (newRole === 'GUEST') {
+    const normalizedNewRole = normalizeAppRole(newRole);
+    if (normalizedNewRole === 'GUEST') {
       setRoleState('GUEST');
       setIsAuthLoading(false);
+      setIsEnrollmentsHydrated(false);
       clearAuthTokens();
       setCurrentUser(null);
       setEnrolledCohortIds([]);
@@ -526,7 +569,10 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return;
     }
 
-    setRoleState(newRole);
+    if (normalizedNewRole !== 'STUDENT') {
+      setIsEnrollmentsHydrated(false);
+    }
+    setRoleState(normalizedNewRole);
   }, []);
 
   const setTheme = useCallback((newTheme: 'light' | 'dark') => {
@@ -862,6 +908,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         navigate,
         role,
         isAuthLoading,
+        isEnrollmentsHydrated,
         setRole,
         currentUser,
         setCurrentUser,

@@ -19,6 +19,7 @@ import { formatTimestamp } from '../utils/academyLogic';
 import { AiTutorCompanionSticker } from '../components/BotanicalStickers';
 import { studentLearningApi } from '../services/learning.api';
 import { useAsyncQuery } from '../hooks/useAsyncData';
+import type { ClassSession } from '../types/domain';
 
 interface VideoChapter {
   id: string;
@@ -75,8 +76,9 @@ export const SessionVideoRoomView: React.FC<{
   const lastSyncedSecRef = useRef<number>(0);
 
   const cohort =
-    cohorts.find((c) => c.id === cohortId || c.code.toLowerCase() === cohortId.toLowerCase()) ??
-    cohorts[0] ?? {
+    cohorts.find(
+      (c) => String(c.id) === String(cohortId) || c.code.toLowerCase() === cohortId.toLowerCase()
+    ) ?? {
       id: cohortId,
       courseId: '',
       code: cohortId,
@@ -94,20 +96,24 @@ export const SessionVideoRoomView: React.FC<{
       staff: [],
     };
 
-  const fallbackSession =
-    sessions.find((s) => s.id === sessionId) ??
-    sessions[0] ?? {
+  const fallbackSession: ClassSession =
+    sessions.find((s) => String(s.id) === String(sessionId)) ?? {
       id: sessionId,
       cohortId: cohort.id,
       sessionOrder: 1,
       title: 'Đang tải buổi học...',
-      status: 'REPLAY_READY' as const,
+      activityTags: [],
+      status: 'REPLAY_READY',
       scheduledStart: '',
       scheduledEnd: '',
+      videoR2Key: '',
+      videoProvider: 'R2_HLS_AES128',
       durationSeconds: 600,
       lastPositionSec: 0,
       isCompleted: false,
+      quizStatus: 'NOT_STARTED',
       quizScore: 0,
+      quizQuestions: [],
       hostInstructorName: '',
       attachmentsCount: 0,
       aiSummaryMd: '',
@@ -117,14 +123,18 @@ export const SessionVideoRoomView: React.FC<{
   const {
     data: sessionDetail,
     isLoading: isSessionLoading,
+    hasSettled: hasSessionSettled,
     error: sessionError,
+    errorStatus: sessionErrorStatus,
+    errorCode: sessionErrorCode,
+    refetch: refetchSession,
   } = useAsyncQuery(
-    () => studentLearningApi.getSessionDetail(cohort.id, sessionId),
+    () => studentLearningApi.getSessionDetail(cohortId, sessionId),
     {
       session: fallbackSession,
       videoUrl: SAMPLE_VIDEO_URL,
       transcript: TRANSCRIPT_LINES,
-      attachments: materials,
+      attachments: [],
       quizSummary: {
         assessmentId: `quiz-${fallbackSession.id}`,
         questionCount: 10,
@@ -132,7 +142,7 @@ export const SessionVideoRoomView: React.FC<{
         isCompleted: fallbackSession.isCompleted,
         bestScorePercent: fallbackSession.quizScore,
       },
-      discussions,
+      discussions: [],
       isPlaceholder: true,
     } as {
       session: typeof fallbackSession;
@@ -157,7 +167,7 @@ export const SessionVideoRoomView: React.FC<{
       };
       discussions: typeof discussions;
     },
-    [cohort.id, sessionId]
+    [cohortId, sessionId, role, currentUser?.id]
   );
 
   const session = sessionDetail.session ?? fallbackSession;
@@ -351,6 +361,60 @@ export const SessionVideoRoomView: React.FC<{
   const hasCohortInContext = enrolledCohortIds.some(
     (id) => String(id) === String(cohort.id) || String(id) === String(cohortId)
   );
+  const isPendingInitialLoad =
+    isSessionLoading || (!hasSessionSettled && Boolean(sessionDetail.isPlaceholder));
+  const isExplicitNotEnrolled =
+    Boolean(sessionDetail.accessDenied) ||
+    sessionErrorCode === 'NOT_ENROLLED_IN_COHORT' ||
+    sessionErrorStatus === 403;
+  const hasNonEnrollmentError =
+    Boolean(sessionError) && !isExplicitNotEnrolled && Boolean(sessionDetail.isPlaceholder);
+
+  if (isPendingInitialLoad) {
+    return (
+      <div className="max-w-2xl mx-auto px-6 py-20 text-center space-y-3">
+        <div className="w-8 h-8 rounded-full border-2 border-[#10B981] border-t-transparent animate-spin mx-auto" />
+        <p className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+          Đang tải phòng học video &amp; trợ giảng AI...
+        </p>
+      </div>
+    );
+  }
+
+  if (hasNonEnrollmentError) {
+    return (
+      <div className="max-w-2xl mx-auto px-6 py-16 text-center space-y-5">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-xs font-bold">
+            KHÔNG THỂ TẢI PHÒNG HỌC VIDEO
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+            Tạm thời không tải được bài giảng đợt {cohort.code || cohortId}
+          </h1>
+          <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
+            {sessionError}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => void refetchSession()}
+            className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-semibold cursor-pointer"
+          >
+            Thử tải lại bài giảng
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/app/cohorts/${cohort.id || cohortId}`)}
+            className="px-4 py-2.5 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs sm:text-sm font-semibold cursor-pointer"
+          >
+            Quay lại Không gian lớp học
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const hasBackendAuthorizedSession =
     !sessionError &&
     !sessionDetail.accessDenied &&
@@ -358,9 +422,8 @@ export const SessionVideoRoomView: React.FC<{
   const isEnrolledInCohort =
     role === 'INSTRUCTOR' ||
     role === 'ADMIN' ||
-    isSessionLoading ||
-    (hasCohortInContext && !sessionError && !sessionDetail.accessDenied) ||
-    hasBackendAuthorizedSession;
+    hasBackendAuthorizedSession ||
+    (hasCohortInContext && !isExplicitNotEnrolled);
 
   if (!isEnrolledInCohort) {
     return (

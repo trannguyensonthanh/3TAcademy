@@ -71,6 +71,18 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
   const [selectedCohortId, setSelectedCohortId] = useState<string>(
     courseCohorts[0]?.id ?? cohorts[0]?.id ?? ''
   );
+
+  React.useEffect(() => {
+    if (courseCohorts.length === 0) return;
+    if (!courseCohorts.some((c) => String(c.id) === String(selectedCohortId))) {
+      const preferred =
+        courseCohorts.find((c) => c.status === 'OPENING') ?? courseCohorts[0];
+      if (preferred) {
+        setSelectedCohortId(preferred.id);
+      }
+    }
+  }, [courseCohorts, selectedCohortId]);
+
   const [expandedOrders, setExpandedOrders] = useState<number[]>([1, 4, 5]);
 
   const selectedCohort =

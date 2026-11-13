@@ -3,7 +3,10 @@ import { useState, useEffect, useCallback } from 'react';
 export interface AsyncQueryState<T> {
   data: T;
   isLoading: boolean;
+  hasSettled: boolean;
   error: string | null;
+  errorStatus: number | null;
+  errorCode: string | null;
   refetch: () => Promise<T>;
   setData: React.Dispatch<React.SetStateAction<T>>;
 }
@@ -19,33 +22,54 @@ export function useAsyncQuery<T>(
 ): AsyncQueryState<T> {
   const [data, setData] = useState<T>(initialData);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [hasSettled, setHasSettled] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const execute = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setErrorStatus(null);
+    setErrorCode(null);
     try {
       const result = await queryFn();
       setData(result);
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Không thể tải dữ liệu từ máy chủ';
+      const status =
+        typeof (err as { status?: unknown })?.status === 'number'
+          ? (err as { status: number }).status
+          : null;
+      const code =
+        typeof (err as { code?: unknown })?.code === 'string'
+          ? (err as { code: string }).code
+          : null;
       setError(msg);
+      setErrorStatus(status);
+      setErrorCode(code);
       return initialData;
     } finally {
       setIsLoading(false);
+      setHasSettled(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   useEffect(() => {
+    setIsLoading(true);
+    setHasSettled(false);
     void execute();
   }, [execute]);
 
   return {
     data,
     isLoading,
+    hasSettled,
     error,
+    errorStatus,
+    errorCode,
     refetch: execute,
     setData,
   };

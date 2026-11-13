@@ -751,7 +751,15 @@ export const LivestreamClassView: React.FC<{
               <button
                 type="button"
                 onClick={() =>
-                  navigate(role === 'INSTRUCTOR' ? '/teach' : '/app/cohorts/cohort-ai-k01')
+                  navigate(
+                    role === 'INSTRUCTOR'
+                      ? '/teach'
+                      : role === 'ADMIN'
+                      ? '/admin'
+                      : activeSession.cohortId
+                      ? `/app/cohorts/${activeSession.cohortId}`
+                      : '/app'
+                  )
                 }
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold cursor-pointer"
               >
