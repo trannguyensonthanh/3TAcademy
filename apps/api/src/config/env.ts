@@ -1,7 +1,23 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const apiRootEnvPath = path.resolve(__dirname, '../../.env');
+const workspaceRootEnvPath = path.resolve(__dirname, '../../../../.env');
+
+// Load apps/api/.env first (more specific), then fallback to monorepo root .env
+for (const envPath of [apiRootEnvPath, workspaceRootEnvPath]) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
+
+const emptyToUndefined = (val: unknown) =>
+  typeof val === 'string' && val.trim() === '' ? undefined : val;
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -18,18 +34,24 @@ const envSchema = z.object({
   LIVEKIT_API_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
-  SEPAY_API_KEY: z.string().optional(),
-  SEPAY_WEBHOOK_SECRET: z.string().optional(),
-  PUBLIC_API_URL: z
-    .string()
-    .trim()
-    .default('https://guided-wallaby-measured.ngrok-free.app')
-    .transform((val) => val.replace(/\/+$/, '')),
-  SEPAY_WEBHOOK_URL: z.string().trim().optional(),
-  SEPAY_WEBHOOK_BACKUP_URL: z.string().trim().optional(),
-  SEPAY_BANK_NAME: z.string().default('MBBank'),
-  SEPAY_ACCOUNT_NUMBER: z.string().default('0389998888'),
-  SEPAY_ACCOUNT_HOLDER: z.string().default('HOC VIEN CONG NGHE 3T ACADEMY'),
+  SEPAY_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  SEPAY_WEBHOOK_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
+  PUBLIC_API_URL: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .default('https://guided-wallaby-measured.ngrok-free.app')
+      .transform((val) => val.replace(/\/+$/, ''))
+  ),
+  SEPAY_WEBHOOK_URL: z.preprocess(emptyToUndefined, z.string().trim().optional()),
+  SEPAY_WEBHOOK_BACKUP_URL: z.preprocess(emptyToUndefined, z.string().trim().optional()),
+  SEPAY_BANK_NAME: z.preprocess(emptyToUndefined, z.string().trim().default('MBBank')),
+  SEPAY_ACCOUNT_NUMBER: z.preprocess(emptyToUndefined, z.string().trim().default('0389998888')),
+  SEPAY_ACCOUNT_HOLDER: z.preprocess(
+    emptyToUndefined,
+    z.string().trim().default('HOC VIEN CONG NGHE 3T ACADEMY')
+  ),
   CPAY_API_URL: z.string().optional(),
   CPAY_MERCHANT_ID: z.string().optional(),
   CPAY_SECRET_KEY: z.string().optional(),

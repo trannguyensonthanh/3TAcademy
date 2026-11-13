@@ -54,6 +54,14 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal_shared_secret_2026}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-jwt_access_super_secret_key_2026_dev}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-jwt_refresh_super_secret_key_2026_dev}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://guided-wallaby-measured.ngrok-free.app}
+      SEPAY_BANK_NAME: ${SEPAY_BANK_NAME:-MBBank}
+      SEPAY_ACCOUNT_NUMBER: ${SEPAY_ACCOUNT_NUMBER:-0389998888}
+      SEPAY_ACCOUNT_HOLDER: ${SEPAY_ACCOUNT_HOLDER:-HOC VIEN CONG NGHE 3T ACADEMY}
+      SEPAY_API_KEY: ${SEPAY_API_KEY:-}
+      SEPAY_WEBHOOK_SECRET: ${SEPAY_WEBHOOK_SECRET:-}
+      SEPAY_WEBHOOK_URL: ${SEPAY_WEBHOOK_URL:-}
+      SEPAY_WEBHOOK_BACKUP_URL: ${SEPAY_WEBHOOK_BACKUP_URL:-}
     volumes:
       - ./apps/api:/app
       - /app/node_modules
