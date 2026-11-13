@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
@@ -29,8 +29,53 @@ const googleLoginSchema = z.object({
 });
 
 const refreshSchema = z.object({
-  refreshToken: z.string().min(1, 'Thiếu Refresh Token'),
+  refreshToken: z.string().min(1).optional(),
 });
+
+function isHttpsRequest(req: Request): boolean {
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  if (typeof forwardedProto === 'string' && forwardedProto.split(',')[0]?.trim() === 'https') {
+    return true;
+  }
+  return Boolean(req.secure);
+}
+
+function setAuthCookies(
+  req: Request,
+  res: Response,
+  accessToken: string,
+  refreshToken?: string
+) {
+  const isHttps = isHttpsRequest(req);
+  const baseOptions = {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: (isHttps ? 'none' : 'lax') as 'none' | 'lax',
+    path: '/',
+  };
+  res.cookie('access_token', accessToken, {
+    ...baseOptions,
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+  if (refreshToken) {
+    res.cookie('refresh_token', refreshToken, {
+      ...baseOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+  }
+}
+
+function clearAuthCookies(req: Request, res: Response) {
+  const isHttps = isHttpsRequest(req);
+  const baseOptions = {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: (isHttps ? 'none' : 'lax') as 'none' | 'lax',
+    path: '/',
+  };
+  res.clearCookie('access_token', baseOptions);
+  res.clearCookie('refresh_token', baseOptions);
+}
 
 function generateTokens(user: { id: number; email: string; role: string }) {
   const accessToken = jwt.sign(
@@ -146,6 +191,7 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
       .where(eq(accounts.id, account.id));
 
     const tokens = generateTokens(account);
+    setAuthCookies(req, res, tokens.accessToken, tokens.refreshToken);
 
     res.json({
       ...tokens,
@@ -235,6 +281,7 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
     });
 
     const tokens = generateTokens(result.account);
+    setAuthCookies(req, res, tokens.accessToken, tokens.refreshToken);
 
     res.status(201).json({
       ...tokens,
@@ -382,6 +429,7 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
       .limit(1);
 
     const tokens = generateTokens(account);
+    setAuthCookies(req, res, tokens.accessToken, tokens.refreshToken);
 
     res.json({
       ...tokens,
@@ -395,20 +443,60 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
 
 // 1.4 POST /auth/refresh
 authRouter.post('/refresh', validate(refreshSchema), async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken =
+    (typeof req.body?.refreshToken === 'string' && req.body.refreshToken.trim()) ||
+    (typeof req.cookies?.refresh_token === 'string' && req.cookies.refresh_token.trim()) ||
+    '';
+
+  if (!refreshToken) {
+    res.status(401).json({
+      success: false,
+      status: 401,
+      code: 'MISSING_REFRESH_TOKEN',
+      message: 'Thiếu Refresh Token',
+      error: {
+        code: 'MISSING_REFRESH_TOKEN',
+        message: 'Thiếu Refresh Token',
+      },
+      requestId: req.correlationId,
+    });
+    return;
+  }
+
   try {
     const payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as {
       id: number;
       email: string;
       role: string;
     };
-    const accessToken = jwt.sign(
-      { id: payload.id, email: payload.email, role: payload.role },
-      env.JWT_ACCESS_SECRET,
-      { expiresIn: env.JWT_ACCESS_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
-    );
-    res.json({ accessToken });
+
+    const [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, payload.id))
+      .limit(1);
+
+    if (!account || account.status === 'LOCKED') {
+      clearAuthCookies(req, res);
+      res.status(401).json({
+        success: false,
+        status: 401,
+        code: 'ACCOUNT_UNAVAILABLE',
+        message: 'Tài khoản không tồn tại hoặc đã bị khóa',
+        error: {
+          code: 'ACCOUNT_UNAVAILABLE',
+          message: 'Tài khoản không tồn tại hoặc đã bị khóa',
+        },
+        requestId: req.correlationId,
+      });
+      return;
+    }
+
+    const tokens = generateTokens(account);
+    setAuthCookies(req, res, tokens.accessToken, tokens.refreshToken);
+    res.json(tokens);
   } catch {
+    clearAuthCookies(req, res);
     res.status(401).json({
       success: false,
       status: 401,
@@ -424,7 +512,8 @@ authRouter.post('/refresh', validate(refreshSchema), async (req, res) => {
 });
 
 // 1.5 POST /auth/logout
-authRouter.post('/logout', (_req, res) => {
+authRouter.post('/logout', (req, res) => {
+  clearAuthCookies(req, res);
   res.json({
     success: true,
     loggedOutAt: new Date().toISOString(),

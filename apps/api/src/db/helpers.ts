@@ -188,7 +188,7 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
 }
 
 export function formatScheduleLabels(slots: Array<{ dayOfWeek: number; startTime: string; endTime: string }>) {
-  if (!slots || slots.length === 0) {
+  if (!Array.isArray(slots) || slots.length === 0) {
     return {
       scheduleLabel: '',
       timeRangeLabel: '',

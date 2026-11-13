@@ -14,6 +14,8 @@ import {
   adminApi,
   setAuthAccessToken,
   getAuthAccessToken,
+  setAuthRefreshToken,
+  clearAuthTokens,
 } from './index';
 
 const servicesDir = path.dirname(fileURLToPath(import.meta.url));
@@ -239,6 +241,26 @@ test('Frontend-Backend HTTP contract synchronization across all API modules', as
     assert.equal(capturedRequests.at(-1)?.url, '/api/v1/auth/me');
     assert.equal(capturedRequests.at(-1)?.method, 'GET');
 
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          user: {
+            id: '4',
+            email: 'an.student@3t.edu.vn',
+            fullName: 'Nguyễn Văn An',
+            role: 'STUDENT',
+            interviewCredits: 2,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    const meUser = await authApi.getMe();
+    globalThis.fetch = prevFetch;
+    assert.equal(meUser.id, '4');
+    assert.equal(meUser.role, 'STUDENT');
+    assert.equal(meUser.fullName, 'Nguyễn Văn An');
+
     await catalogApi.getCourses({ category: 'AI & Dữ liệu', query: 'RAG' });
     assert.ok(capturedRequests.at(-1)?.url.startsWith('/api/v1/courses?'));
 
@@ -294,8 +316,69 @@ test('Frontend-Backend HTTP contract synchronization across all API modules', as
       '/api/v1/admin/sepay-transactions'
     );
 
-    setAuthAccessToken(null);
+    clearAuthTokens();
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('apiClient automatically refreshes expired access token via /auth/refresh and retries 401 requests', async () => {
+  const originalFetch = globalThis.fetch;
+  let meAttempts = 0;
+  let refreshCalled = false;
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const authHeader = new Headers(init?.headers || {}).get('Authorization');
+
+    if (url === '/api/v1/auth/me') {
+      meAttempts += 1;
+      if (authHeader === 'Bearer expired-access-token') {
+        return new Response(
+          JSON.stringify({ success: false, status: 401, code: 'TOKEN_EXPIRED' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (authHeader === 'Bearer fresh-access-token') {
+        return new Response(
+          JSON.stringify({
+            user: {
+              id: '4',
+              email: 'an.student@3t.edu.vn',
+              fullName: 'Nguyễn Văn An',
+              role: 'STUDENT',
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    if (url === '/api/v1/auth/refresh') {
+      refreshCalled = true;
+      return new Response(
+        JSON.stringify({
+          accessToken: 'fresh-access-token',
+          refreshToken: 'fresh-refresh-token',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(JSON.stringify({}), { status: 404 });
+  };
+
+  try {
+    setAuthAccessToken('expired-access-token');
+    setAuthRefreshToken('valid-refresh-token');
+
+    const user = await authApi.getMe();
+    assert.equal(refreshCalled, true);
+    assert.equal(meAttempts, 2);
+    assert.equal(user.role, 'STUDENT');
+    assert.equal(getAuthAccessToken(), 'fresh-access-token');
+  } finally {
+    clearAuthTokens();
     globalThis.fetch = originalFetch;
   }
 });

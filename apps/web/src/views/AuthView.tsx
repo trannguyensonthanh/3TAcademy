@@ -4,7 +4,7 @@ import { useAcademy } from '../context/AcademyContext';
 import { evaluatePasswordStrength } from '../utils/academyLogic';
 import { CompetencyVerifiedShield } from '../components/BotanicalStickers';
 import { authApi } from '../services/auth.api';
-import { setAuthAccessToken } from '../services/apiClient';
+import { setAuthAccessToken, setAuthRefreshToken } from '../services/apiClient';
 
 export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
   initialMode,
@@ -36,6 +36,9 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
         if (res.accessToken) {
           setAuthAccessToken(res.accessToken);
         }
+        if (res.refreshToken) {
+          setAuthRefreshToken(res.refreshToken);
+        }
         if (res.user) {
           setCurrentUser(res.user);
         }
@@ -45,6 +48,9 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
         const res = await authApi.login(email, password);
         if (res.accessToken) {
           setAuthAccessToken(res.accessToken);
+        }
+        if (res.refreshToken) {
+          setAuthRefreshToken(res.refreshToken);
         }
         if (res.user) {
           setCurrentUser(res.user);
@@ -71,6 +77,9 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
       const res = await authApi.googleLogin(idToken);
       if (res.accessToken) {
         setAuthAccessToken(res.accessToken);
+      }
+      if (res.refreshToken) {
+        setAuthRefreshToken(res.refreshToken);
       }
       if (res.user) {
         setCurrentUser(res.user);

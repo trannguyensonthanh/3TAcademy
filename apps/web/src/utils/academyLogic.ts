@@ -26,7 +26,7 @@ function getVietnameseDaySortOrder(dayOfWeek: CohortScheduleSlot['dayOfWeek']): 
  *   -> "Thứ 2 (19:30 - 21:30) · Thứ 6 (16:30 - 18:30)"
  */
 export function formatScheduleSlots(slots: CohortScheduleSlot[]): string {
-  if (!slots || slots.length === 0) {
+  if (!Array.isArray(slots) || slots.length === 0) {
     return 'Chưa xếp lịch học';
   }
 

@@ -213,10 +213,51 @@ function mapClassSessionDto(
   };
 }
 
+async function ensureEnrollmentsForPaidOrders(accountId: number) {
+  const [paidOrders, existingEnrollments] = await Promise.all([
+    db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.accountId, accountId), eq(orders.status, 'PAID')))
+      .orderBy(desc(orders.paidAt), desc(orders.createdAt)),
+    db
+      .select({
+        cohortId: enrollments.cohortId,
+        status: enrollments.status,
+      })
+      .from(enrollments)
+      .where(eq(enrollments.accountId, accountId)),
+  ]);
+
+  const existingCohortIds = new Set(existingEnrollments.map((e) => e.cohortId));
+  const missingOrders = paidOrders.filter((ord) => !existingCohortIds.has(ord.cohortId));
+
+  if (missingOrders.length > 0) {
+    const insertedCohortIds = new Set<number>();
+    for (const ord of missingOrders) {
+      if (insertedCohortIds.has(ord.cohortId)) continue;
+      insertedCohortIds.add(ord.cohortId);
+      await db
+        .insert(enrollments)
+        .values({
+          accountId,
+          cohortId: ord.cohortId,
+          orderId: ord.id,
+          status: 'ACTIVE',
+          enrolledAt: ord.paidAt || ord.createdAt || new Date(),
+        })
+        .onConflictDoNothing();
+    }
+  }
+
+  return paidOrders;
+}
+
 // 3.1 GET /me/dashboard
 learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
+    await ensureEnrollmentsForPaidOrders(accountId);
 
     const [myEnrollments, getStaffForInstructor] = await Promise.all([
       db
@@ -406,8 +447,9 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
 learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
+    const paidOrders = await ensureEnrollmentsForPaidOrders(accountId);
 
-    const [rows, getStaffForInstructor, paidOrders] = await Promise.all([
+    const [rows, getStaffForInstructor] = await Promise.all([
       db
         .select({
           enrollmentId: enrollments.id,
@@ -429,11 +471,6 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
           )
         ),
       buildInstructorStaffMap(),
-      db
-        .select()
-        .from(orders)
-        .where(and(eq(orders.accountId, accountId), eq(orders.status, 'PAID')))
-        .orderBy(desc(orders.paidAt)),
     ]);
 
     const enrichedEnrollments = await Promise.all(
@@ -459,7 +496,8 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
         const completedSessionsCount = completedRows.length;
         const progressPercent = Math.round((completedSessionsCount / totalSessionsCount) * 100);
         const staffInfo = getStaffForInstructor(r.cohort.instructorId);
-        const labels = formatScheduleLabels(r.cohort.scheduleSlots || []);
+        const safeSlots = Array.isArray(r.cohort.scheduleSlots) ? r.cohort.scheduleSlots : [];
+        const labels = formatScheduleLabels(safeSlots);
 
         return {
           id: String(r.enrollmentId),
@@ -486,12 +524,14 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
             techStackNotes: r.cohort.techStackNotes,
             tuitionVnd: r.cohort.tuitionVnd,
             enrolledCount: r.cohort.enrolledCount,
-            enrollmentOpenAt: r.cohort.enrollmentOpenAt.toISOString(),
+            enrollmentOpenAt: r.cohort.enrollmentOpenAt
+              ? r.cohort.enrollmentOpenAt.toISOString()
+              : new Date().toISOString(),
             startDate: r.cohort.startDate,
             endDate: r.cohort.endDate,
             scheduleLabel: labels.scheduleLabel,
             timeRangeLabel: labels.timeRangeLabel,
-            scheduleSlots: r.cohort.scheduleSlots || [],
+            scheduleSlots: safeSlots,
             instructorName: staffInfo.instructorName,
             instructorHeadline: staffInfo.instructorHeadline,
             instructorAvatarUrl: staffInfo.instructorAvatarUrl,
@@ -569,6 +609,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
     let studentEnrollment: typeof enrollments.$inferSelect | undefined;
 
     if (req.user!.role === 'STUDENT') {
+      await ensureEnrollmentsForPaidOrders(studentAccountId);
       const [enr] = await db
         .select()
         .from(enrollments)
@@ -662,7 +703,8 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
 
     const progressMap = new Map(progressList.map((p) => [p.sessionId, p]));
     const staffInfo = getStaffForInstructor(cohort.instructorId);
-    const labels = formatScheduleLabels(cohort.scheduleSlots || []);
+    const safeSlots = Array.isArray(cohort.scheduleSlots) ? cohort.scheduleSlots : [];
+    const labels = formatScheduleLabels(safeSlots);
 
     const finalExam = cohortAssessments.find((a) => a.purpose === 'FINAL_EXAM');
     const finalExamAttempt = finalExam
@@ -767,12 +809,14 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
         techStackNotes: cohort.techStackNotes,
         tuitionVnd: cohort.tuitionVnd,
         enrolledCount: cohort.enrolledCount,
-        enrollmentOpenAt: cohort.enrollmentOpenAt.toISOString(),
+        enrollmentOpenAt: cohort.enrollmentOpenAt
+          ? cohort.enrollmentOpenAt.toISOString()
+          : new Date().toISOString(),
         startDate: cohort.startDate,
         endDate: cohort.endDate,
         scheduleLabel: labels.scheduleLabel,
         timeRangeLabel: labels.timeRangeLabel,
-        scheduleSlots: cohort.scheduleSlots || [],
+        scheduleSlots: safeSlots,
         instructorName: staffInfo.instructorName,
         instructorHeadline: staffInfo.instructorHeadline,
         instructorAvatarUrl: staffInfo.instructorAvatarUrl,
@@ -851,6 +895,7 @@ learningRouter.get(
 
       const studentAccountId = req.user!.id;
       if (req.user!.role === 'STUDENT') {
+        await ensureEnrollmentsForPaidOrders(studentAccountId);
         const [enr] = await db
           .select()
           .from(enrollments)

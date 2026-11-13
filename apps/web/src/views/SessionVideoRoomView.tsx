@@ -114,7 +114,11 @@ export const SessionVideoRoomView: React.FC<{
       aiCitations: [],
     };
 
-  const { data: sessionDetail } = useAsyncQuery(
+  const {
+    data: sessionDetail,
+    isLoading: isSessionLoading,
+    error: sessionError,
+  } = useAsyncQuery(
     () => studentLearningApi.getSessionDetail(cohort.id, sessionId),
     {
       session: fallbackSession,
@@ -129,6 +133,29 @@ export const SessionVideoRoomView: React.FC<{
         bestScorePercent: fallbackSession.quizScore,
       },
       discussions,
+      isPlaceholder: true,
+    } as {
+      session: typeof fallbackSession;
+      videoUrl: string;
+      chapters?: { sec: number; timeLabel: string; title: string; slideRange: string }[];
+      aiChatHistory?: {
+        id: string;
+        role: 'AI' | 'USER';
+        content: string;
+        citations?: { label: string; jumpSec: number; slideLabel: string }[];
+      }[];
+      accessDenied?: boolean;
+      isPlaceholder?: boolean;
+      transcript: typeof TRANSCRIPT_LINES;
+      attachments: typeof materials;
+      quizSummary: {
+        assessmentId: string;
+        questionCount: number;
+        passingScoreOutOf10: number;
+        isCompleted: boolean;
+        bestScorePercent?: number | null;
+      };
+      discussions: typeof discussions;
     },
     [cohort.id, sessionId]
   );
@@ -321,10 +348,19 @@ export const SessionVideoRoomView: React.FC<{
     'top-4 left-5',
   ][watermarkPosIndex];
 
+  const hasCohortInContext = enrolledCohortIds.some(
+    (id) => String(id) === String(cohort.id) || String(id) === String(cohortId)
+  );
+  const hasBackendAuthorizedSession =
+    !sessionError &&
+    !sessionDetail.accessDenied &&
+    !sessionDetail.isPlaceholder;
   const isEnrolledInCohort =
     role === 'INSTRUCTOR' ||
     role === 'ADMIN' ||
-    (enrolledCohortIds.includes(cohort.id) && !sessionDetail.accessDenied);
+    isSessionLoading ||
+    (hasCohortInContext && !sessionError && !sessionDetail.accessDenied) ||
+    hasBackendAuthorizedSession;
 
   if (!isEnrolledInCohort) {
     return (

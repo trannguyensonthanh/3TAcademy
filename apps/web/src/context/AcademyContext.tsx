@@ -19,7 +19,10 @@ import {
   updateSessionWatchPosition,
 } from '../utils/academyLogic';
 import { authApi, AuthUserProfile } from '../services/auth.api';
-import { getAuthAccessToken, setAuthAccessToken } from '../services/apiClient';
+import {
+  clearAuthTokens,
+  hasStoredAuthSession,
+} from '../services/apiClient';
 import { catalogApi } from '../services/catalog.api';
 import { learningApi } from '../services/learning.api';
 import { orderApi } from '../services/order.api';
@@ -58,6 +61,7 @@ interface AcademyContextValue {
   currentPath: string;
   navigate: (path: string) => void;
   role: AppRole;
+  isAuthLoading: boolean;
   setRole: (role: AppRole) => void;
   currentUser: AuthUserProfile | null;
   setCurrentUser: React.Dispatch<React.SetStateAction<AuthUserProfile | null>>;
@@ -172,6 +176,18 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const [role, setRoleState] = useState<AppRole>('GUEST');
   const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(() => {
+    const p = window.location.pathname || '/';
+    const isProtected =
+      p.startsWith('/app') ||
+      p.startsWith('/teach') ||
+      p.startsWith('/admin') ||
+      p.startsWith('/cohorts/') ||
+      p.startsWith('/checkout/') ||
+      p.startsWith('/onboarding') ||
+      (p.startsWith('/live/') && p !== '/live/guest');
+    return hasStoredAuthSession() || isProtected;
+  });
 
   const [theme, setThemeState] = useState<'light' | 'dark'>('light');
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -214,26 +230,75 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activePlayerSessionId, setActivePlayerSessionId] = useState<string | null>(null);
   const [searchQueryGlobal, setSearchQueryGlobal] = useState('');
 
-  // 1a. Hydrate Public Catalog, Categories, Skills, Cohorts, Certificates & Current Session on startup
+  // 1a. Hydrate Auth Session immediately (supports Bearer token, refreshToken & HttpOnly cookie)
+  useEffect(() => {
+    const p = window.location.pathname || '/';
+    const isProtected =
+      p.startsWith('/app') ||
+      p.startsWith('/teach') ||
+      p.startsWith('/admin') ||
+      p.startsWith('/cohorts/') ||
+      p.startsWith('/checkout/') ||
+      p.startsWith('/onboarding') ||
+      (p.startsWith('/live/') && p !== '/live/guest');
+
+    if (!hasStoredAuthSession() && !isProtected) {
+      setIsAuthLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsAuthLoading(true);
+    authApi
+      .getMe()
+      .then((meRes) => {
+        if (!isMounted) return;
+        if (meRes && meRes.role) {
+          setCurrentUser(meRes);
+          setRoleState(meRes.role);
+          if (typeof meRes.interviewCredits === 'number') {
+            setInterviewCredits(meRes.interviewCredits);
+          }
+        } else {
+          setCurrentUser(null);
+          setEnrolledCohortIds([]);
+          setRoleState('GUEST');
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setCurrentUser(null);
+        setEnrolledCohortIds([]);
+        setRoleState('GUEST');
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsAuthLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 1a-2. Hydrate Public Catalog, Categories, Skills, Cohorts & Certificates on startup
   useEffect(() => {
     let isMounted = true;
-    const hydratePublicCatalogAndAuth = async () => {
+    const hydratePublicCatalog = async () => {
       try {
-        const hasToken = Boolean(getAuthAccessToken());
         const [
           coursesRes,
           categoriesRes,
           skillsRes,
           cohortsRes,
           certsRes,
-          meRes,
         ] = await Promise.all([
           catalogApi.getCourses().catch(() => [] as Course[]),
           catalogApi.getCategories().catch(() => [] as CourseCategoryItem[]),
           catalogApi.getSkills().catch(() => [] as CourseSkill[]),
           catalogApi.getCohorts().catch(() => [] as Cohort[]),
           catalogApi.getCertificates().catch(() => ({} as Record<string, CertificateRecord>)),
-          hasToken ? authApi.getMe().catch(() => null) : Promise.resolve(null),
         ]);
 
         if (!isMounted) return;
@@ -242,20 +307,11 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setSkills(skillsRes);
         setCohorts(cohortsRes);
         setCertificates(certsRes);
-
-        if (meRes) {
-          setCurrentUser(meRes);
-          setRoleState(meRes.role);
-        } else {
-          setCurrentUser(null);
-          setEnrolledCohortIds([]);
-          setRoleState('GUEST');
-        }
       } catch {
         // Keep safe initial state on error
       }
     };
-    void hydratePublicCatalogAndAuth();
+    void hydratePublicCatalog();
     return () => {
       isMounted = false;
     };
@@ -294,18 +350,29 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const [enrollmentsRes, ordersRes, cohortsRes] = await Promise.all([
         learningApi.getMyEnrollments(),
         orderApi.getMyOrderHistory(),
-        catalogApi.getCohorts(),
+        catalogApi.getCohorts().catch(() => [] as Cohort[]),
       ]);
       if (Array.isArray(enrollmentsRes.enrolledCohortIds)) {
-        setEnrolledCohortIds(enrollmentsRes.enrolledCohortIds);
+        setEnrolledCohortIds(enrollmentsRes.enrolledCohortIds.map((id) => String(id)));
       }
       if (Array.isArray(ordersRes) && ordersRes.length > 0) {
         setReceipts(ordersRes);
       } else if (Array.isArray(enrollmentsRes.receipts)) {
         setReceipts(enrollmentsRes.receipts);
       }
-      if (Array.isArray(cohortsRes) && cohortsRes.length > 0) {
-        setCohorts(cohortsRes);
+      const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
+        ? enrollmentsRes.cohorts
+        : [];
+      if (cohortsRes.length > 0 || enrolledCohortsList.length > 0) {
+        setCohorts((prev) => {
+          const map = new Map<string, Cohort>();
+          for (const c of prev) map.set(String(c.id), c);
+          for (const c of cohortsRes) map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+          for (const c of enrolledCohortsList) {
+            map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+          }
+          return Array.from(map.values());
+        });
       }
     } catch {
       // Ignore refresh error
@@ -314,20 +381,44 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // 2. When role === 'STUDENT', hydrate student enrollments, orders, dashboard, and current user
   useEffect(() => {
-    if (role !== 'STUDENT' || !getAuthAccessToken()) return;
+    if (role !== 'STUDENT') return;
     let isMounted = true;
     const hydrateStudentAccount = async () => {
       try {
-        const [enrollmentsRes, ordersRes, meRes, dashboardRes] = await Promise.all([
-          learningApi.getMyEnrollments(),
-          orderApi.getMyOrderHistory(),
-          authApi.getMe(),
-          learningApi.getStudentDashboard(),
-        ]);
+        const [enrollmentsRes, ordersRes, meRes, dashboardRes, cohortsRes, coursesRes] =
+          await Promise.all([
+            learningApi.getMyEnrollments(),
+            orderApi.getMyOrderHistory(),
+            authApi.getMe(),
+            learningApi.getStudentDashboard(),
+            catalogApi.getCohorts().catch(() => [] as Cohort[]),
+            catalogApi.getCourses().catch(() => [] as Course[]),
+          ]);
         if (!isMounted) return;
-        if (Array.isArray(enrollmentsRes.enrolledCohortIds)) {
-          setEnrolledCohortIds(enrollmentsRes.enrolledCohortIds);
+
+        const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
+          ? enrollmentsRes.cohorts
+          : [];
+        const derivedIds = Array.isArray(enrollmentsRes.enrolledCohortIds)
+          ? enrollmentsRes.enrolledCohortIds.map((id) => String(id))
+          : enrolledCohortsList.map((c) => String(c.id));
+        setEnrolledCohortIds(derivedIds);
+
+        if (cohortsRes.length > 0 || enrolledCohortsList.length > 0) {
+          setCohorts((prev) => {
+            const map = new Map<string, Cohort>();
+            for (const c of prev) map.set(String(c.id), c);
+            for (const c of cohortsRes) map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            for (const c of enrolledCohortsList) {
+              map.set(String(c.id), { ...map.get(String(c.id)), ...c, id: String(c.id) });
+            }
+            return Array.from(map.values());
+          });
         }
+        if (coursesRes.length > 0) {
+          setCourses(coursesRes);
+        }
+
         if (Array.isArray(ordersRes) && ordersRes.length > 0) {
           setReceipts(ordersRes);
         } else if (Array.isArray(enrollmentsRes.receipts)) {
@@ -338,6 +429,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
         if (meRes) {
           setCurrentUser(meRes);
+          if (typeof meRes.interviewCredits === 'number') {
+            setInterviewCredits(meRes.interviewCredits);
+          }
         }
       } catch {
         // Keep existing state on error
@@ -347,7 +441,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => {
       isMounted = false;
     };
-  }, [role]);
+  }, [role, currentUser?.id]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -412,10 +506,13 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setRole = useCallback((newRole: AppRole) => {
     if (newRole === 'GUEST') {
       setRoleState('GUEST');
-      setAuthAccessToken(null);
+      setIsAuthLoading(false);
+      clearAuthTokens();
       setCurrentUser(null);
       setEnrolledCohortIds([]);
       setReceipts([]);
+      setUpcomingTasks([]);
+      setInterviewCredits(0);
       void authApi.logout().catch(() => undefined);
       if (
         window.location.pathname.startsWith('/app') ||
@@ -764,6 +861,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentPath,
         navigate,
         role,
+        isAuthLoading,
         setRole,
         currentUser,
         setCurrentUser,

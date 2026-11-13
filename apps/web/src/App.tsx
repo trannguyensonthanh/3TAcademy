@@ -104,12 +104,22 @@ const RoleAccessGuard: React.FC<RoleAccessGuardProps> = ({ allowedRoles, areaLab
   );
 };
 
+const AuthRestoringScreen: React.FC = () => (
+  <div className="max-w-xl mx-auto px-4 py-20 text-center space-y-3">
+    <div className="w-8 h-8 rounded-full border-2 border-[#10B981] border-t-transparent animate-spin mx-auto" />
+    <p className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+      Đang khôi phục phiên đăng nhập...
+    </p>
+  </div>
+);
+
 const AppRouter: React.FC = () => {
-  const { currentPath, role } = useAcademy();
+  const { currentPath, role, isAuthLoading } = useAcademy();
   const cleanPath = currentPath.split('?')[0] || '/';
 
   // 1. Dedicated Instructor Portal (/teach*) — CHỈ GIẢNG VIÊN (INSTRUCTOR) ĐƯỢC TRUY CẬP
   if (cleanPath.startsWith('/teach')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'INSTRUCTOR') {
       return (
         <RoleAccessGuard
@@ -123,6 +133,7 @@ const AppRouter: React.FC = () => {
 
   // 2. Dedicated Admin Portal (/admin*) — CHỈ QUẢN TRỊ VIÊN (ADMIN) ĐƯỢC TRUY CẬP
   if (cleanPath.startsWith('/admin')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'ADMIN') {
       return (
         <RoleAccessGuard
@@ -144,6 +155,7 @@ const AppRouter: React.FC = () => {
     return <LivestreamClassView sessionId="sess-k01-05" isGuestEntry={true} />;
   }
   if (cleanPath.startsWith('/live/')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'STUDENT' && role !== 'INSTRUCTOR') {
       return (
         <RoleAccessGuard
@@ -163,6 +175,7 @@ const AppRouter: React.FC = () => {
     cleanPath.startsWith('/cohorts/') ||
     cleanPath === '/onboarding'
   ) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'STUDENT') {
       return (
         <RoleAccessGuard
@@ -235,6 +248,7 @@ const AppRouter: React.FC = () => {
     return <AiAdvisorView />;
   }
   if (cleanPath.startsWith('/checkout/')) {
+    if (isAuthLoading) return <AuthRestoringScreen />;
     if (role !== 'STUDENT') {
       return (
         <RoleAccessGuard

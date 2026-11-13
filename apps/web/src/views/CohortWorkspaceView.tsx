@@ -84,7 +84,11 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
       syllabusTemplate: [],
     };
 
-  const { data: workspaceData } = useAsyncQuery(
+  const {
+    data: workspaceData,
+    isLoading: isWorkspaceLoading,
+    error: workspaceError,
+  } = useAsyncQuery(
     () => studentLearningApi.getCohortWorkspace(cohortId),
     {
       cohort: fallbackCohort,
@@ -92,6 +96,17 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
       sessions,
       materials,
       finalExamPassed: false,
+      isPlaceholder: true,
+    } as {
+      cohort: typeof fallbackCohort;
+      course: typeof fallbackCourse;
+      sessions: typeof sessions;
+      materials: typeof materials;
+      finalExamId?: string;
+      finalExamPassed?: boolean;
+      eligibleForFinalExam?: boolean;
+      accessDenied?: boolean;
+      isPlaceholder?: boolean;
     },
     [cohortId]
   );
@@ -127,10 +142,19 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
   const isFinalExamLocked = Boolean(
     workspaceData.finalExamPassed || finalExamResult?.hasPassedFinalExam
   );
+  const hasCohortInContext = enrolledCohortIds.some(
+    (id) => String(id) === String(cohort.id) || String(id) === String(cohortId)
+  );
+  const hasBackendAuthorizedWorkspace =
+    !workspaceError &&
+    !workspaceData.accessDenied &&
+    !workspaceData.isPlaceholder;
   const isEnrolledInCohort =
     role === 'INSTRUCTOR' ||
     role === 'ADMIN' ||
-    (enrolledCohortIds.includes(cohort.id) && !workspaceData.accessDenied);
+    isWorkspaceLoading ||
+    (hasCohortInContext && !workspaceError && !workspaceData.accessDenied) ||
+    hasBackendAuthorizedWorkspace;
 
   if (!isEnrolledInCohort) {
     return (

@@ -10,10 +10,12 @@ export interface AuthUserProfile {
   phone?: string;
   bio?: string;
   careerGoal?: string;
+  interviewCredits?: number;
 }
 
 export interface AuthSessionResponse {
   accessToken: string;
+  refreshToken?: string;
   user: AuthUserProfile;
   isNewUser?: boolean;
 }
@@ -43,10 +45,15 @@ export const authApi = {
       body: JSON.stringify({ idToken }),
     }),
 
-  getMe: () =>
-    httpRequest<AuthUserProfile>('/auth/me', {
+  getMe: async (): Promise<AuthUserProfile> => {
+    const res = await httpRequest<AuthUserProfile | { user: AuthUserProfile }>('/auth/me', {
       method: 'GET',
-    }),
+    });
+    if (res && typeof res === 'object' && 'user' in res && res.user) {
+      return res.user;
+    }
+    return res as AuthUserProfile;
+  },
 
   logout: () =>
     httpRequest<{ success: boolean; loggedOutAt: string }>('/auth/logout', {

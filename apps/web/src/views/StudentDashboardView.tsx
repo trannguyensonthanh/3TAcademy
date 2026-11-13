@@ -43,6 +43,7 @@ import {
   ExternalCvSkillTagItem,
 } from '../services/profile-interview.api';
 import { useAsyncData, useAsyncQuery } from '../hooks/useAsyncData';
+import { Cohort } from '../types/domain';
 
 const DEFAULT_ENROLLED_SKILL_STATES: EnrolledSkillStateItem[] = [];
 const DEFAULT_EXTERNAL_CV_SKILLS: ExternalCvSkillTagItem[] = [];
@@ -65,6 +66,7 @@ export const StudentDashboardView: React.FC = () => {
     toggleTheme,
     setCommandPaletteOpen,
     currentUser,
+    role,
   } = useAcademy();
 
   const [showNotifPopover, setShowNotifPopover] = useState(false);
@@ -72,6 +74,7 @@ export const StudentDashboardView: React.FC = () => {
 
   const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? sessions[0];
   const fallbackResume = sessions.find((s) => !s.isCompleted) ?? sessions[0];
+  const authQueryKey = `${role}:${currentUser?.id || ''}`;
 
   const { data: dashboardSummary } = useAsyncQuery(
     () => studentLearningApi.getDashboardSummary(),
@@ -81,17 +84,17 @@ export const StudentDashboardView: React.FC = () => {
       upcomingTasks,
       streakDays: 0,
     },
-    []
+    [authQueryKey]
   );
 
-  const { data: enrollmentsData } = useAsyncData(
+  const { data: enrollmentsData, isLoading: isEnrollmentsLoading } = useAsyncData(
     () => studentLearningApi.getMyEnrollments(),
-    []
+    [authQueryKey]
   );
 
   const { data: orderHistoryData } = useAsyncData(
     () => orderApi.getMyOrderHistory(),
-    []
+    [authQueryKey]
   );
 
   const { data: profileAndSkills } = useAsyncQuery(
@@ -125,7 +128,7 @@ export const StudentDashboardView: React.FC = () => {
       studentSkillStates: DEFAULT_ENROLLED_SKILL_STATES,
       externalCvSkills: DEFAULT_EXTERNAL_CV_SKILLS,
     },
-    []
+    [authQueryKey]
   );
 
   const studentFullName =
@@ -172,13 +175,35 @@ export const StudentDashboardView: React.FC = () => {
 
   const liveSession = dashboardSummary.liveSession ?? fallbackLive;
   const resumeSession = dashboardSummary.resumeSession ?? fallbackResume;
+  const effectiveUpcomingTasks =
+    dashboardSummary.upcomingTasks && dashboardSummary.upcomingTasks.length > 0
+      ? dashboardSummary.upcomingTasks
+      : upcomingTasks;
   const effectiveEnrolledIds = Array.isArray(enrollmentsData?.enrolledCohortIds)
-    ? enrollmentsData.enrolledCohortIds
-    : enrolledCohortIds;
-  const myEnrolledCohorts = cohorts.filter((c) => effectiveEnrolledIds.includes(c.id));
-  const primaryCohort = myEnrolledCohorts[0] ?? cohorts[0];
+    ? enrollmentsData.enrolledCohortIds.map((id) => String(id))
+    : enrolledCohortIds.map((id) => String(id));
+  const effectiveEnrolledIdSet = new Set(effectiveEnrolledIds);
+  const myEnrolledCohorts = (() => {
+    const byId = new Map<string, Cohort>();
+    if (Array.isArray(enrollmentsData?.cohorts)) {
+      for (const ch of enrollmentsData.cohorts) {
+        byId.set(String(ch.id), ch);
+      }
+    }
+    for (const ch of cohorts) {
+      if (effectiveEnrolledIdSet.has(String(ch.id)) && !byId.has(String(ch.id))) {
+        byId.set(String(ch.id), ch);
+      }
+    }
+    return Array.from(byId.values());
+  })();
+  const primaryCohort = myEnrolledCohorts[0];
   const effectiveReceipts =
-    orderHistoryData && orderHistoryData.length > 0 ? orderHistoryData : receipts;
+    orderHistoryData && orderHistoryData.length > 0
+      ? orderHistoryData
+      : Array.isArray(enrollmentsData?.receipts) && enrollmentsData.receipts.length > 0
+      ? enrollmentsData.receipts
+      : receipts;
 
   const currentTabInfo =
     sidebarItems.find((item) => item.id === studentSidebarTab) ?? sidebarItems[0];
@@ -608,7 +633,9 @@ export const StudentDashboardView: React.FC = () => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigate('/app/cohorts/cohort-ai-k01')}
+                    onClick={() =>
+                      navigate(primaryCohort ? `/app/cohorts/${primaryCohort.id}` : '/courses')
+                    }
                     className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
                   >
                     Xem toàn bộ bài tập →
@@ -616,7 +643,7 @@ export const StudentDashboardView: React.FC = () => {
                 </div>
 
                 <div className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
-                  {upcomingTasks.slice(0, 4).map((task) => {
+                  {effectiveUpcomingTasks.slice(0, 4).map((task) => {
                     const urgencyStyles =
                       task.urgency === 'SAFE'
                         ? {
@@ -645,7 +672,7 @@ export const StudentDashboardView: React.FC = () => {
                         <div className="space-y-1 min-w-0">
                           <div className="flex items-center gap-2 text-xs">
                             <span className="font-semibold text-[#059669] dark:text-[#34D399]">
-                              Lớp Kỹ Sư AI Thực Chiến — Khóa K01
+                              {task.cohortCode || primaryCohort?.name || 'Lớp đang theo học'}
                             </span>
                             <span className="text-[#475569] dark:text-[#94A3B8]">·</span>
                             <span className="text-[#475569] dark:text-[#94A3B8]">
@@ -708,42 +735,68 @@ export const StudentDashboardView: React.FC = () => {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {myEnrolledCohorts.map((ch) => {
-                  const course = courses.find((cr) => cr.id === ch.courseId);
-                  return (
-                    <div
-                      key={ch.id}
-                      className="rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] p-5 flex flex-col justify-between space-y-4"
-                    >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                            {ch.code}
-                          </span>
-                          <span className="text-[#475569] dark:text-[#94A3B8]">
-                            Khai giảng {ch.startDate}
-                          </span>
-                        </div>
-                        <div className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                          {ch.name}
-                        </div>
-                        <div className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                          {course?.title} · Lịch học: {formatScheduleSlots(ch.scheduleSlots)}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/app/cohorts/${ch.id}`)}
-                        className="w-full py-2.5 px-4 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+              {isEnrollmentsLoading && myEnrolledCohorts.length === 0 ? (
+                <div className="py-10 text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                  Đang tải danh sách lớp đang theo học...
+                </div>
+              ) : myEnrolledCohorts.length === 0 ? (
+                <div className="rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#10B981]/60 p-8 text-center space-y-3">
+                  <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                    Bạn chưa có lớp học nào đang theo học
+                  </div>
+                  <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto">
+                    Hãy khám phá danh mục khóa học và ghi danh vào đợt khai giảng phù hợp để bắt đầu học tập cùng giảng viên.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/courses')}
+                    className="px-4 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Khám phá khóa học ngay →
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {myEnrolledCohorts.map((ch) => {
+                    const course = courses.find((cr) => String(cr.id) === String(ch.courseId));
+                    const courseTitleText =
+                      course?.title ||
+                      (ch as Cohort & { courseTitle?: string }).courseTitle ||
+                      ch.name;
+                    return (
+                      <div
+                        key={ch.id}
+                        className="rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] p-5 flex flex-col justify-between space-y-4"
                       >
-                        Vào Không Gian Lớp Học →
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                              {ch.code}
+                            </span>
+                            <span className="text-[#475569] dark:text-[#94A3B8]">
+                              Khai giảng {ch.startDate}
+                            </span>
+                          </div>
+                          <div className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                            {ch.name}
+                          </div>
+                          <div className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                            {courseTitleText} · Lịch học: {formatScheduleSlots(ch.scheduleSlots)}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/app/cohorts/${ch.id}`)}
+                          className="w-full py-2.5 px-4 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Vào Không Gian Lớp Học →
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -952,16 +1005,30 @@ export const StudentDashboardView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() =>
-                          navigate('/app/cohorts/cohort-ai-k01/sessions/sess-k01-04')
+                          navigate(
+                            primaryCohort && resumeSession
+                              ? `/app/cohorts/${resumeSession.cohortId || primaryCohort.id}/sessions/${resumeSession.id}`
+                              : primaryCohort
+                              ? `/app/cohorts/${primaryCohort.id}`
+                              : '/courses'
+                          )
                         }
                         className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer transition-colors"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Ôn lại đoạn video Buổi 4 ngay</span>
+                        <span>Ôn lại đoạn video Buổi {resumeSession?.sessionOrder ?? 1} ngay</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => navigate('/app/assessments/sess-k01-04')}
+                        onClick={() =>
+                          navigate(
+                            resumeSession
+                              ? `/app/assessments/${resumeSession.id}`
+                              : primaryCohort
+                              ? `/app/cohorts/${primaryCohort.id}`
+                              : '/courses'
+                          )
+                        }
                         className="px-3.5 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
                       >
                         Làm lại bài kiểm tra
@@ -1202,7 +1269,13 @@ export const StudentDashboardView: React.FC = () => {
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    navigate('/app/cohorts/cohort-ai-k01');
+                                    const certCohort =
+                                      myEnrolledCohorts.find((ch) => ch.code === c.cohortCode) ??
+                                      cohorts.find((ch) => ch.code === c.cohortCode) ??
+                                      primaryCohort;
+                                    navigate(
+                                      certCohort ? `/app/cohorts/${certCohort.id}` : '/courses'
+                                    );
                                   }}
                                   className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
                                 >

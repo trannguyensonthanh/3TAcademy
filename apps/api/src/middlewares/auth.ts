@@ -16,12 +16,24 @@ declare global {
   }
 }
 
-export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+function extractAccessToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
+    if (token) return token;
+  }
+  const cookieToken = req.cookies?.access_token;
+  if (typeof cookieToken === 'string' && cookieToken.trim()) {
+    return cookieToken.trim();
+  }
+  return undefined;
+}
+
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  const token = extractAccessToken(req);
+  if (token) {
     try {
-      const payload = jwt.verify(token!, env.JWT_ACCESS_SECRET) as AuthUser;
+      const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AuthUser;
       req.user = payload;
     } catch {
       // Ignore invalid or expired token on optional auth routes
@@ -31,8 +43,8 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const token = extractAccessToken(req);
+  if (!token) {
     const message = 'Vui lòng đăng nhập để tiếp tục';
     res.status(401).json({
       success: false,
@@ -48,9 +60,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
 
-  const token = authHeader.split(' ')[1];
   try {
-    const payload = jwt.verify(token!, env.JWT_ACCESS_SECRET) as AuthUser;
+    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AuthUser;
     req.user = payload;
     next();
   } catch {

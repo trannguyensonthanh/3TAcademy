@@ -53,6 +53,7 @@ export interface SessionDetailPayload {
   chapters?: SessionChapterItem[];
   aiChatHistory?: SessionAiChatMessageItem[];
   accessDenied?: boolean;
+  isPlaceholder?: boolean;
   transcript: {
     sec: number;
     timeLabel: string;
@@ -98,6 +99,7 @@ export const learningApi = {
       finalExamPassed?: boolean;
       eligibleForFinalExam?: boolean;
       accessDenied?: boolean;
+      isPlaceholder?: boolean;
     }>(`/cohorts/${encodeURIComponent(cohortId)}/workspace`, {
       method: 'GET',
     }),
