@@ -18,14 +18,14 @@ const envSchema = z.object({
   LIVEKIT_API_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
-  VNPAY_TMN_CODE: z.string().optional(),
-  VNPAY_HASH_SECRET: z.string().optional(),
-  VNPAY_URL: z.string().optional(),
-  VNPAY_RETURN_URL: z.string().optional(),
   SEPAY_API_KEY: z.string().optional(),
+  SEPAY_WEBHOOK_SECRET: z.string().optional(),
   SEPAY_BANK_NAME: z.string().default('MBBank'),
-  SEPAY_ACCOUNT_NUMBER: z.string().default('0987654321'),
-  SEPAY_ACCOUNT_HOLDER: z.string().default('CONG TY CONG NGHE VA GIAO DUC 3T'),
+  SEPAY_ACCOUNT_NUMBER: z.string().default('0389998888'),
+  SEPAY_ACCOUNT_HOLDER: z.string().default('HOC VIEN CONG NGHE 3T ACADEMY'),
+  CPAY_API_URL: z.string().optional(),
+  CPAY_MERCHANT_ID: z.string().optional(),
+  CPAY_SECRET_KEY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

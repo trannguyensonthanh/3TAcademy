@@ -28,36 +28,7 @@ interface VideoChapter {
   label: string;
 }
 
-const VIDEO_CHAPTERS: VideoChapter[] = [
-  {
-    id: 'chap-1',
-    title: 'Phần 1: Vì sao đọc tài liệu PDF dài hay bị đứt gãy bảng biểu?',
-    startSec: 0,
-    endSec: 15,
-    label: '00:00 - 00:15',
-  },
-  {
-    id: 'chap-2',
-    title: 'Phần 2: Cách tách đoạn theo tiêu đề mục và giữ nguyên bảng số liệu',
-    startSec: 15,
-    endSec: 35,
-    label: '00:15 - 00:35',
-  },
-  {
-    id: 'chap-3',
-    title: 'Phần 3: Kết hợp tìm kiếm từ khóa và tìm kiếm ngữ nghĩa',
-    startSec: 35,
-    endSec: 60,
-    label: '00:35 - 01:00',
-  },
-  {
-    id: 'chap-4',
-    title: 'Phần 4: Xử lý bất đồng bộ & Hướng dẫn làm bài tập mở khóa (10 câu)',
-    startSec: 60,
-    endSec: 180,
-    label: '01:00 - 03:00',
-  },
-];
+const VIDEO_CHAPTERS: VideoChapter[] = [];
 
 interface TranscriptLine {
   sec: number;
@@ -67,43 +38,7 @@ interface TranscriptLine {
   slidePage: number;
 }
 
-const TRANSCRIPT_LINES: TranscriptLine[] = [
-  {
-    sec: 5,
-    timeLabel: '00:05',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Chào cả lớp! Hôm nay chúng mình cùng thực hành xử lý báo cáo PDF dài hàng trăm trang mà không làm đứt gãy bảng biểu tài chính.',
-    slidePage: 4,
-  },
-  {
-    sec: 10,
-    timeLabel: '00:10',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Để giữ nguyên ý nghĩa, mình nhận diện các dòng tiêu đề mục lớn và đóng gói toàn bộ bảng số liệu thành một khối nguyên vẹn kèm theo số trang gốc.',
-    slidePage: 8,
-  },
-  {
-    sec: 25,
-    timeLabel: '00:25',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Tại sao chỗ này phải kết hợp cả tìm kiếm từ khóa lẫn tìm kiếm theo ý nghĩa câu hỏi? Vì tìm kiếm từ khóa bắt trúng mã hợp đồng, còn tìm kiếm ngữ nghĩa hiểu câu hỏi tự nhiên của nhân viên.',
-    slidePage: 12,
-  },
-  {
-    sec: 45,
-    timeLabel: '00:45',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Lưu ý rất quan trọng về xử lý bất đồng bộ: Chúng ta dùng Promise.all để chạy song song hai bộ tìm kiếm, giúp tốc độ phản hồi luôn dưới 1 giây.',
-    slidePage: 18,
-  },
-  {
-    sec: 75,
-    timeLabel: '01:15',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Các bạn nhớ hoàn thành 10 câu hỏi trắc nghiệm (A, B, C, D) ngay bên dưới video để hệ thống chấm điểm tức thì và mở khóa hoàn thành buổi học hôm nay nhé!',
-    slidePage: 22,
-  },
-];
+const TRANSCRIPT_LINES: TranscriptLine[] = [];
 
 interface AiTutorMessage {
   id: string;
@@ -116,27 +51,9 @@ interface AiTutorMessage {
   }[];
 }
 
-const INITIAL_AI_MESSAGES: AiTutorMessage[] = [
-  {
-    id: 'ai-m1',
-    sender: 'STUDENT',
-    text: 'Tại sao chỗ này phải kết hợp tìm kiếm từ khóa và tìm kiếm ngữ nghĩa vậy ạ?',
-  },
-  {
-    id: 'ai-m2',
-    sender: 'AI_TUTOR',
-    text: 'Chào An! Nếu chỉ tìm theo ý nghĩa câu hỏi thì hệ thống rất dễ bỏ sót các mã số chính xác như mã hợp đồng hoặc tên riêng viết tắt. Ngược lại, nếu chỉ tìm theo từ khóa thì khi người dùng hỏi bằng từ đồng nghĩa hệ thống lại không tìm ra. Bạn bấm vào các mốc thời gian bên dưới để trình phát video nhảy thẳng tới đoạn thầy Khoa giải thích nhé:',
-    citations: [
-      { label: '[00:10]', jumpSec: 10, slideLabel: 'Slide Trang 8' },
-      { label: '[00:25]', jumpSec: 25, slideLabel: 'Slide Trang 12' },
-      { label: '[00:45]', jumpSec: 45, slideLabel: 'Slide Trang 18' },
-      { label: '[Xem đoạn 14:20 - 16:05]', jumpSec: 25, slideLabel: 'Slide Trang 12' },
-    ],
-  },
-];
+const INITIAL_AI_MESSAGES: AiTutorMessage[] = [];
 
-const SAMPLE_VIDEO_URL =
-  'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+const SAMPLE_VIDEO_URL = '';
 
 export const SessionVideoRoomView: React.FC<{
   cohortId: string;
@@ -159,12 +76,43 @@ export const SessionVideoRoomView: React.FC<{
 
   const cohort =
     cohorts.find((c) => c.id === cohortId || c.code.toLowerCase() === cohortId.toLowerCase()) ??
-    cohorts[0];
+    cohorts[0] ?? {
+      id: cohortId,
+      courseId: '',
+      code: cohortId,
+      name: '',
+      mode: 'HYBRID' as const,
+      startDate: '',
+      endDate: '',
+      scheduleLabel: '',
+      scheduleSlots: [],
+      tuitionVnd: 0,
+      capacity: 0,
+      enrolledCount: 0,
+      seatsRemaining: 0,
+      status: 'UPCOMING' as const,
+      staff: [],
+    };
 
   const fallbackSession =
     sessions.find((s) => s.id === sessionId) ??
-    sessions.find((s) => s.sessionOrder === 4) ??
-    sessions[0];
+    sessions[0] ?? {
+      id: sessionId,
+      cohortId: cohort.id,
+      sessionOrder: 1,
+      title: 'Đang tải buổi học...',
+      status: 'REPLAY_READY' as const,
+      scheduledStart: '',
+      scheduledEnd: '',
+      durationSeconds: 600,
+      lastPositionSec: 0,
+      isCompleted: false,
+      quizScore: 0,
+      hostInstructorName: '',
+      attachmentsCount: 0,
+      aiSummaryMd: '',
+      aiCitations: [],
+    };
 
   const { data: sessionDetail } = useAsyncQuery(
     () => studentLearningApi.getSessionDetail(cohort.id, sessionId),
@@ -487,15 +435,19 @@ export const SessionVideoRoomView: React.FC<{
                 aria-label="Dòng chữ bảo vệ bản quyền hiển thị email học viên"
                 className={`pointer-events-none select-none absolute ${watermarkCornerClasses} transition-all duration-1000 px-2.5 py-1 rounded bg-black/45 text-white/50 font-mono text-[11px] z-10`}
               >
-                {currentUser?.email || 'an.nguyen.dev@gmail.com'} · Học viên {cohort.code}
+                {currentUser?.email || currentUser?.fullName || 'Học viên'} · Học viên {cohort.code}
               </div>
 
               {/* Top Overlay Pill showing current timestamp & chapter */}
               <div className="pointer-events-none absolute top-3 left-4 flex flex-wrap items-center gap-2 z-10">
                 <span className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-black/65 backdrop-blur-xs border border-[#10B981]/50 text-emerald-300 font-mono text-xs font-semibold">
                   <span>Đang phát tại {formatTimestamp(Math.floor(currentSec))}</span>
-                  <span>·</span>
-                  <span>{activeChapter.title}</span>
+                  {activeChapter && (
+                    <>
+                      <span>·</span>
+                      <span>{activeChapter.title}</span>
+                    </>
+                  )}
                 </span>
                 {seekBanner && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#10B981] text-white text-xs font-bold shadow-sm">
@@ -506,7 +458,7 @@ export const SessionVideoRoomView: React.FC<{
               </div>
 
               {/* Vietnamese Subtitle Overlay */}
-              {subtitlesOn && (
+              {subtitlesOn && activeSubtitleLine && (
                 <div className="pointer-events-none absolute bottom-14 inset-x-4 flex justify-center z-10">
                   <div className="max-w-2xl px-4 py-2 rounded-lg bg-black/80 text-center text-xs sm:text-sm text-emerald-100 border border-white/15">
                     <span className="font-semibold text-emerald-400">

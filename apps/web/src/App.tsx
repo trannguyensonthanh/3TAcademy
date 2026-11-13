@@ -2,7 +2,6 @@ import React from 'react';
 import { Lock, ShieldAlert, ArrowRight, Home, LogIn } from 'lucide-react';
 import { AcademyProvider, useAcademy } from './context/AcademyContext';
 import { TopNavbar } from './components/TopNavbar';
-import { DevToolbar } from './components/DevToolbar';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { SessionPlayerQuizModal } from './components/SessionPlayerQuizModal';
 import { HomeView } from './views/HomeView';
@@ -271,7 +270,6 @@ export default function App() {
         </main>
         <SessionPlayerQuizModal />
         <CommandPaletteModal />
-        <DevToolbar />
       </div>
     </AcademyProvider>
   );

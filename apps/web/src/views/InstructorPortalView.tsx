@@ -92,6 +92,7 @@ export const InstructorPortalView: React.FC = () => {
     replyToDiscussionAsStaff,
     materials,
     addCohortMaterial,
+    currentUser,
     setRole,
     navigate,
   } = useAcademy();
@@ -181,7 +182,23 @@ export const InstructorPortalView: React.FC = () => {
       ? instructorCohortsData
       : cohorts;
   const selectedCohort =
-    effectiveCohorts.find((c) => c.id === selectedCohortId) ?? effectiveCohorts[0];
+    effectiveCohorts.find((c) => c.id === selectedCohortId) ??
+    effectiveCohorts[0] ?? {
+      id: selectedCohortId,
+      courseId: '',
+      instructorId: currentUser?.id ?? '',
+      code: '',
+      name: 'Chưa có lớp học',
+      curriculumVersion: 'v2026',
+      tuitionVnd: 0,
+      enrolledCount: 0,
+      enrollmentOpenAt: '',
+      startDate: '',
+      endDate: '',
+      scheduleSlots: [],
+      status: 'ONGOING' as const,
+      staff: [],
+    };
 
   const cohortSessions = sessions
     .filter((s) => s.cohortId === selectedCohortId)
@@ -191,7 +208,28 @@ export const InstructorPortalView: React.FC = () => {
   const [selectedSessionId, setSelectedSessionId] = useState<string>('sess-k01-05');
   const activeSession =
     displayCohortSessions.find((s) => s.id === selectedSessionId) ??
-    displayCohortSessions[0];
+    displayCohortSessions[0] ?? {
+      id: selectedSessionId,
+      cohortId: selectedCohort.id,
+      sessionOrder: 1,
+      title: 'Chưa có buổi học',
+      activityTags: [],
+      hostInstructorName: currentUser?.fullName ?? 'Giảng viên',
+      scheduledStart: '',
+      scheduledEnd: '',
+      status: 'UPCOMING' as const,
+      videoR2Key: '',
+      videoProvider: 'R2_HLS_AES128' as const,
+      durationSeconds: 7200,
+      isCompleted: false,
+      lastPositionSec: 0,
+      aiSummaryMd: '',
+      attachmentsCount: 0,
+      quizStatus: 'PENDING' as const,
+      quizScore: null,
+      aiCitations: [],
+      quizQuestions: [],
+    };
 
   // Cấp 2: Đề thi tốt nghiệp cuối khóa của lớp (25 câu A, B, C, D)
   const [showAllFinalQuestions, setShowAllFinalQuestions] = useState<boolean>(false);
@@ -222,10 +260,7 @@ export const InstructorPortalView: React.FC = () => {
   >({});
   const [sessionQuizStatusById, setSessionQuizStatusById] = useState<
     Record<string, AssessmentPublishStatus>
-  >({
-    'sess-k01-04': 'PUBLISHED',
-    'sess-k01-05': 'DRAFT',
-  });
+  >({});
   const currentSessionQuestions =
     sessionQuizzesById[activeSession.id] ?? [];
   const currentSessionQuizStatus: AssessmentPublishStatus =
@@ -336,7 +371,8 @@ export const InstructorPortalView: React.FC = () => {
   const liveSession =
     scheduleData?.liveSession ??
     sessions.find((s) => s.status === 'LIVE') ??
-    sessions[4];
+    sessions[4] ??
+    activeSession;
 
   // Mở Cấp 2 (Chi tiết 1 lớp)
   const handleOpenCohortLevel2 = async (cohortId: string) => {
@@ -739,12 +775,14 @@ export const InstructorPortalView: React.FC = () => {
         <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-3">
           <div className="flex items-center gap-3">
             <img
-              src={AVATAR_MINH_KHOA}
-              alt="TS. Trần Minh Khoa"
+              src={currentUser?.avatarUrl || AVATAR_MINH_KHOA}
+              alt={currentUser?.fullName || 'Giảng viên'}
               className="w-10 h-10 rounded-full object-cover border border-[#10B981] shrink-0"
             />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold truncate">TS. Trần Minh Khoa</p>
+              <p className="text-xs font-bold truncate">
+                {currentUser?.fullName || 'Giảng viên'}
+              </p>
               <p className="text-[11px] text-[#059669] dark:text-[#34D399] font-semibold truncate">
                 Giảng viên chính
               </p>
@@ -2179,8 +2217,9 @@ export const InstructorPortalView: React.FC = () => {
            ================================================================== */}
         {instructorSidebarTab === 'CLASS_ANALYTICS' && (() => {
           const currentAnalyticsCohort =
-            cohorts.find((c) => c.id === analyticsCohortId) ?? cohorts[0];
-          const isK01 = currentAnalyticsCohort.id === 'cohort-ai-k01';
+            cohorts.find((c) => c.id === analyticsCohortId) ??
+            cohorts[0] ??
+            selectedCohort;
 
           // 1. Lấy dữ liệu enrollments theo lớp và nhóm riskLevel (LOW / MEDIUM / HIGH)
           const cohortEnrollments = enrollmentsState.filter(
@@ -2197,154 +2236,86 @@ export const InstructorPortalView: React.FC = () => {
           ).length;
           const highRiskCount = highRiskEnrollments.length;
 
-          const sessionStackedProgress = isK01
-            ? [
-                {
-                  label: 'Buổi 1',
-                  subLabel: 'Kiến trúc AI',
-                  subtitle: 'Buổi 1: Kiến trúc tổng thể hệ thống Trợ lý AI doanh nghiệp',
-                  values: { lowRisk: 45, mediumRisk: 2, highRisk: 1 },
-                },
-                {
-                  label: 'Buổi 2',
-                  subLabel: 'Vector DB',
-                  subtitle: 'Buổi 2: Chia nhỏ văn bản PDF & Lưu trữ chỉ mục tìm kiếm',
-                  values: { lowRisk: 43, mediumRisk: 3, highRisk: 2 },
-                },
-                {
-                  label: 'Buổi 3',
-                  subLabel: 'pgvector SQL',
-                  subtitle: 'Buổi 3: Xây dựng bộ tìm kiếm ngữ nghĩa trên PostgreSQL',
-                  values: { lowRisk: 40, mediumRisk: 5, highRisk: 3 },
-                },
-                {
-                  label: 'Buổi 4',
-                  subLabel: 'Phân quyền',
-                  subtitle: 'Buổi 4: Bóc tách PDF an toàn & Phân quyền truy cập tài liệu',
-                  values: { lowRisk: 38, mediumRisk: 7, highRisk: 3 },
-                },
-                {
-                  label: 'Buổi 5',
-                  subLabel: 'Hybrid Search',
-                  subtitle: 'Buổi 5: Kết hợp tìm kiếm từ khóa & ngữ nghĩa (Đang học)',
-                  values: { lowRisk: 35, mediumRisk: 9, highRisk: 4 },
-                },
-                {
-                  label: 'Buổi 6',
-                  subLabel: 'Kiểm thử & Thi',
-                  subtitle: 'Buổi 6: Kiểm thử chất lượng câu trả lời & Thi cuối khóa',
-                  values: { lowRisk: 34, mediumRisk: 10, highRisk: 4 },
-                },
-              ]
-            : [
-                {
-                  label: 'Buổi 1',
-                  subLabel: 'Khởi động',
-                  subtitle: 'Buổi 1: Thiết lập môi trường & Quy trình xử lý dữ liệu',
-                  values: { lowRisk: 32, mediumRisk: 2, highRisk: 0 },
-                },
-                {
-                  label: 'Buổi 2',
-                  subLabel: 'Làm sạch DL',
-                  subtitle: 'Buổi 2: Làm sạch dữ liệu bảng biểu lớn',
-                  values: { lowRisk: 30, mediumRisk: 3, highRisk: 1 },
-                },
-                {
-                  label: 'Buổi 3',
-                  subLabel: 'Truy vấn SQL',
-                  subtitle: 'Buổi 3: Tối ưu truy vấn báo cáo phân tích',
-                  values: { lowRisk: 29, mediumRisk: 4, highRisk: 1 },
-                },
-                {
-                  label: 'Buổi 4',
-                  subLabel: 'Tự động hóa',
-                  subtitle: 'Buổi 4: Xây dựng luồng cập nhật báo cáo tự động',
-                  values: { lowRisk: 27, mediumRisk: 5, highRisk: 2 },
-                },
-                {
-                  label: 'Buổi 5',
-                  subLabel: 'Trực quan hóa',
-                  subtitle: 'Buổi 5: Thiết kế bảng điều khiển chỉ số vận hành',
-                  values: { lowRisk: 26, mediumRisk: 6, highRisk: 2 },
-                },
-                {
-                  label: 'Buổi 6',
-                  subLabel: 'Bảo vệ dự án',
-                  subtitle: 'Buổi 6: Bảo vệ dự án cuối khóa & Đánh giá đầu ra',
-                  values: { lowRisk: 26, mediumRisk: 6, highRisk: 2 },
-                },
-              ];
+          const analyticsSessions = sessions
+            .filter((s) => s.cohortId === currentAnalyticsCohort.id)
+            .sort((a, b) => a.sessionOrder - b.sessionOrder);
+          const effectiveAnalyticsSessions =
+            analyticsSessions.length > 0 ? analyticsSessions : displayCohortSessions;
 
-          // 2. Phổ điểm số & Hiệu quả khóa học (assessment_attempts.score_pct)
-          const scoreBuckets = isK01
-            ? [
-                {
-                  rangeLabel: '< 50',
-                  bandTitle: 'Chưa đạt chuẩn',
-                  studentCount: 2,
-                  percentage: 4,
-                  color: '#EF4444',
-                  sampleNote: 'Cần học viên xem lại video bài giảng và làm lại bài kiểm tra mở khóa.',
-                },
-                {
-                  rangeLabel: '50 - 69',
-                  bandTitle: 'Cần củng cố thêm',
-                  studentCount: 5,
-                  percentage: 10,
-                  color: '#F59E0B',
-                  sampleNote: 'Đã nắm lý thuyết cơ bản nhưng còn nhầm câu hỏi tình huống thực tế.',
-                },
-                {
-                  rangeLabel: '70 - 84',
-                  bandTitle: 'Đạt chuẩn tốt',
-                  studentCount: 22,
-                  percentage: 46,
-                  color: '#10B981',
-                  sampleNote: 'Nắm vững kiến thức trọng tâm và vượt mốc mở khóa buổi tiếp theo.',
-                },
-                {
-                  rangeLabel: '85 - 100',
-                  bandTitle: 'Xuất sắc',
-                  studentCount: 19,
-                  percentage: 40,
-                  color: 'emerald-gradient',
-                  sampleNote: 'Hoàn thành xuất sắc cả câu hỏi kiến trúc hệ thống và tối ưu hiệu năng.',
-                },
-              ]
-            : [
-                {
-                  rangeLabel: '< 50',
-                  bandTitle: 'Chưa đạt chuẩn',
-                  studentCount: 1,
-                  percentage: 3,
-                  color: '#EF4444',
-                  sampleNote: 'Cần giảng viên nhắc nhở hoàn thành bài tập cơ bản.',
-                },
-                {
-                  rangeLabel: '50 - 69',
-                  bandTitle: 'Cần củng cố thêm',
-                  studentCount: 4,
-                  percentage: 12,
-                  color: '#F59E0B',
-                  sampleNote: 'Cần ôn lại phần truy vấn nhóm dữ liệu nâng cao.',
-                },
-                {
-                  rangeLabel: '70 - 84',
-                  bandTitle: 'Đạt chuẩn tốt',
-                  studentCount: 16,
-                  percentage: 47,
-                  color: '#10B981',
-                  sampleNote: 'Hoàn thành đúng hạn và vượt chuẩn 70% của học viện.',
-                },
-                {
-                  rangeLabel: '85 - 100',
-                  bandTitle: 'Xuất sắc',
-                  studentCount: 13,
-                  percentage: 38,
-                  color: 'emerald-gradient',
-                  sampleNote: 'Nắm rất chắc kỹ năng thực hành dự án.',
-                },
-              ];
+          const sessionStackedProgress = effectiveAnalyticsSessions.map((sess) => ({
+            label: `Buổi ${sess.sessionOrder}`,
+            subLabel: `Buổi ${sess.sessionOrder}`,
+            subtitle: `Buổi ${sess.sessionOrder}: ${sess.title}`,
+            values: {
+              lowRisk: effectiveEnrollments.filter(
+                (e) => e.completedSessionsCount >= sess.sessionOrder && e.riskLevel === 'LOW'
+              ).length,
+              mediumRisk: effectiveEnrollments.filter(
+                (e) => e.riskLevel === 'MEDIUM'
+              ).length,
+              highRisk: effectiveEnrollments.filter(
+                (e) => e.riskLevel === 'HIGH'
+              ).length,
+            },
+          }));
+
+          // 2. Phổ điểm số & Hiệu quả khóa học tính từ enrollmentsState
+          const totalEnr = Math.max(1, effectiveEnrollments.length);
+          const below50Count = effectiveEnrollments.filter((e) => e.avgScorePct < 50).length;
+          const b50to69Count = effectiveEnrollments.filter(
+            (e) => e.avgScorePct >= 50 && e.avgScorePct < 70
+          ).length;
+          const b70to84Count = effectiveEnrollments.filter(
+            (e) => e.avgScorePct >= 70 && e.avgScorePct < 85
+          ).length;
+          const above85Count = effectiveEnrollments.filter((e) => e.avgScorePct >= 85).length;
+          const avgClassScore =
+            effectiveEnrollments.length > 0
+              ? (
+                  effectiveEnrollments.reduce((sum, e) => sum + e.avgScorePct, 0) /
+                  effectiveEnrollments.length
+                ).toFixed(1)
+              : '0.0';
+          const eligibleCount = effectiveEnrollments.filter((e) => e.avgScorePct >= 70).length;
+          const passRatePct =
+            effectiveEnrollments.length > 0
+              ? Math.round((eligibleCount / effectiveEnrollments.length) * 100)
+              : 0;
+
+          const scoreBuckets = [
+            {
+              rangeLabel: '< 50',
+              bandTitle: 'Chưa đạt chuẩn',
+              studentCount: below50Count,
+              percentage: Math.round((below50Count / totalEnr) * 100),
+              color: '#EF4444',
+              sampleNote: 'Cần học viên xem lại video bài giảng và làm lại bài kiểm tra mở khóa.',
+            },
+            {
+              rangeLabel: '50 - 69',
+              bandTitle: 'Cần củng cố thêm',
+              studentCount: b50to69Count,
+              percentage: Math.round((b50to69Count / totalEnr) * 100),
+              color: '#F59E0B',
+              sampleNote: 'Đã nắm lý thuyết cơ bản nhưng còn nhầm câu hỏi tình huống thực tế.',
+            },
+            {
+              rangeLabel: '70 - 84',
+              bandTitle: 'Đạt chuẩn tốt',
+              studentCount: b70to84Count,
+              percentage: Math.round((b70to84Count / totalEnr) * 100),
+              color: '#10B981',
+              sampleNote: 'Nắm vững kiến thức trọng tâm và vượt mốc mở khóa buổi tiếp theo.',
+            },
+            {
+              rangeLabel: '85 - 100',
+              bandTitle: 'Xuất sắc',
+              studentCount: above85Count,
+              percentage: Math.round((above85Count / totalEnr) * 100),
+              color: 'emerald-gradient',
+              sampleNote: 'Hoàn thành xuất sắc cả câu hỏi kiến trúc hệ thống và tối ưu hiệu năng.',
+            },
+          ];
 
           // 3. Gom nhóm trực tiếp từ chat_messages.detectedTopic kết hợp discussion_threads
           const detectedTopicCounts = chatMessagesState.reduce<Record<string, number>>(
@@ -2667,15 +2638,15 @@ export const InstructorPortalView: React.FC = () => {
                         Điểm TB toàn lớp
                       </div>
                       <div className="text-base font-bold font-mono text-[#10B981] mt-0.5">
-                        {isK01 ? '81.4 / 100' : '79.2 / 100'}
+                        {avgClassScore} / 100
                       </div>
                     </div>
                     <div className="p-3 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
                       <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                        Vượt qua lần 1
+                        Tỷ lệ đạt chuẩn
                       </div>
                       <div className="text-base font-bold font-mono text-[#0F172A] dark:text-white mt-0.5">
-                        {isK01 ? '86%' : '85%'}
+                        {passRatePct}%
                       </div>
                     </div>
                     <div className="p-3 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
@@ -2683,7 +2654,7 @@ export const InstructorPortalView: React.FC = () => {
                         Đủ điều kiện thi
                       </div>
                       <div className="text-base font-bold font-mono text-[#059669] dark:text-[#34D399] mt-0.5">
-                        {isK01 ? '41 / 48 HV' : '29 / 34 HV'}
+                        {eligibleCount} / {effectiveEnrollments.length} HV
                       </div>
                     </div>
                   </div>

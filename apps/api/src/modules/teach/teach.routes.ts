@@ -20,6 +20,7 @@ import {
   userProfiles,
   accounts,
   skills,
+  chatSessions,
   chatMessages,
 } from '../../db/schema/index.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
@@ -57,7 +58,7 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
-async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
+export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
   const [allEnr, allProfiles, allAccounts, allCohorts, allSessions, allProgress, allAttempts] =
     await Promise.all([
       cohortFilterIds && cohortFilterIds.length > 0
@@ -80,7 +81,7 @@ async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
     const acc = accountMap.get(enr.accountId);
     const cohort = cohortMap.get(enr.cohortId);
     const cSessions = allSessions.filter((s) => s.cohortId === enr.cohortId);
-    const totalSessionsCount = cSessions.length || 6;
+    const totalSessionsCount = cSessions.length || 1;
     const completedProg = allProgress.filter(
       (p) =>
         p.accountId === enr.accountId &&
@@ -97,20 +98,17 @@ async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
         ? Math.round(
             stuAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / stuAttempts.length
           )
-        : enr.riskLevel === 'HIGH'
-          ? 52
-          : enr.riskLevel === 'MEDIUM'
-            ? 68
-            : 88;
+        : 0;
 
     return {
       id: String(enr.id),
+      userId: String(enr.accountId),
       accountId: String(enr.accountId),
-      studentName: prof?.fullName || acc?.email || 'Học viên 3T',
-      studentEmail: acc?.email || 'student@3t.edu.vn',
+      studentName: prof?.fullName || acc?.email || '',
+      studentEmail: acc?.email || '',
       avatarUrl: prof?.avatarUrl,
       cohortId: String(enr.cohortId),
-      cohortCode: cohort?.code || 'AI-ENG-2026-K01',
+      cohortCode: cohort?.code || '',
       status: enr.status,
       progressPercent,
       completedSessionsCount,
@@ -169,30 +167,42 @@ async function buildFormattedDiscussionsForSessions(sessionsList: Array<typeof c
     const threadPosts = posts.filter((p) => p.threadId === t.id);
     const firstUserPost = threadPosts.find((p) => !p.isAiGenerated);
     const aiPost = threadPosts.find((p) => p.isAiGenerated);
+    const tsSec = t.videoTimestampSec ?? 0;
 
     return {
       id: String(t.id),
+      cohortId: sess ? String(sess.cohortId) : '',
       sessionId: String(t.sessionId),
-      sessionTitle: sess ? `Buổi ${sess.sessionOrder}: ${sess.title}` : 'Buổi 4: Xây dựng luồng Hybrid RAG',
-      authorName: t.authorName || 'Nguyễn Văn An',
+      sessionOrder: sess?.sessionOrder ?? 1,
+      sessionTitle: sess ? `Buổi ${sess.sessionOrder}: ${sess.title}` : '',
+      authorName: t.authorName || '',
       title: t.title,
+      questionTitle: t.title,
+      questionBody: firstUserPost?.contentMd || t.title,
       contentMd: firstUserPost?.contentMd || t.title,
-      videoTimestampSec: t.videoTimestampSec ?? 10,
-      timestampSec: t.videoTimestampSec ?? 10,
-      timestampLabel: formatSecondsToMmSs(t.videoTimestampSec ?? 10),
+      videoTimestampSec: tsSec,
+      timestampSec: tsSec,
+      timestampLabel: formatSecondsToMmSs(tsSec),
       isResolved: t.isResolved,
       createdAt: t.createdAt.toISOString(),
       aiSuggestedAnswer: aiPost?.contentMd,
+      hasAiSuggestion: Boolean(aiPost),
       verifiedByStaff: Boolean(aiPost?.isInstructorVerified || t.isResolved),
       replies: threadPosts.map((p) => ({
         id: String(p.id),
-        authorName: p.isAiGenerated
-          ? 'Trợ giảng AI 3T (RAG)'
-          : p.authorName || 'TS. Trần Minh Khoa',
+        authorName: p.isAiGenerated ? 'Trợ giảng AI 3T (RAG)' : p.authorName || '',
+        authorRole: (p.isAiGenerated
+          ? 'AI_TUTOR'
+          : p.authorRole === 'INSTRUCTOR' || p.authorRole === 'ADMIN'
+            ? 'INSTRUCTOR'
+            : 'STUDENT') as 'STUDENT' | 'INSTRUCTOR' | 'AI_TUTOR',
         role: p.isAiGenerated ? 'AI_TUTOR' : p.authorRole || 'INSTRUCTOR',
+        content: p.contentMd,
         contentMd: p.contentMd,
         isAiGenerated: p.isAiGenerated,
         isInstructorVerified: p.isInstructorVerified,
+        isVerifiedByStaff: p.isInstructorVerified,
+        isOfficialVerify: p.isInstructorVerified,
         createdAt: p.createdAt.toISOString(),
       })),
     };
@@ -206,6 +216,7 @@ function mapAssessmentItemsToMcq(
   return items.map((item, idx) => {
     const pCfg = (item.promptConfig || {}) as {
       number?: number;
+      scenarioTag?: string;
       prompt?: string;
       question?: string;
       options?: string[];
@@ -223,18 +234,18 @@ function mapAssessmentItemsToMcq(
     return {
       id: String(item.id),
       number: pCfg.number ?? item.itemOrder ?? idx + 1,
+      scenarioTag: pCfg.scenarioTag || 'Câu hỏi thực chiến',
       skillId: String(item.skillId),
-      skillName: sk?.name || 'Xây dựng luồng Hybrid RAG',
+      skillCode: sk?.code || String(item.skillId),
+      skillName: sk?.name || '',
       prompt: pCfg.prompt || pCfg.question || '',
       options: Array.isArray(pCfg.options) ? pCfg.options : [],
       correctIndex: gCfg.correctIndex ?? 0,
-      explanation:
-        item.explanationMd ||
-        'Xem lại đoạn bài giảng tương ứng để nắm vững kiến thức trọng tâm.',
+      explanation: item.explanationMd || '',
       reviewTimestampLabel: gCfg.reviewTimestampLabel || '00:10 — 00:25',
       reviewJumpSec: jumpSec,
       reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec || [jumpSec, jumpSec + 15],
-      slideLabel: pCfg.slideLabel || 'Slide Trang 8',
+      slideLabel: pCfg.slideLabel || '',
     };
   });
 }
@@ -249,12 +260,15 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       allCohorts,
       allCourses,
       allAttachments,
+      allAssessments,
       allAttempts,
       allProcEvents,
       allProfiles,
       allAccounts,
+      allChatSessions,
       allChatMsgs,
       allNotifs,
+      getStaffForInstructor,
     ] = await Promise.all([
       req.user!.role === 'ADMIN'
         ? db.select().from(classSessions).orderBy(asc(classSessions.sessionOrder))
@@ -266,12 +280,15 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       db.select().from(cohorts),
       db.select().from(courses),
       db.select().from(sessionAttachments),
+      db.select().from(assessments),
       db.select().from(assessmentAttempts).orderBy(desc(assessmentAttempts.submittedAt)),
       db.select().from(proctoringEvents).orderBy(asc(proctoringEvents.occurredAt)),
       db.select().from(userProfiles),
       db.select().from(accounts),
+      db.select().from(chatSessions),
       db.select().from(chatMessages).orderBy(desc(chatMessages.createdAt)),
       db.select().from(notifications).orderBy(desc(notifications.createdAt)),
+      buildInstructorStaffMap(),
     ]);
 
     const sessions =
@@ -281,28 +298,47 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
 
     const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
+    const assessmentMap = new Map(allAssessments.map((a) => [a.id, a]));
     const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
     const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
+    const chatSessionMap = new Map(allChatSessions.map((cs) => [cs.id, cs]));
 
     const formattedSessions = sessions.map((s) => {
       const cohort = cohortMap.get(s.cohortId);
       const course = cohort ? courseMap.get(cohort.courseId) : undefined;
+      const staffInfo = getStaffForInstructor(s.instructorId);
+      const sessAttachments = allAttachments.filter((att) => att.sessionId === s.id);
+      const sessQuiz = allAssessments.find((a) => a.sessionId === s.id);
+
       return {
         id: String(s.id),
         cohortId: String(s.cohortId),
-        cohortCode: cohort?.code || 'AI-ENG-2026-K01',
-        courseTitle: course?.title || cohort?.name || 'Kỹ Sư AI Thực Chiến',
+        cohortCode: cohort?.code || '',
+        courseTitle: course?.title || cohort?.name || '',
         sessionOrder: s.sessionOrder,
         title: s.title,
         descriptionMd: s.descriptionMd || '',
-        activityTags: s.activityTags || ['BÀI GIẢNG VIDEO', 'TRẮC NGHIỆM'],
-        status: s.status,
+        activityTags: (s.activityTags || ['THEORY', 'LIVE_CODING']) as Array<
+          'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
+        >,
+        hostInstructorName: staffInfo.instructorName,
+        status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
         scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
         scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
+        videoR2Key: s.videoR2Key || '',
+        videoProvider: (s.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
         durationSeconds: s.durationSeconds || 5400,
         durationMinutes: Math.round((s.durationSeconds || 5400) / 60),
+        isCompleted: false,
+        lastPositionSec: 0,
         aiSummaryMd: s.aiSummaryMd || '',
-        hasQuiz: true,
+        attachmentsCount: sessAttachments.length,
+        assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
+        hasQuiz: Boolean(sessQuiz),
+        quizStatus: 'NOT_STARTED' as const,
+        quizScore: null,
+        quizQuestions: [],
+        aiCitations: [],
         guestJoinUrl:
           s.status === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
       };
@@ -312,56 +348,48 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       formattedSessions.find((s) => s.status === 'LIVE') || formattedSessions[0] || null;
     const upcomingSessions = formattedSessions.filter((s) => s.status === 'SCHEDULED');
 
-    // Build examReviews (ExamCameraReviewItem[]) from assessmentAttempts + proctoringEvents
     const examReviews = allAttempts.map((att) => {
       const stuProf = profileMap.get(att.accountId);
       const stuAcc = accountMap.get(att.accountId);
+      const ass = assessmentMap.get(att.assessmentId);
+      const cohort = ass ? cohortMap.get(ass.cohortId) : undefined;
       const evts = allProcEvents.filter((e) => e.attemptId === att.id);
+      const firstEvt = evts[0];
+      const scorePct = Math.round(Number(att.scorePct ?? 0));
+      const scoreOutOf10 = (scorePct / 10).toFixed(1);
 
-      const isFlagged =
-        att.integrityStatus === 'FLAGGED' || att.integrityStatus === 'CONFIRMED_CHEAT';
+      const decision: 'PENDING' | 'APPROVED' | 'RETAKE_REQUIRED' =
+        att.integrityStatus === 'CLEARED_BY_INSTRUCTOR'
+          ? 'APPROVED'
+          : att.integrityStatus === 'CONFIRMED_CHEAT'
+            ? 'RETAKE_REQUIRED'
+            : 'PENDING';
+
+      const cameraFlagReason =
+        att.verdictNote ||
+        (firstEvt
+          ? (firstEvt.details as { note?: string })?.note ||
+            `Cảnh báo ${firstEvt.eventType} (+${firstEvt.riskDelta} điểm rủi ro)`
+          : 'Không phát hiện bất thường.');
 
       return {
         id: String(att.id),
         attemptId: String(att.id),
-        studentName: stuProf?.fullName || stuAcc?.email || 'Trần Minh Quân',
-        studentEmail: stuAcc?.email || 'quan.tran@gmail.com',
-        cohortCode: 'AI-ENG-2026-K01',
-        examTitle: 'Kỳ Thi Cuối Khóa — Kỹ Sư AI Thực Chiến (K01)',
+        studentName: stuProf?.fullName || stuAcc?.email || '',
+        studentEmail: stuAcc?.email || '',
+        cohortCode: cohort?.code || '',
+        examTitle: ass?.title || '',
+        mcqScore: `${scoreOutOf10}/10 (${scorePct}%)`,
         submittedAt: (att.submittedAt || att.startedAt).toLocaleString('vi-VN'),
-        scorePercent: Math.round(Number(att.scorePct ?? 72)),
+        scorePercent: scorePct,
         totalRiskScore: Number(att.totalRiskScore ?? 0),
         integrityStatus: att.integrityStatus,
-        aiFlagged: isFlagged,
-        flagReason:
-          att.verdictNote ||
-          (evts.length > 0
-            ? 'Phát hiện 2 khuôn mặt trong khung hình ở phút 14 và chuyển tab trình duyệt.'
-            : 'Không phát hiện bất thường.'),
-        verdictNote: att.verdictNote || undefined,
-        snapshots: [
-          {
-            id: `snap-${att.id}-1`,
-            timeLabel: '05:12',
-            imageUrl:
-              'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-            status: 'NORMAL',
-            note: 'Khuôn mặt chính diện khớp hồ sơ gốc',
-          },
-          ...(evts.length > 0
-            ? evts.map((ev, idx) => ({
-                id: `snap-${att.id}-ev-${idx}`,
-                timeLabel: formatSecondsToMmSs(ev.videoOffsetSec ?? 840),
-                imageUrl:
-                  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-                status: 'WARNING',
-                eventType: ev.eventType,
-                note:
-                  (ev.details as { note?: string })?.note ||
-                  `Cảnh báo ${ev.eventType} (+${ev.riskDelta} điểm rủi ro)`,
-              }))
-            : []),
-        ],
+        cameraFlagReason,
+        cameraTimestamp: firstEvt
+          ? formatSecondsToMmSs(firstEvt.videoOffsetSec ?? 0)
+          : '00:00',
+        snapshotNote: cameraFlagReason,
+        decision,
       };
     });
 
@@ -370,16 +398,20 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
 
     const formattedMaterials = allAttachments.map((att) => {
       const sess = sessions.find((s) => s.id === att.sessionId);
+      const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+      const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
       return {
         id: String(att.id),
-        cohortId: String(sess?.cohortId ?? 1),
+        cohortId: String(sess?.cohortId ?? ''),
         sessionId: String(att.sessionId),
         sessionOrder: sess?.sessionOrder ?? 1,
         title: att.fileName,
         fileName: att.fileName,
-        fileType: inferMaterialFileType(att.fileName, att.mimeType),
+        fileType,
+        type: fileType,
         mimeType: att.mimeType,
-        sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+        fileSize: sizeStr,
+        sizeLabel: sizeStr,
         fileSizeBytes: att.fileSizeBytes,
         downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
         updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
@@ -392,25 +424,52 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       allSessions: formattedSessions,
       examReviews,
       enrollments: formattedEnrollments,
-      chatMessages: allChatMsgs.map((m) => ({
-        id: String(m.id),
-        chatSessionId: String(m.chatSessionId),
-        role: m.role,
-        content: m.content,
-        detectedTopic: m.detectedTopic || undefined,
-        createdAt: m.createdAt.toISOString(),
-      })),
-      notifications: allNotifs.map((n) => ({
-        id: String(n.id),
-        recipientId: String(n.recipientId),
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        isRead: n.isRead,
-        readAt: n.readAt ? n.readAt.toISOString() : undefined,
-        actedAt: n.actedAt ? n.actedAt.toISOString() : undefined,
-        createdAt: n.createdAt.toISOString(),
-      })),
+      chatMessages: allChatMsgs.map((m) => {
+        const cs = chatSessionMap.get(m.chatSessionId);
+        const stuProf = cs?.accountId ? profileMap.get(cs.accountId) : undefined;
+        return {
+          id: String(m.id),
+          chatSessionId: String(m.chatSessionId),
+          sessionId: cs?.sessionId ? String(cs.sessionId) : '',
+          cohortId: cs?.cohortId ? String(cs.cohortId) : '',
+          userId: cs?.accountId ? String(cs.accountId) : '',
+          studentName: stuProf?.fullName || '',
+          senderRole: (m.role === 'assistant' ? 'AI_TUTOR' : 'STUDENT') as
+            | 'STUDENT'
+            | 'AI_TUTOR',
+          role: m.role,
+          content: m.content,
+          detectedTopic: m.detectedTopic || null,
+          latencyMs: m.latencyMs ?? null,
+          tokensUsed: m.promptTokens && m.completionTokens ? m.promptTokens + m.completionTokens : null,
+          createdAt: m.createdAt.toISOString(),
+        };
+      }),
+      notifications: allNotifs.map((n) => {
+        const stuProf = profileMap.get(n.recipientId);
+        const meta = (n.metadata || {}) as { cohortId?: number | string };
+        const cohort = meta.cohortId ? cohortMap.get(Number(meta.cohortId)) : undefined;
+        return {
+          id: String(n.id),
+          userId: String(n.recipientId),
+          recipientId: String(n.recipientId),
+          studentName: stuProf?.fullName || '',
+          cohortId: cohort ? String(cohort.id) : '',
+          cohortCode: cohort?.code || '',
+          type: (n.type === 'INSTRUCTOR_REMINDER' ? 'AI_STUDY_REMINDER' : n.type) as
+            | 'AI_STUDY_REMINDER'
+            | 'QUIZ_DEADLINE'
+            | 'SYSTEM',
+          title: n.title,
+          message: n.body,
+          body: n.body,
+          isRead: n.isRead,
+          sentAt: n.createdAt.toISOString(),
+          readAt: n.readAt ? n.readAt.toISOString() : null,
+          actedAt: n.actedAt ? n.actedAt.toISOString() : null,
+          createdAt: n.createdAt.toISOString(),
+        };
+      }),
       discussions: formattedDiscussions,
       materials: formattedMaterials,
     });
@@ -444,7 +503,8 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
         return {
           id: String(ch.id),
           courseId: String(ch.courseId),
-          courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+          instructorId: String(ch.instructorId),
+          courseSlug: course?.slug || '',
           courseTitle: course?.title || ch.name,
           code: ch.code,
           name: ch.name,
@@ -453,7 +513,7 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
           techStackNotes: ch.techStackNotes,
           tuitionVnd: ch.tuitionVnd,
           enrolledCount: ch.enrolledCount,
-          enrollmentOpenAt: ch.enrollmentOpenAt,
+          enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
           startDate: ch.startDate,
           endDate: ch.endDate,
           scheduleLabel: labels.scheduleLabel,
@@ -471,7 +531,7 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
   }
 });
 
-// 7.3 GET /teach/cohorts/:cohortId (Level 2 Cohort Management Workspace)
+// 7.3 GET /teach/cohorts/:cohortId
 teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
   try {
     const cohort = await resolveCohort(req.params.cohortId);
@@ -533,7 +593,8 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       cohort: {
         id: String(cohort.id),
         courseId: String(cohort.courseId),
-        courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+        instructorId: String(cohort.instructorId),
+        courseSlug: course?.slug || '',
         courseTitle: course?.title || cohort.name,
         code: cohort.code,
         name: cohort.name,
@@ -542,7 +603,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
         techStackNotes: cohort.techStackNotes,
         tuitionVnd: cohort.tuitionVnd,
         enrolledCount: cohort.enrolledCount,
-        enrollmentOpenAt: cohort.enrollmentOpenAt,
+        enrollmentOpenAt: cohort.enrollmentOpenAt.toISOString(),
         startDate: cohort.startDate,
         endDate: cohort.endDate,
         scheduleLabel: labels.scheduleLabel,
@@ -555,24 +616,39 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       },
       sessions: sessions.map((s) => {
         const sessQuiz = cohortAssessments.find((a) => a.sessionId === s.id);
+        const sessAttachments = attachments.filter((att) => att.sessionId === s.id);
         return {
           id: String(s.id),
           cohortId: String(s.cohortId),
           sessionOrder: s.sessionOrder,
           title: s.title,
           descriptionMd: s.descriptionMd || '',
-          activityTags: s.activityTags || ['BÀI GIẢNG VIDEO', 'TRẮC NGHIỆM'],
-          status: s.status,
+          activityTags: (s.activityTags || ['THEORY', 'LIVE_CODING']) as Array<
+            'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
+          >,
+          hostInstructorName: staffInfo.instructorName,
+          status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
           scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
           scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
+          videoR2Key: s.videoR2Key || '',
+          videoProvider: (s.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
           durationSeconds: s.durationSeconds || 5400,
           durationMinutes: Math.round((s.durationSeconds || 5400) / 60),
+          isCompleted: false,
+          lastPositionSec: 0,
           aiSummaryMd: s.aiSummaryMd || '',
+          attachmentsCount: sessAttachments.length,
+          assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
           hasQuiz: Boolean(sessQuiz),
           quizId: sessQuiz ? String(sessQuiz.id) : undefined,
           quizPublishStatus: sessQuiz?.status || 'PUBLISHED',
+          quizStatus: 'NOT_STARTED' as const,
+          quizScore: null,
+          quizQuestions: [],
+          aiCitations: [],
         };
       }),
+      finalExamAssessmentId: finalExam ? String(finalExam.id) : undefined,
       finalExamId: finalExam ? String(finalExam.id) : undefined,
       finalExamPublishStatus: finalExam?.status || 'PUBLISHED',
       finalExamQuestions: mapAssessmentItemsToMcq(finalExamItems, skillMap),
@@ -580,6 +656,8 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       discussions,
       materials: attachments.map((att) => {
         const sess = sessions.find((s) => s.id === att.sessionId);
+        const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+        const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
         return {
           id: String(att.id),
           cohortId: String(cohort.id),
@@ -587,9 +665,11 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
           sessionOrder: sess?.sessionOrder ?? 1,
           title: att.fileName,
           fileName: att.fileName,
-          fileType: inferMaterialFileType(att.fileName, att.mimeType),
+          fileType,
+          type: fileType,
           mimeType: att.mimeType,
-          sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+          fileSize: sizeStr,
+          sizeLabel: sizeStr,
           fileSizeBytes: att.fileSizeBytes,
           downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
           updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
@@ -607,7 +687,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
   }
 });
 
-// 7.4 GET /teach/cohorts/:cohortId/sessions/:sessionId (Level 3 Session Editor)
+// 7.4 GET /teach/cohorts/:cohortId/sessions/:sessionId
 teachRouter.get(
   '/teach/cohorts/:cohortId/sessions/:sessionId',
   async (req, res, next) => {
@@ -628,20 +708,23 @@ teachRouter.get(
         return;
       }
 
-      const [attachments, [quiz], allSkills, discussions] = await Promise.all([
-        db
-          .select()
-          .from(sessionAttachments)
-          .where(eq(sessionAttachments.sessionId, session.id)),
-        db
-          .select()
-          .from(assessments)
-          .where(eq(assessments.sessionId, session.id))
-          .limit(1),
-        db.select().from(skills),
-        buildFormattedDiscussionsForSessions([session]),
-      ]);
+      const [attachments, [quiz], allSkills, discussions, getStaffForInstructor] =
+        await Promise.all([
+          db
+            .select()
+            .from(sessionAttachments)
+            .where(eq(sessionAttachments.sessionId, session.id)),
+          db
+            .select()
+            .from(assessments)
+            .where(eq(assessments.sessionId, session.id))
+            .limit(1),
+          db.select().from(skills),
+          buildFormattedDiscussionsForSessions([session]),
+          buildInstructorStaffMap(),
+        ]);
 
+      const staffInfo = getStaffForInstructor(session.instructorId);
       const skillMap = new Map(allSkills.map((s) => [s.id, s]));
       const quizItems = quiz
         ? await db
@@ -652,20 +735,26 @@ teachRouter.get(
         : [];
 
       const questions = mapAssessmentItemsToMcq(quizItems, skillMap);
-      const materials = attachments.map((att) => ({
-        id: String(att.id),
-        cohortId: String(session.cohortId),
-        sessionId: String(session.id),
-        sessionOrder: session.sessionOrder,
-        title: att.fileName,
-        fileName: att.fileName,
-        fileType: inferMaterialFileType(att.fileName, att.mimeType),
-        mimeType: att.mimeType,
-        sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
-        fileSizeBytes: att.fileSizeBytes,
-        downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
-        updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
-      }));
+      const materials = attachments.map((att) => {
+        const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+        const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+        return {
+          id: String(att.id),
+          cohortId: String(session.cohortId),
+          sessionId: String(session.id),
+          sessionOrder: session.sessionOrder,
+          title: att.fileName,
+          fileName: att.fileName,
+          fileType,
+          type: fileType,
+          mimeType: att.mimeType,
+          fileSize: sizeStr,
+          sizeLabel: sizeStr,
+          fileSizeBytes: att.fileSizeBytes,
+          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+          updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
+        };
+      });
 
       res.json({
         session: {
@@ -674,15 +763,29 @@ teachRouter.get(
           sessionOrder: session.sessionOrder,
           title: session.title,
           descriptionMd: session.descriptionMd || '',
-          activityTags: session.activityTags || ['BÀI GIẢNG VIDEO', 'TRẮC NGHIỆM'],
-          status: session.status,
+          activityTags: (session.activityTags || ['THEORY', 'LIVE_CODING']) as Array<
+            'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
+          >,
+          hostInstructorName: staffInfo.instructorName,
+          status: session.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
           scheduledStart: session.scheduledStart ? session.scheduledStart.toISOString() : '',
           scheduledEnd: session.scheduledEnd ? session.scheduledEnd.toISOString() : '',
+          videoR2Key: session.videoR2Key || '',
+          videoProvider: (session.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
           durationSeconds: session.durationSeconds || 5400,
           durationMinutes: Math.round((session.durationSeconds || 5400) / 60),
+          isCompleted: false,
+          lastPositionSec: 0,
           aiSummaryMd: session.aiSummaryMd || '',
+          attachmentsCount: materials.length,
+          assessmentId: quiz ? String(quiz.id) : undefined,
           quizId: quiz ? String(quiz.id) : undefined,
+          quizStatus: 'NOT_STARTED' as const,
+          quizScore: null,
+          quizQuestions: [],
+          aiCitations: [],
         },
+        assessmentId: quiz ? String(quiz.id) : undefined,
         attachments: materials,
         materials,
         quiz: quiz ? { ...quiz, id: String(quiz.id) } : null,
@@ -778,16 +881,20 @@ teachRouter.put(
           .returning();
 
         if (att) {
+          const resolvedFileType = fileType || inferMaterialFileType(att.fileName, att.mimeType);
+          const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
           createdMaterial = {
             id: String(att.id),
-            cohortId: String(updatedSession?.cohortId ?? session?.cohortId ?? 1),
+            cohortId: String(updatedSession?.cohortId ?? session?.cohortId ?? ''),
             sessionId: String(sessionId),
             sessionOrder: updatedSession?.sessionOrder ?? session?.sessionOrder ?? 1,
             title: att.fileName,
             fileName: att.fileName,
-            fileType: fileType || inferMaterialFileType(att.fileName, att.mimeType),
+            fileType: resolvedFileType,
+            type: resolvedFileType,
             mimeType: att.mimeType,
-            sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+            fileSize: sizeStr,
+            sizeLabel: sizeStr,
             fileSizeBytes: att.fileSizeBytes,
             downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
             updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
@@ -876,13 +983,14 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
     try {
       await aiServiceClient.generateQuizDraft(session.id);
     } catch {
-      // Use structured items from DB or default 10-question draft
+      // Keep items from DB
     }
 
     const formattedItems = mapAssessmentItemsToMcq(existingItems, skillMap);
 
     res.json({
       assessmentId: String(quiz.id),
+      sessionId: String(session.id),
       status: quiz.status,
       generatedCount: formattedItems.length,
       items: formattedItems,
@@ -894,7 +1002,7 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
 
 // 7.7 PUT /teach/assessments/:assessmentId/publish
 const publishAssessmentSchema = z.object({
-  status: z.enum(['DRAFT', 'PUBLISHED']),
+  status: z.enum(['DRAFT', 'PUBLISHED']).default('PUBLISHED'),
   passScorePct: z.number().int().min(50).max(100).optional(),
   durationMinutes: z.number().int().positive().optional(),
   items: z
@@ -902,7 +1010,9 @@ const publishAssessmentSchema = z.object({
       z.object({
         id: z.union([z.string(), z.number()]).optional(),
         number: z.number().int().optional(),
+        scenarioTag: z.string().optional(),
         skillId: z.union([z.string(), z.number()]).optional(),
+        skillCode: z.string().optional(),
         skillName: z.string().optional(),
         prompt: z.string(),
         options: z.array(z.string()),
@@ -950,7 +1060,6 @@ teachRouter.put(
         .where(eq(assessments.id, assessment.id))
         .returning();
 
-      // If instructor edited MCQs in the UI and sent items, update existing items in DB
       if (Array.isArray(items) && items.length > 0) {
         const existingDbItems = await db
           .select()
@@ -967,9 +1076,10 @@ teachRouter.put(
               .set({
                 promptConfig: {
                   number: itemPayload.number ?? idx + 1,
+                  scenarioTag: itemPayload.scenarioTag,
                   prompt: itemPayload.prompt,
                   options: itemPayload.options,
-                  slideLabel: itemPayload.slideLabel || 'Slide Trang 8',
+                  slideLabel: itemPayload.slideLabel || '',
                 },
                 gradingConfig: {
                   correctIndex: itemPayload.correctIndex,
@@ -987,8 +1097,10 @@ teachRouter.put(
       res.json({
         assessmentId: String(updated!.id),
         status: updated!.status,
+        publishedCount: items?.length ?? 0,
+        itemsCount: items?.length ?? 0,
+        publishedAt: updated!.updatedAt.toISOString(),
         updatedAt: updated!.updatedAt.toISOString(),
-        itemsCount: items?.length,
       });
     } catch (err) {
       next(err);
@@ -1000,7 +1112,7 @@ teachRouter.put(
 const guestLinkSchema = z.object({
   guestDisplayName: z.string().min(2).default('Chuyên gia Khách mời Doanh nghiệp'),
   guestRoleHeadline: z.string().optional(),
-  expiresInMinutes: z.number().int().min(15).max(360).default(180),
+  expiresInMinutes: z.number().int().min(15).max(360).default(240),
 });
 
 teachRouter.post(
@@ -1009,14 +1121,26 @@ teachRouter.post(
   async (req, res, next) => {
     try {
       const session = await resolveSession(req.params.sessionId);
-      const sessionId = session?.id ?? 4;
-      const cohortId = session?.cohortId ?? 1;
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+          error: {
+            code: 'SESSION_NOT_FOUND',
+            message: 'Không tìm thấy buổi học',
+          },
+        });
+        return;
+      }
+
       const { guestDisplayName, guestRoleHeadline, expiresInMinutes } = req.body;
 
       const inviteToken = jwt.sign(
         {
-          sessionId,
-          cohortId,
+          sessionId: session.id,
+          cohortId: session.cohortId,
           guestDisplayName,
           guestRoleHeadline: guestRoleHeadline || 'Diễn giả Khách mời Doanh nghiệp',
           role: 'GUEST_SPEAKER',
@@ -1025,11 +1149,14 @@ teachRouter.post(
         { expiresIn: `${expiresInMinutes}m` }
       );
 
+      const url = `https://3t.edu.vn/live/guest/${session.id}?token=${inviteToken}`;
       res.json({
-        sessionId: String(sessionId),
-        cohortId: String(cohortId),
-        guestJoinUrl: `https://3t.edu.vn/live/guest/${sessionId}?token=${inviteToken}`,
+        sessionId: String(session.id),
+        cohortId: String(session.cohortId),
+        oneTimeGuestUrl: url,
+        guestJoinUrl: url,
         inviteToken,
+        expiresInHours: Math.round(expiresInMinutes / 60),
         expiresInMinutes,
       });
     } catch (err) {
@@ -1067,7 +1194,6 @@ teachRouter.post(
           });
         }
 
-        // Always mark any AI-generated post in this thread as verified by instructor
         await tx
           .update(discussionPosts)
           .set({
@@ -1085,11 +1211,31 @@ teachRouter.post(
         }
       });
 
+      const [threadRow] = await db
+        .select()
+        .from(discussionThreads)
+        .where(eq(discussionThreads.id, threadId))
+        .limit(1);
+
+      let updatedThread: unknown;
+      if (threadRow) {
+        const [sess] = await db
+          .select()
+          .from(classSessions)
+          .where(eq(classSessions.id, threadRow.sessionId))
+          .limit(1);
+        if (sess) {
+          const allFormatted = await buildFormattedDiscussionsForSessions([sess]);
+          updatedThread = allFormatted.find((t) => t.id === String(threadId));
+        }
+      }
+
       res.json({
         threadId: String(threadId),
         verifiedByStaff: true,
         isResolved: markResolved,
         repliedAt: new Date().toISOString(),
+        thread: updatedThread,
       });
     } catch (err) {
       next(err);
@@ -1097,8 +1243,8 @@ teachRouter.post(
   }
 );
 
-// 7.10 POST /teach/enrollments/:enrollmentId/remind
-teachRouter.post('/teach/enrollments/:enrollmentId/remind', async (req, res, next) => {
+// 7.10 POST /teach/enrollments/:enrollmentId/remind & /teach/enrollments/:enrollmentId/ai-reminder
+async function handleSendEnrollmentReminder(req: any, res: any, next: any) {
   try {
     const enrollmentId = Number(req.params.enrollmentId);
     const [enrollment] = await db
@@ -1122,23 +1268,38 @@ teachRouter.post('/teach/enrollments/:enrollmentId/remind', async (req, res, nex
     }
 
     const now = new Date();
+    const title = 'Nhắc nhở tiến độ học tập từ Giảng viên';
+    const message =
+      'Giảng viên phụ trách lớp nhắc bạn hoàn thành bài kiểm tra trắc nghiệm và xem lại các đoạn video bài giảng còn thiếu trong tuần này.';
+
+    let createdNotifId = '';
     await db.transaction(async (tx) => {
       await tx
         .update(enrollments)
         .set({ lastRemindedAt: now })
         .where(eq(enrollments.id, enrollmentId));
 
-      await tx.insert(notifications).values({
-        recipientId: enrollment.accountId,
-        type: 'INSTRUCTOR_REMINDER',
-        title: 'Nhắc nhở tiến độ học tập từ Giảng viên',
-        body: 'Thầy Trần Minh Khoa nhắc bạn hoàn thành bài kiểm tra trắc nghiệm và xem lại các đoạn video bài giảng còn thiếu trong tuần này nhé!',
-        metadata: { enrollmentId, cohortId: enrollment.cohortId },
-      });
+      const [notif] = await tx
+        .insert(notifications)
+        .values({
+          recipientId: enrollment.accountId,
+          type: 'INSTRUCTOR_REMINDER',
+          title,
+          body: message,
+          metadata: { enrollmentId, cohortId: enrollment.cohortId },
+        })
+        .returning();
+      createdNotifId = String(notif?.id ?? Date.now());
     });
 
     res.json({
+      notificationId: createdNotifId,
+      userId: String(enrollment.accountId),
       enrollmentId: String(enrollmentId),
+      type: 'AI_STUDY_REMINDER',
+      title,
+      message,
+      createdAt: now.toISOString(),
       remindedAt: now.toLocaleString('vi-VN'),
       remindedAtIso: now.toISOString(),
       notificationCreated: true,
@@ -1146,9 +1307,56 @@ teachRouter.post('/teach/enrollments/:enrollmentId/remind', async (req, res, nex
   } catch (err) {
     next(err);
   }
+}
+
+teachRouter.post('/teach/enrollments/:enrollmentId/remind', handleSendEnrollmentReminder);
+teachRouter.post('/teach/enrollments/:enrollmentId/ai-reminder', handleSendEnrollmentReminder);
+
+// 7.11 PUT /teach/exam-reviews/:reviewId & POST /teach/proctoring/:attemptId/verdict
+const examReviewDecisionSchema = z.object({
+  decision: z.enum(['APPROVED', 'RETAKE_REQUIRED']),
+  note: z.string().optional(),
 });
 
-// 7.11 POST /teach/proctoring/:attemptId/verdict
+teachRouter.put(
+  '/teach/exam-reviews/:reviewId',
+  validate(examReviewDecisionSchema),
+  async (req, res, next) => {
+    try {
+      const attemptId = Number(req.params.reviewId);
+      const { decision, note } = req.body;
+      const verdict =
+        decision === 'APPROVED' ? 'CLEARED_BY_INSTRUCTOR' : 'CONFIRMED_CHEAT';
+
+      const [updated] = await db
+        .update(assessmentAttempts)
+        .set({
+          integrityStatus: verdict,
+          verdictNote:
+            note ||
+            (decision === 'APPROVED'
+              ? 'Đã xác minh hợp lệ bởi Giảng viên'
+              : 'Yêu cầu thi lại do vi phạm quy chế giám sát Camera'),
+          verdictBy: req.user!.id,
+          verdictAt: new Date(),
+          ...(verdict === 'CONFIRMED_CHEAT' ? { scorePct: '0.00', isPassed: false } : {}),
+        })
+        .where(eq(assessmentAttempts.id, attemptId))
+        .returning();
+
+      res.json({
+        reviewId: String(attemptId),
+        attemptId: String(attemptId),
+        decision,
+        integrityStatus: updated?.integrityStatus || verdict,
+        updatedAt: (updated?.verdictAt || new Date()).toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 const verdictSchema = z.object({
   verdict: z.enum(['CONFIRMED_CHEAT', 'CLEARED_BY_INSTRUCTOR']),
   note: z.string().min(3),

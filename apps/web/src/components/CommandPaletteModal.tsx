@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, X, ArrowRight, Layers, BookOpen, ShieldCheck } from 'lucide-react';
+import { Search, X, ArrowRight, BookOpen, ShieldCheck } from 'lucide-react';
 import { useAcademy } from '../context/AcademyContext';
 import { formatVnd, formatScheduleSlots } from '../utils/academyLogic';
 
@@ -10,7 +10,7 @@ export const CommandPaletteModal: React.FC = () => {
     courses,
     cohorts,
     navigate,
-    setRole,
+    role,
     toggleTheme,
   } = useAcademy();
   const [query, setQuery] = useState('');
@@ -36,19 +36,21 @@ export const CommandPaletteModal: React.FC = () => {
   );
 
   const quickZones = [
-    { label: 'Trang Chủ Học Viện', path: '/' },
-    { label: 'Danh Mục & Bộ Lọc Khóa Học', path: '/courses' },
-    { label: 'Về Học Viện & Câu Hỏi Thường Gặp', path: '/about' },
-    { label: 'Trợ Lý Tư Vấn Lộ Trình Học', path: '/advisor' },
-    { label: 'Bằng Tốt Nghiệp & Học Phí Của Tôi', path: '/app' },
-    { label: 'Góc Học Tập Học Viên', path: '/app' },
-    { label: 'Hồ sơ của tôi (Resume cá nhân)', path: '/app/profile-cv' },
-    { label: 'Luyện phỏng vấn (Duyệt CV & Phỏng vấn giọng nói)', path: '/app/mock-interview' },
-    { label: 'Kỹ năng & Tiến độ học tập', path: '/app/progress' },
-    { label: 'Phòng Học Lớp Kỹ Sư AI Khóa K01', path: '/app/cohorts/cohort-ai-k01' },
-    { label: 'Cổng Giảng Dạy Giảng Viên', path: '/teach' },
-    { label: 'Hệ Thống Quản Trị Học Viện', path: '/admin' },
-  ].filter((z) => !q || z.label.toLowerCase().includes(q) || z.path.toLowerCase().includes(q));
+    { label: 'Trang Chủ Học Viện', path: '/', allowedRoles: ['GUEST', 'STUDENT', 'INSTRUCTOR', 'ADMIN'] },
+    { label: 'Danh Mục & Bộ Lọc Khóa Học', path: '/courses', allowedRoles: ['GUEST', 'STUDENT', 'INSTRUCTOR', 'ADMIN'] },
+    { label: 'Về Học Viện & Câu Hỏi Thường Gặp', path: '/about', allowedRoles: ['GUEST', 'STUDENT', 'INSTRUCTOR', 'ADMIN'] },
+    { label: 'Trợ Lý Tư Vấn Lộ Trình Học', path: '/advisor', allowedRoles: ['GUEST', 'STUDENT', 'INSTRUCTOR', 'ADMIN'] },
+    { label: 'Góc Học Tập Học Viên', path: '/app', allowedRoles: ['STUDENT', 'ADMIN'] },
+    { label: 'Hồ sơ của tôi (Resume cá nhân)', path: '/app/profile-cv', allowedRoles: ['STUDENT', 'ADMIN'] },
+    { label: 'Luyện phỏng vấn (Duyệt CV & Phỏng vấn giọng nói)', path: '/app/mock-interview', allowedRoles: ['STUDENT', 'ADMIN'] },
+    { label: 'Kỹ năng & Tiến độ học tập', path: '/app/progress', allowedRoles: ['STUDENT', 'ADMIN'] },
+    { label: 'Cổng Giảng Dạy Giảng Viên', path: '/teach', allowedRoles: ['INSTRUCTOR', 'ADMIN'] },
+    { label: 'Hệ Thống Quản Trị Học Viện', path: '/admin', allowedRoles: ['ADMIN'] },
+  ].filter(
+    (z) =>
+      z.allowedRoles.includes(role) &&
+      (!q || z.label.toLowerCase().includes(q) || z.path.toLowerCase().includes(q))
+  );
 
   const handleSelect = (path: string) => {
     setCommandPaletteOpen(false);
@@ -75,7 +77,7 @@ export const CommandPaletteModal: React.FC = () => {
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Tìm khóa học, mã lớp học (AI-ENG-2026-K01), kỹ năng (Python, Trợ lý AI) hoặc màn hình..."
+            placeholder="Tìm khóa học, mã lớp học, kỹ năng hoặc màn hình..."
             className="w-full bg-transparent text-sm text-[#0F172A] dark:text-[#ECFDF5] placeholder:text-[#475569] dark:placeholder:text-[#94A3B8] focus:outline-none"
           />
           <button
@@ -166,7 +168,7 @@ export const CommandPaletteModal: React.FC = () => {
           {/* Quick Zone Navigation */}
           <div>
             <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8] mb-2">
-              Điều hướng nhanh giữa các Phân khu (Zones 1 – 3)
+              Điều hướng nhanh
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               {quickZones.map((z) => (
@@ -185,25 +187,8 @@ export const CommandPaletteModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Role & Theme Actions */}
-          <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-[#10B981]" />
-              <span className="text-[#475569] dark:text-[#94A3B8]">Đổi nhanh vai trò:</span>
-              {(['GUEST', 'STUDENT', 'INSTRUCTOR', 'ADMIN'] as const).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => {
-                    setRole(r);
-                    setCommandPaletteOpen(false);
-                  }}
-                  className="px-2 py-1 rounded bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] font-mono text-[11px] cursor-pointer"
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
+          {/* Theme Action */}
+          <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => {

@@ -4,9 +4,7 @@ import {
   Check,
   Clock,
   ShieldCheck,
-  Zap,
   AlertCircle,
-  Calendar,
   Download,
   ArrowRight,
   RotateCcw,
@@ -29,7 +27,6 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
   const {
     cohorts,
     courses,
-    enrollInCohort,
     refreshEnrollments,
     currentUser,
     navigate,
@@ -38,8 +35,9 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
 
   const targetCohort =
     cohorts.find((c) => c.code.toLowerCase() === cohortCode.toLowerCase()) ?? cohorts[0];
-  const course =
-    courses.find((cr) => cr.id === targetCohort.courseId) ?? courses[0];
+  const course = targetCohort
+    ? courses.find((cr) => cr.id === targetCohort.courseId) ?? courses[0]
+    : courses[0];
 
   const [paymentState, setPaymentState] = useState<'WAITING' | 'SUCCESS' | 'EXPIRED'>('WAITING');
   const [secondsLeft, setSecondsLeft] = useState<number>(899); // 14:59
@@ -47,40 +45,40 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
   const [receipt, setReceipt] = useState<OrderReceipt | null>(null);
   const [icsDownloaded, setIcsDownloaded] = useState(false);
   const [qrImageError, setQrImageError] = useState(false);
-  const [order, setOrder] = useState<SepayOrderCreatedResponse>({
-    orderCode: 'ET20268891',
-    cohortId: targetCohort.id,
-    cohortCode: targetCohort.code,
-    amountVnd: targetCohort.tuitionVnd,
-    status: 'PENDING',
-    bankName: 'MBBank (Ngân hàng Quân Đội)',
-    accountNumber: '098877665544',
-    accountHolder: 'CONG TY CO PHAN CONG NGHE GIAO DUC 3T ACADEMY',
-    transferContent: 'ET20268891',
-    qrImageUrl: `https://img.vietqr.io/image/MB-098877665544-compact2.png?amount=${targetCohort.tuitionVnd}&addInfo=ET20268891`,
-  });
+  const [order, setOrder] = useState<SepayOrderCreatedResponse | null>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!targetCohort || role !== 'STUDENT') return;
     let active = true;
     const createOrder = async () => {
-      const idempotencyKey = `idem-checkout-${targetCohort.id}`;
-      const created = await orderApi.createCohortOrder(targetCohort.id, idempotencyKey);
-      if (active) {
-        setOrder(created);
+      try {
+        setOrderError(null);
+        const idempotencyKey = `idem-checkout-${targetCohort.id}`;
+        const created = await orderApi.createCohortOrder(targetCohort.id, idempotencyKey);
+        if (active) {
+          setOrder(created);
+        }
+      } catch (err) {
+        if (active) {
+          setOrderError(
+            err instanceof Error ? err.message : 'Không thể khởi tạo đơn thanh toán SePay.'
+          );
+        }
       }
     };
     void createOrder();
     return () => {
       active = false;
     };
-  }, [targetCohort.id]);
+  }, [targetCohort, role]);
 
-  const orderCode = order.orderCode;
-  const accountNumber = order.accountNumber;
-  const accountHolder = order.accountHolder;
+  const orderCode = order?.orderCode || '';
+  const accountNumber = order?.accountNumber || '';
+  const accountHolder = order?.accountHolder || '';
 
   useEffect(() => {
-    if (paymentState !== 'WAITING') return;
+    if (paymentState !== 'WAITING' || !order) return;
     const timer = setInterval(() => {
       setSecondsLeft((prev) => {
         if (prev <= 1) {
@@ -91,11 +89,11 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [paymentState]);
+  }, [paymentState, order]);
 
   // Poll GET /orders/:orderCode every 3 seconds to auto-detect real SePay Webhook completion
   useEffect(() => {
-    if (paymentState !== 'WAITING' || !order.orderCode) return;
+    if (paymentState !== 'WAITING' || !order?.orderCode || !targetCohort) return;
     let active = true;
     const pollTimer = setInterval(async () => {
       try {
@@ -111,9 +109,9 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
             matchedReceipt ?? {
               orderCode: statusRes.orderCode || order.orderCode,
               cohortCode: targetCohort.code,
-              courseTitle: course.title,
+              courseTitle: course?.title || targetCohort.name,
               amountVnd: order.amountVnd,
-              paidAt: statusRes.paidAt || 'Vừa xong · Đối soát tự động qua SePay Webhook',
+              paidAt: statusRes.paidAt || new Date().toISOString(),
               bankName: order.bankName,
               transactionRef: statusRes.transactionRef || `SEPAY-${order.orderCode}`,
             }
@@ -129,13 +127,11 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
       clearInterval(pollTimer);
     };
   }, [
-    course.title,
-    order.amountVnd,
-    order.bankName,
-    order.orderCode,
+    course?.title,
+    order,
     paymentState,
     refreshEnrollments,
-    targetCohort.code,
+    targetCohort,
   ]);
 
   const handleCopy = (fieldKey: string, value: string) => {
@@ -144,32 +140,9 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
     setTimeout(() => setCopiedField(null), 1800);
   };
 
-  const handleTriggerSePaySuccess = async () => {
-    const webhookRes = await orderApi.simulateSepayWebhook(order.orderCode);
-    const statusRes = await orderApi.getOrderStatus(order.orderCode);
-    await refreshEnrollments();
-    const enrollmentsRes = await learningApi.getMyEnrollments();
-
-    const matchedApiReceipt = enrollmentsRes.receipts.find(
-      (r) => r.orderCode === order.orderCode || r.cohortCode === targetCohort.code
-    );
-
-    setReceipt(
-      matchedApiReceipt ?? {
-        orderCode: statusRes.orderCode || order.orderCode,
-        cohortCode: targetCohort.code,
-        courseTitle: course.title,
-        amountVnd: order.amountVnd,
-        paidAt: statusRes.paidAt || webhookRes.paidAt,
-        bankName: order.bankName,
-        transactionRef: webhookRes.transactionRef,
-      }
-    );
-    setPaymentState('SUCCESS');
-  };
-
   const handleDownloadIcs = () => {
-    const content = generateCohortIcsContent(targetCohort, course.title);
+    if (!targetCohort) return;
+    const content = generateCohortIcsContent(targetCohort, course?.title || targetCohort.name);
     const blob = new Blob([content], { type: 'text/calendar;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -194,7 +167,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
           </h1>
           <p className="text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
             Bạn cần đăng nhập tài khoản học viên để tiến hành ghi danh và thanh toán học phí đợt học{' '}
-            <strong className="font-mono text-[#059669] dark:text-[#34D399]">{targetCohort.code}</strong>.
+            <strong className="font-mono text-[#059669] dark:text-[#34D399]">{cohortCode}</strong>.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -218,6 +191,24 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
     );
   }
 
+  if (!targetCohort) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-16 text-center space-y-4">
+        <AlertCircle className="w-10 h-10 text-amber-500 mx-auto" />
+        <h1 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+          Không tìm thấy đợt khai giảng ({cohortCode})
+        </h1>
+        <button
+          type="button"
+          onClick={() => navigate('/courses')}
+          className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-xs font-semibold cursor-pointer"
+        >
+          Quay lại danh mục khóa học
+        </button>
+      </div>
+    );
+  }
+
   if (paymentState === 'SUCCESS' && receipt) {
     return (
       <div className="max-w-[780px] mx-auto px-6 py-12">
@@ -232,7 +223,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
               Ghi Danh Thành Công Đợt Học {targetCohort.code}!
             </h1>
             <p className="text-sm text-[#475569] dark:text-[#94A3B8] max-w-xl mx-auto">
-              Hệ thống đã đối soát tự động khoản chuyển khoản mã <span className="font-mono font-semibold text-[#059669] dark:text-[#34D399]">{receipt.orderCode}</span> và kích hoạt quyền truy cập đầy đủ vào Không gian Lớp học của học viên <strong>{currentUser?.fullName || 'Nguyễn Văn An'}</strong>.
+              Hệ thống đã đối soát tự động khoản chuyển khoản mã <span className="font-mono font-semibold text-[#059669] dark:text-[#34D399]">{receipt.orderCode}</span> và kích hoạt quyền truy cập đầy đủ vào Không gian Lớp học của học viên <strong>{currentUser?.fullName}</strong>.
             </p>
           </div>
 
@@ -312,6 +303,12 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
         </p>
       </div>
 
+      {orderError && (
+        <div className="rounded-xl bg-red-500/10 border border-[#EF4444]/40 p-4 text-xs text-[#EF4444]">
+          {orderError}
+        </div>
+      )}
+
       {/* 2-Column Instant VietQR Bank Transfer Checkout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* LEFT COLUMN (6 cols): Order Summary & Instructions */}
@@ -323,7 +320,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                   Thông tin đơn ghi danh trực tiếp
                 </div>
                 <div className="font-mono text-base font-bold text-[#059669] dark:text-[#34D399]">
-                  Mã đơn: {orderCode}
+                  Mã đơn: {orderCode || 'Đang khởi tạo...'}
                 </div>
               </div>
               <div
@@ -346,7 +343,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
               <div>
                 <div className="text-[#475569] dark:text-[#94A3B8]">Chương trình đào tạo:</div>
                 <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5] mt-0.5">
-                  {course.title}
+                  {course?.title || targetCohort.name}
                 </div>
               </div>
 
@@ -372,7 +369,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                 <div>
                   <div className="text-[#475569] dark:text-[#94A3B8]">Email học viên nhận lớp:</div>
                   <div className="font-mono font-medium text-[#0F172A] dark:text-[#ECFDF5]">
-                    {currentUser?.email || 'an.nguyen.dev@gmail.com'}
+                    {currentUser?.email}
                   </div>
                 </div>
               </div>
@@ -422,14 +419,14 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
           </div>
         </div>
 
-        {/* RIGHT COLUMN (6 cols): Interactive VietQR Payment Box + Dev Simulation Bar */}
+        {/* RIGHT COLUMN (6 cols): Interactive VietQR Payment Box */}
         <div className="lg:col-span-6 space-y-5">
           <div className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-5">
             {/* Bank & Napas247 Header */}
             <div className="flex items-center justify-between pb-3 border-b border-[#E2ECE7] dark:border-[#1E2D24]">
               <div>
                 <div className="text-xs font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  MBBank — Ngân hàng TMCP Quân Đội
+                  {order?.bankName || 'Chuyển khoản nhanh Napas247'}
                 </div>
                 <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
                   Chuyển khoản nhanh Napas247 · VietQR Chính thức
@@ -465,10 +462,10 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
               </div>
             ) : (
               <>
-                {/* VietQR Code Card (Uses dynamic order.qrImageUrl from Backend with crisp SVG fallback) */}
+                {/* VietQR Code Card */}
                 <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
                   <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
-                    {order.qrImageUrl && !qrImageError ? (
+                    {order?.qrImageUrl && !qrImageError ? (
                       <img
                         src={order.qrImageUrl}
                         alt={`Mã VietQR thanh toán đơn ${orderCode}`}
@@ -476,39 +473,9 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                         className="w-44 h-44 object-contain"
                       />
                     ) : (
-                      <svg
-                        viewBox="0 0 180 180"
-                        className="w-44 h-44"
-                        role="img"
-                        aria-label={`Mã VietQR thanh toán đơn ${orderCode}`}
-                      >
-                        <rect width="180" height="180" fill="#FFFFFF" />
-                        {/* Finder Patterns */}
-                        <rect x="12" y="12" width="42" height="42" fill="none" stroke="#0F172A" strokeWidth="6" />
-                        <rect x="24" y="24" width="18" height="18" fill="#059669" />
-                        <rect x="126" y="12" width="42" height="42" fill="none" stroke="#0F172A" strokeWidth="6" />
-                        <rect x="138" y="24" width="18" height="18" fill="#059669" />
-                        <rect x="12" y="126" width="42" height="42" fill="none" stroke="#0F172A" strokeWidth="6" />
-                        <rect x="24" y="138" width="18" height="18" fill="#059669" />
-                        {/* QR Data Matrix Pattern */}
-                        <path
-                          d="M66 16h10v10H66zM86 16h10v20H86zM104 26h12v10h-12zM66 36h14v12H66zM16 66h20v10H16zM46 66h12v18H46zM68 62h44v12H68zM122 66h16v12h-16zM148 66h20v20h-20zM20 88h18v18H20zM50 96h16v16H50zM122 92h22v14h-22zM152 100h16v18h-16zM68 118h18v14H68zM98 116h16v22H98zM126 128h42v12h-42zM68 144h22v22H68zM102 150h20v16h-20zM134 148h34v18h-34z"
-                          fill="#0F172A"
-                        />
-                        {/* Central 3T VietQR Emblem */}
-                        <rect x="72" y="72" width="36" height="36" rx="6" fill="#10B981" />
-                        <text
-                          x="90"
-                          y="95"
-                          textAnchor="middle"
-                          fill="#FFFFFF"
-                          fontSize="14"
-                          fontWeight="bold"
-                          fontFamily="monospace"
-                        >
-                          3T
-                        </text>
-                      </svg>
+                      <div className="w-44 h-44 flex items-center justify-center text-xs text-slate-500 text-center p-4">
+                        {order ? `Mã QR đơn ${orderCode}` : 'Đang tạo mã VietQR...'}
+                      </div>
                     )}
                   </div>
                   <span className="text-[11px] text-[#475569] dark:text-[#94A3B8] mt-2">
@@ -524,7 +491,7 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                         Chủ tài khoản thụ hưởng:
                       </div>
                       <div className="font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        {accountHolder}
+                        {accountHolder || '—'}
                       </div>
                     </div>
                     <ShieldCheck className="w-4 h-4 text-[#10B981]" />
@@ -533,14 +500,15 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                   <div className="flex items-center justify-between p-3 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
                     <div>
                       <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                        Số tài khoản MBBank:
+                        Số tài khoản thụ hưởng:
                       </div>
                       <div className="font-mono text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        {accountNumber}
+                        {accountNumber || '—'}
                       </div>
                     </div>
                     <button
                       type="button"
+                      disabled={!accountNumber}
                       onClick={() => handleCopy('ACC', accountNumber)}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] font-medium cursor-pointer"
                     >
@@ -593,11 +561,12 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                         Nội dung chuyển khoản bắt buộc (Tự động đối soát):
                       </div>
                       <div className="font-mono text-base font-bold text-[#065F46] dark:text-emerald-200 tracking-wide">
-                        {orderCode}
+                        {orderCode || '—'}
                       </div>
                     </div>
                     <button
                       type="button"
+                      disabled={!orderCode}
                       onClick={() => handleCopy('CODE', orderCode)}
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-[#10B981] text-white font-semibold hover:bg-[#059669] cursor-pointer"
                     >
@@ -623,30 +592,6 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                 </div>
               </>
             )}
-
-            {/* Developer Simulation Bar right below QR code */}
-            <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-2.5">
-              <div className="text-[11px] font-mono font-semibold text-[#475569] dark:text-[#94A3B8]">
-                THANH GIẢ LẬP KIỂM THỬ GIAO DỊCH (DEVELOPER SEPAY SIMULATION BAR):
-              </div>
-              <div className="flex flex-col sm:flex-row gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleTriggerSePaySuccess}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  <Zap className="w-4 h-4 shrink-0" />
-                  <span>⚡ Giả lập Đã Chuyển Khoản Thành Công (SePay Webhook Trigger)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentState('EXPIRED')}
-                  className="py-2.5 px-3.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-[#EF4444] border border-[#EF4444]/30 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  Giả lập Đơn Hết Hạn
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       </div>

@@ -123,7 +123,7 @@ export const TopNavbar: React.FC = () => {
               >
                 <AvatarWithFallback
                   src={currentUser?.avatarUrl}
-                  name={currentUser?.fullName || 'Nguyễn Văn An'}
+                  name={currentUser?.fullName || 'Học viên'}
                   className="w-6 h-6 rounded-full"
                 />
                 <LayoutDashboard className="w-4 h-4 hidden sm:inline" />

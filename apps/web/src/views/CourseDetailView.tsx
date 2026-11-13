@@ -42,12 +42,25 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
   );
 
   const fallbackCourse =
-    courses.find((c) => c.slug === cleanSlug) ?? courses[0];
+    courses.find((c) => c.slug === cleanSlug) ??
+    courses[0] ?? {
+      id: '',
+      slug: cleanSlug,
+      title: 'Đang tải khóa học...',
+      category: 'AI & Dữ liệu' as const,
+      shortDescription: '',
+      descriptionMd: '',
+      difficultyLevel: 3 as const,
+      ratingAvg: 0,
+      reviewCount: 0,
+      skills: [],
+      syllabusTemplate: [],
+    };
   const course = detailData?.course
     ? {
         ...detailData.course,
         syllabusTemplate:
-          detailData.syllabusTemplate?.modules ?? detailData.course.syllabusTemplate,
+          detailData.syllabusTemplate?.modules ?? detailData.course.syllabusTemplate ?? [],
       }
     : fallbackCourse;
 
@@ -56,14 +69,29 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
       ? detailData.cohorts
       : cohorts.filter((c) => c.courseId === course.id);
   const [selectedCohortId, setSelectedCohortId] = useState<string>(
-    courseCohorts[0]?.id ?? cohorts[0].id
+    courseCohorts[0]?.id ?? cohorts[0]?.id ?? ''
   );
   const [expandedOrders, setExpandedOrders] = useState<number[]>([1, 4, 5]);
 
   const selectedCohort =
     courseCohorts.find((c) => c.id === selectedCohortId) ??
     courseCohorts[0] ??
-    cohorts[0];
+    cohorts[0] ?? {
+      id: selectedCohortId,
+      courseId: course.id,
+      instructorId: '',
+      code: '',
+      name: 'Chưa có đợt khai giảng',
+      curriculumVersion: 'v2026',
+      tuitionVnd: 0,
+      enrolledCount: 0,
+      enrollmentOpenAt: '',
+      startDate: '',
+      endDate: '',
+      scheduleSlots: [],
+      status: 'OPENING' as const,
+      staff: [],
+    };
 
   const enrolledCohorts = cohorts.filter((c) => enrolledCohortIds.includes(c.id));
   const conflictingCohort = checkCohortScheduleConflict(selectedCohort, enrolledCohorts);

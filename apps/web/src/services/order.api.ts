@@ -31,21 +31,8 @@ export const orderApi = {
       status: 'PENDING' | 'PAID';
       paidAt?: string;
       transactionRef?: string;
-    }>(`/orders/${encodeURIComponent(orderCode)}`, { method: 'GET' }),
-
-  simulateSepayWebhook: (orderCode: string) =>
-    httpRequest<{
-      orderCode: string;
-      status: 'PAID';
-      gateway: 'SEPAY_VIETQR';
-      matchStatus: 'MATCHED';
-      transactionRef: string;
-      paidAt: string;
       receipt?: OrderReceipt;
-    }>('/webhooks/sepay/simulate', {
-      method: 'POST',
-      body: JSON.stringify({ orderCode }),
-    }),
+    }>(`/orders/${encodeURIComponent(orderCode)}`, { method: 'GET' }),
 
   getMyOrderHistory: () =>
     httpRequest<OrderReceipt[]>('/orders/my-history', {

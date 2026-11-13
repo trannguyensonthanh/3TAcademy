@@ -16,56 +16,35 @@ import {
   instructorProfiles,
   knowledgeChunks,
   systemSettings,
+  studentSkillStates,
+  assessmentAttempts,
+  assessments,
 } from '../../db/schema/index.js';
 import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/auth.js';
 import { aiServiceClient } from '../../integrations/aiService.client.js';
-import { formatScheduleLabels, buildInstructorStaffMap } from '../../db/helpers.js';
+import {
+  formatScheduleLabels,
+  buildInstructorStaffMap,
+  normalizeMasteryScore,
+} from '../../db/helpers.js';
 
 export const catalogRouter = Router();
-
-const DEFAULT_ACADEMY_FAQS = [
-  {
-    id: 'faq-1',
-    question: 'Khóa học tại 3T AI Academy có hình thức học như thế nào?',
-    answer:
-      '100% các đợt học (Cohort) tại 3T AI Academy được giảng dạy trực tiếp (Live Interactive) kết hợp thực hành code thực chiến cùng Giảng viên. Sau mỗi buổi học 15 phút, hệ thống tự động xuất bản Video Replay chuẩn HLS kèm phụ đề tiếng Việt, tóm tắt AI và Trợ giảng AI RAG trích dẫn đúng mốc giây bài giảng.',
-  },
-  {
-    id: 'faq-2',
-    question: 'Tôi bận đột xuất nghỉ 1 buổi Livestream thì có theo kịp lớp không?',
-    answer:
-      'Hoàn toàn theo kịp! Ngay sau buổi học, bạn có thể xem lại Video Replay với chương mục rõ ràng, bấm vào từng mốc thời gian [MM:SS] trong phần Ghi chú AI hoặc hỏi trực tiếp Trợ giảng AI ngay tại khung hình bạn chưa hiểu.',
-  },
-  {
-    id: 'faq-3',
-    question: 'Điều kiện để tốt nghiệp và nhận Chứng chỉ Số HMAC-SHA256 là gì?',
-    answer:
-      'Học viên cần hoàn thành đầy đủ các bài kiểm tra trắc nghiệm sau mỗi buổi học và vượt qua Kỳ Thi Cuối Khóa (Final Exam) có giám sát Camera AI chống gian lận với điểm số đạt chuẩn (từ 70% trở lên). Khi được cấp chứng chỉ, bạn còn được tặng thêm +4 lượt Phỏng vấn thử AI miễn phí.',
-  },
-  {
-    id: 'faq-4',
-    question: 'Phương thức thanh toán học phí qua SePay VietQR hoạt động ra sao?',
-    answer:
-      'Khi đăng ký đợt học, hệ thống khởi tạo mã đơn hàng duy nhất (Order Code) và mã VietQR động. Ngay khi bạn chuyển khoản thành công, Webhook SePay đối soát tức thì trong 2–3 giây và kích hoạt quyền vào Phòng học ngay lập tức mà không cần chờ duyệt thủ công.',
-  },
-];
 
 // 2.1 GET /categories
 catalogRouter.get('/categories', async (_req, res, next) => {
   try {
-    const allCats = await db.select().from(categories);
-    const allPublishedCourses = await db
-      .select()
-      .from(courses)
-      .where(eq(courses.status, 'PUBLISHED'));
+    const [allCats, allPublishedCourses] = await Promise.all([
+      db.select().from(categories),
+      db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
+    ]);
 
     const result = [
       {
         id: 'all',
         name: 'Tất cả lĩnh vực',
         slug: 'all',
-        description: 'Toàn bộ chương trình đào tạo Kỹ sư AI & Dữ liệu thực chiến tại 3T Academy',
+        description: 'Toàn bộ chương trình đào tạo tại 3T Academy',
         parentId: null,
         courseCount: allPublishedCourses.length,
         count: allPublishedCourses.length,
@@ -124,9 +103,10 @@ catalogRouter.get('/skills', async (_req, res, next) => {
 // 2.3 GET /courses
 catalogRouter.get('/courses', async (req, res, next) => {
   try {
-    const { q, categoryId } = req.query;
+    const { q, categoryId, category, level } = req.query;
+    const categoryFilter = categoryId || category;
 
-    const [allCats, allCourses, allCohorts, allReviews, allSkills, allCourseSkills] =
+    const [allCats, allCourses, allCohorts, allReviews, allSkills, allCourseSkills, getStaffForInstructor] =
       await Promise.all([
         db.select().from(categories),
         db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
@@ -134,6 +114,7 @@ catalogRouter.get('/courses', async (req, res, next) => {
         db.select().from(courseReviews),
         db.select().from(skills),
         db.select().from(courseSkills),
+        buildInstructorStaffMap(),
       ]);
 
     const catMap = new Map(allCats.map((c) => [c.id, c]));
@@ -141,8 +122,8 @@ catalogRouter.get('/courses', async (req, res, next) => {
 
     let filteredCourses = allCourses;
 
-    if (categoryId && categoryId !== 'all') {
-      const catStr = String(categoryId).trim();
+    if (categoryFilter && String(categoryFilter).trim() !== '' && categoryFilter !== 'all') {
+      const catStr = String(categoryFilter).trim();
       const catNum = Number(catStr);
       filteredCourses = filteredCourses.filter((c) => {
         const cat = catMap.get(c.categoryId);
@@ -152,6 +133,14 @@ catalogRouter.get('/courses', async (req, res, next) => {
         }
         return false;
       });
+    }
+
+    if (level && String(level).trim() !== '' && level !== 'ALL') {
+      const levelStr = String(level).trim();
+      const levelNum = Number(levelStr);
+      if (!Number.isNaN(levelNum) && levelNum > 0) {
+        filteredCourses = filteredCourses.filter((c) => c.difficultyLevel === levelNum);
+      }
     }
 
     if (q && typeof q === 'string' && q.trim().length > 0) {
@@ -177,15 +166,15 @@ catalogRouter.get('/courses', async (req, res, next) => {
       const ratingAvg =
         reviews.length > 0
           ? Number((reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1))
-          : 4.9;
+          : 0;
 
       const startingPriceVnd =
-        courseCohorts.length > 0 ? Math.min(...courseCohorts.map((ch) => ch.tuitionVnd)) : 6500000;
+        courseCohorts.length > 0 ? Math.min(...courseCohorts.map((ch) => ch.tuitionVnd)) : 0;
 
       const nextCohort = openCohorts[0] || courseCohorts[0];
       const syllabus = Array.isArray(c.syllabusTemplate) ? c.syllabusTemplate : [];
-      const durationWeeks = Math.max(4, Math.ceil(syllabus.length / 2) || 6);
-      const totalHours = Math.max(16, syllabus.length * 3 || 24);
+      const durationWeeks = syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0;
+      const totalHours = syllabus.length * 3;
 
       const mappedSkills = allCourseSkills
         .filter((cs) => cs.courseId === c.id)
@@ -207,7 +196,7 @@ catalogRouter.get('/courses', async (req, res, next) => {
         slug: c.slug,
         title: c.title,
         categoryId: c.categoryId,
-        category: catMap.get(c.categoryId)?.name || 'Kỹ thuật AI & Phần mềm',
+        category: catMap.get(c.categoryId)?.name || '',
         shortDescription: c.shortDescription,
         descriptionMd: c.descriptionMd,
         thumbnailUrl: c.thumbnailUrl,
@@ -215,12 +204,42 @@ catalogRouter.get('/courses', async (req, res, next) => {
         durationWeeks,
         totalHours,
         ratingAvg,
-        reviewCount: reviews.length || 28,
+        rating: ratingAvg,
+        reviewCount: reviews.length,
+        reviewsCount: reviews.length,
         startingPriceVnd,
-        nextCohortStartDate: nextCohort?.startDate || '2026-11-15',
+        nextCohortStartDate: nextCohort?.startDate || '',
         openCohortsCount: openCohorts.length,
         skills: mappedSkills,
         syllabusTemplate: syllabus,
+        cohorts: courseCohorts.map((ch) => {
+          const staffInfo = getStaffForInstructor(ch.instructorId);
+          const labels = formatScheduleLabels(ch.scheduleSlots || []);
+          return {
+            id: String(ch.id),
+            courseId: String(c.id),
+            instructorId: String(ch.instructorId),
+            courseSlug: c.slug,
+            courseTitle: c.title,
+            code: ch.code,
+            name: ch.name,
+            status: ch.status,
+            curriculumVersion: ch.curriculumVersion,
+            techStackNotes: ch.techStackNotes,
+            tuitionVnd: ch.tuitionVnd,
+            enrolledCount: ch.enrolledCount,
+            enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
+            startDate: ch.startDate,
+            endDate: ch.endDate,
+            scheduleLabel: labels.scheduleLabel,
+            timeRangeLabel: labels.timeRangeLabel,
+            scheduleSlots: ch.scheduleSlots || [],
+            instructorName: staffInfo.instructorName,
+            instructorHeadline: staffInfo.instructorHeadline,
+            instructorAvatarUrl: staffInfo.instructorAvatarUrl,
+            staff: staffInfo.staff,
+          };
+        }),
       };
     });
 
@@ -298,59 +317,79 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       .where(eq(courseReviews.courseId, course.id));
 
     const syllabus = Array.isArray(course.syllabusTemplate) ? course.syllabusTemplate : [];
+    const totalWeeks = syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0;
+    const totalHours = syllabus.length * 3;
     const ratingAvg =
       reviews.length > 0
         ? Number((reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1))
-        : 4.9;
+        : 0;
 
-    res.json({
+    const mappedSkills = cSkills.map((s) => ({
+      id: String(s.id),
+      type: s.role,
+      code: s.code,
+      name: s.name,
+      weight: s.weight,
+    }));
+
+    const mappedCohorts = courseCohorts.map((ch) => {
+      const staffInfo = getStaffForInstructor(ch.instructorId);
+      const labels = formatScheduleLabels(ch.scheduleSlots || []);
+      return {
+        id: String(ch.id),
+        courseId: String(course.id),
+        instructorId: String(ch.instructorId),
+        courseSlug: course.slug,
+        courseTitle: course.title,
+        code: ch.code,
+        name: ch.name,
+        status: ch.status,
+        curriculumVersion: ch.curriculumVersion,
+        techStackNotes: ch.techStackNotes,
+        tuitionVnd: ch.tuitionVnd,
+        enrolledCount: ch.enrolledCount,
+        enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
+        startDate: ch.startDate,
+        endDate: ch.endDate,
+        scheduleLabel: labels.scheduleLabel,
+        timeRangeLabel: labels.timeRangeLabel,
+        scheduleSlots: ch.scheduleSlots || [],
+        instructorName: staffInfo.instructorName,
+        instructorHeadline: staffInfo.instructorHeadline,
+        instructorAvatarUrl: staffInfo.instructorAvatarUrl,
+        staff: staffInfo.staff,
+      };
+    });
+
+    const courseDto = {
       id: String(course.id),
       slug: course.slug,
       title: course.title,
-      category: category?.name || 'Kỹ thuật AI & Phần mềm',
+      category: category?.name || '',
       shortDescription: course.shortDescription,
       descriptionMd: course.descriptionMd,
       thumbnailUrl: course.thumbnailUrl,
       difficultyLevel: course.difficultyLevel,
-      durationWeeks: Math.max(4, Math.ceil(syllabus.length / 2) || 6),
-      totalHours: Math.max(16, syllabus.length * 3 || 24),
+      durationWeeks: totalWeeks,
+      totalHours,
       ratingAvg,
-      reviewCount: reviews.length || 28,
+      rating: ratingAvg,
+      reviewCount: reviews.length,
+      reviewsCount: reviews.length,
       syllabusTemplate: syllabus,
-      skills: cSkills.map((s) => ({
-        id: String(s.id),
-        type: s.role,
-        code: s.code,
-        name: s.name,
-        weight: s.weight,
-      })),
-      cohorts: courseCohorts.map((ch) => {
-        const staffInfo = getStaffForInstructor(ch.instructorId);
-        const labels = formatScheduleLabels(ch.scheduleSlots || []);
-        return {
-          id: String(ch.id),
-          courseId: String(course.id),
-          courseSlug: course.slug,
-          courseTitle: course.title,
-          code: ch.code,
-          name: ch.name,
-          status: ch.status,
-          curriculumVersion: ch.curriculumVersion,
-          techStackNotes: ch.techStackNotes,
-          tuitionVnd: ch.tuitionVnd,
-          enrolledCount: ch.enrolledCount,
-          enrollmentOpenAt: ch.enrollmentOpenAt,
-          startDate: ch.startDate,
-          endDate: ch.endDate,
-          scheduleLabel: labels.scheduleLabel,
-          timeRangeLabel: labels.timeRangeLabel,
-          scheduleSlots: ch.scheduleSlots,
-          instructorName: staffInfo.instructorName,
-          instructorHeadline: staffInfo.instructorHeadline,
-          instructorAvatarUrl: staffInfo.instructorAvatarUrl,
-          staff: staffInfo.staff,
-        };
-      }),
+      skills: mappedSkills,
+    };
+
+    res.json({
+      ...courseDto,
+      course: courseDto,
+      cohorts: mappedCohorts,
+      syllabusTemplate: {
+        version: mappedCohorts[0]?.curriculumVersion || 'v2026.1',
+        totalWeeks,
+        sessionsPerWeek: 2,
+        modules: syllabus,
+      },
       reviews: reviews.map((r) => ({
         id: String(r.id),
         rating: r.rating,
@@ -384,7 +423,8 @@ catalogRouter.get('/cohorts', async (_req, res, next) => {
       return {
         id: String(ch.id),
         courseId: String(ch.courseId),
-        courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+        instructorId: String(ch.instructorId),
+        courseSlug: course?.slug || '',
         courseTitle: course?.title || ch.name,
         code: ch.code,
         name: ch.name,
@@ -393,7 +433,7 @@ catalogRouter.get('/cohorts', async (_req, res, next) => {
         techStackNotes: ch.techStackNotes,
         tuitionVnd: ch.tuitionVnd,
         enrolledCount: ch.enrolledCount,
-        enrollmentOpenAt: ch.enrollmentOpenAt,
+        enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
         startDate: ch.startDate,
         endDate: ch.endDate,
         scheduleLabel: labels.scheduleLabel,
@@ -424,35 +464,66 @@ catalogRouter.get('/faqs', async (_req, res, next) => {
     if (faqSetting?.value) {
       try {
         const parsed = JSON.parse(faqSetting.value);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           res.json(parsed);
           return;
         }
       } catch {
-        // Fallback to default FAQs
+        // Ignore parse error and query knowledgeChunks
       }
     }
 
-    res.json(DEFAULT_ACADEMY_FAQS);
+    const faqChunks = await db
+      .select()
+      .from(knowledgeChunks)
+      .where(eq(knowledgeChunks.sourceType, 'FAQ'));
+
+    const faqs = faqChunks.map((chunk) => {
+      const lines = chunk.content.split('\n').filter((l) => l.trim().length > 0);
+      const question = lines[0]?.replace(/^(Hỏi|Q|Câu hỏi):\s*/i, '') || chunk.content.slice(0, 80);
+      const answer = lines.slice(1).join('\n').replace(/^(Đáp|A|Trả lời):\s*/i, '') || chunk.content;
+      return {
+        id: String(chunk.id),
+        question,
+        answer,
+      };
+    });
+
+    res.json(faqs);
   } catch (err) {
     next(err);
   }
 });
 
-// Helper to build CertificateRecord objects
-async function buildCertificateRecords(filterAccountId?: number) {
-  const [allCerts, allEnrollments, allCohorts, allCourses, allAccounts, allProfiles, allInst] =
-    await Promise.all([
-      filterAccountId
-        ? db.select().from(certificates).where(eq(certificates.accountId, filterAccountId))
-        : db.select().from(certificates),
-      db.select().from(enrollments),
-      db.select().from(cohorts),
-      db.select().from(courses),
-      db.select().from(accounts),
-      db.select().from(userProfiles),
-      db.select().from(instructorProfiles),
-    ]);
+// Helper to build CertificateRecord objects from DB
+export async function buildCertificateRecords(filterAccountId?: number) {
+  const [
+    allCerts,
+    allEnrollments,
+    allCohorts,
+    allCourses,
+    allAccounts,
+    allProfiles,
+    allInst,
+    allSkillStates,
+    allSkills,
+    allAttempts,
+    allAssessments,
+  ] = await Promise.all([
+    filterAccountId
+      ? db.select().from(certificates).where(eq(certificates.accountId, filterAccountId))
+      : db.select().from(certificates),
+    db.select().from(enrollments),
+    db.select().from(cohorts),
+    db.select().from(courses),
+    db.select().from(accounts),
+    db.select().from(userProfiles),
+    db.select().from(instructorProfiles),
+    db.select().from(studentSkillStates),
+    db.select().from(skills),
+    db.select().from(assessmentAttempts).orderBy(desc(assessmentAttempts.scorePct)),
+    db.select().from(assessments),
+  ]);
 
   const enrollmentMap = new Map(allEnrollments.map((e) => [e.id, e]));
   const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
@@ -460,6 +531,7 @@ async function buildCertificateRecords(filterAccountId?: number) {
   const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
   const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
   const instMap = new Map(allInst.map((ip) => [ip.accountId, ip]));
+  const skillMap = new Map(allSkills.map((s) => [s.id, s]));
 
   return allCerts.map((cert) => {
     const enr = enrollmentMap.get(cert.enrollmentId);
@@ -470,23 +542,55 @@ async function buildCertificateRecords(filterAccountId?: number) {
     const instProf = cohort ? profileMap.get(cohort.instructorId) : undefined;
     const instMeta = cohort ? instMap.get(cohort.instructorId) : undefined;
 
+    const finalExam = cohort
+      ? allAssessments.find((a) => a.cohortId === cohort.id && a.purpose === 'FINAL_EXAM')
+      : undefined;
+    const finalAttempt = finalExam
+      ? allAttempts.find(
+          (att) => att.assessmentId === finalExam.id && att.accountId === cert.accountId
+        )
+      : allAttempts.find((att) => att.accountId === cert.accountId);
+
+    const finalScoreNum = finalAttempt?.scorePct
+      ? Number((Number(finalAttempt.scorePct) / 10).toFixed(1))
+      : 0;
+
+    const userSkills = allSkillStates
+      .filter((ss) => ss.accountId === cert.accountId)
+      .map((ss) => {
+        const sk = skillMap.get(ss.skillId);
+        return {
+          code: sk?.code || String(ss.skillId),
+          name: sk?.name || '',
+          score: normalizeMasteryScore(ss.masteryScore),
+        };
+      });
+
     return {
       code: cert.certificateCode,
       certificateCode: cert.certificateCode,
       accountId: cert.accountId,
-      studentEmail: stuAcc?.email || 'an.nguyen.dev@gmail.com',
-      studentName: stuProf?.fullName || 'Nguyễn Văn An',
-      courseTitle: course?.title || 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Agent',
-      cohortCode: cohort?.code || 'AI-ENG-2026-K01',
+      studentEmail: stuAcc?.email || '',
+      studentName: stuProf?.fullName || '',
+      courseTitle: course?.title || '',
+      cohortCode: cohort?.code || '',
       issuedAt: cert.issuedAt.toLocaleDateString('vi-VN'),
       issuedAtIso: cert.issuedAt.toISOString(),
-      finalScore: '94/100 (Xuất sắc)',
+      finalScore: finalScoreNum,
+      proctoringIntegrity:
+        finalAttempt?.integrityStatus === 'FLAGGED'
+          ? 'FLAGGED'
+          : 'VERIFIED_CLEAN_PROCTORING',
+      verificationSignature: cert.hmacSignature,
       hmacSignature: cert.hmacSignature,
-      instructorName: instProf?.fullName || 'TS. Trần Minh Khoa',
-      instructorTitle: instMeta?.headline || 'Giảng viên Trưởng Khối Kỹ thuật AI — 3T Academy',
+      instructorName: instProf?.fullName || '',
+      instructorTitle: instMeta?.headline || '',
       isRevoked: Boolean(cert.revokedAt),
       revokedAt: cert.revokedAt ? cert.revokedAt.toLocaleDateString('vi-VN') : undefined,
+      revokedReason: cert.revokeReason || undefined,
       revokeReason: cert.revokeReason || undefined,
+      skillsMastered: userSkills,
+      skillsVerified: userSkills,
     };
   });
 }
@@ -501,7 +605,7 @@ catalogRouter.get('/certificates', optionalAuth, async (req, res, next) => {
     const recordMap: Record<string, (typeof records)[number]> = {};
 
     for (const r of records) {
-      recordMap[r.code] = r;
+      recordMap[r.certificateCode] = r;
     }
 
     res.json(recordMap);
@@ -518,7 +622,7 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
 
     const matched = allRecords.find(
       (r) =>
-        r.code.toLowerCase() === rawCode.toLowerCase() ||
+        r.certificateCode.toLowerCase() === rawCode.toLowerCase() ||
         r.hmacSignature.toLowerCase() === rawCode.toLowerCase()
     );
 
@@ -535,7 +639,6 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
       return;
     }
 
-    // Privacy check: if logged in as a STUDENT, only allow verifying their own certificate
     if (req.user && req.user.role === 'STUDENT' && Number(req.user.id) !== Number(matched.accountId)) {
       res.json({
         found: true,
@@ -559,22 +662,7 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
       message: matched.isRevoked
         ? `Chứng chỉ đã bị thu hồi: ${matched.revokeReason || 'Vi phạm quy chế'}`
         : 'Chứng chỉ hợp lệ được ký số HMAC-SHA256 bởi 3T AI Academy.',
-      certificate: {
-        code: matched.code,
-        certificateCode: matched.certificateCode,
-        studentEmail: matched.studentEmail,
-        studentName: matched.studentName,
-        courseTitle: matched.courseTitle,
-        cohortCode: matched.cohortCode,
-        issuedAt: matched.issuedAt,
-        finalScore: matched.finalScore,
-        hmacSignature: matched.hmacSignature,
-        instructorName: matched.instructorName,
-        instructorTitle: matched.instructorTitle,
-        isRevoked: matched.isRevoked,
-        revokedAt: matched.revokedAt,
-        revokeReason: matched.revokeReason,
-      },
+      certificate: matched,
     });
   } catch (err) {
     next(err);
@@ -582,33 +670,70 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
 });
 
 // 2.9 POST /advisor/ask
-const advisorAskSchema = z.object({
-  question: z.string().min(2, 'Câu hỏi quá ngắn'),
-  chatSessionId: z.string().optional(),
-});
+const advisorAskSchema = z
+  .object({
+    question: z.string().optional(),
+    goal: z.string().optional(),
+    background: z.string().optional(),
+    chatSessionId: z.string().optional(),
+  })
+  .refine(
+    (data) =>
+      Boolean(
+        (data.question && data.question.trim().length >= 2) ||
+          (data.goal && data.goal.trim().length >= 2)
+      ),
+    { message: 'Câu hỏi hoặc mục tiêu nghề nghiệp quá ngắn' }
+  );
 
 catalogRouter.post('/advisor/ask', validate(advisorAskSchema), async (req, res, next) => {
   try {
-    const { question } = req.body;
+    const rawQuestion = req.body.question || req.body.goal || '';
+    const background = req.body.background ? ` (Nền tảng: ${req.body.background})` : '';
+    const fullQuestion = `${rawQuestion}${background}`.trim();
+
+    const [openCohorts, allCourses] = await Promise.all([
+      db.select().from(cohorts).orderBy(desc(cohorts.startDate)),
+      db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
+    ]);
+
+    const courseMap = new Map(allCourses.map((c) => [c.id, c]));
+    const recommendedCohort =
+      openCohorts.find((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING') ||
+      openCohorts[0];
+    const recommendedCourse = recommendedCohort
+      ? courseMap.get(recommendedCohort.courseId) || allCourses[0]
+      : allCourses[0];
+
+    const recommendedCohortCodes = openCohorts
+      .filter((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING')
+      .map((ch) => ch.code);
 
     try {
-      const aiResp = await aiServiceClient.askAdvisor(question);
+      const aiResp = await aiServiceClient.askAdvisor(fullQuestion);
       res.json({
-        ...aiResp,
-        recommendedCohortCodes: ['AI-ENG-2026-K01', 'PY-SQL-2026-K04'],
+        replyText: aiResp.answerMd,
+        answerMd: aiResp.answerMd,
+        recommendedCourseSlug: recommendedCourse?.slug || '',
+        recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
+        recommendedCohortCodes,
+        citations: aiResp.citations || [],
       });
       return;
     } catch {
+      const keyword = rawQuestion.split(' ')[0] || '';
       const publicChunks = await db
         .select()
         .from(knowledgeChunks)
         .where(
           and(
             eq(knowledgeChunks.visibility, 'PUBLIC'),
-            or(
-              ilike(knowledgeChunks.content, `%${question.split(' ')[0] || ''}%`),
-              eq(knowledgeChunks.sourceType, 'FAQ')
-            )
+            keyword
+              ? or(
+                  ilike(knowledgeChunks.content, `%${keyword}%`),
+                  eq(knowledgeChunks.sourceType, 'FAQ')
+                )
+              : eq(knowledgeChunks.sourceType, 'FAQ')
           )
         )
         .limit(3);
@@ -616,16 +741,25 @@ catalogRouter.post('/advisor/ask', validate(advisorAskSchema), async (req, res, 
       const contextText =
         publicChunks.length > 0
           ? publicChunks.map((c) => c.content).join('\n\n')
-          : 'Khóa Kỹ Sư AI Thực Chiến (AI-ENG-2026-K01) học tối Thứ 3 & Thứ 7 (19:30 - 21:30), học phí 8.500.000đ, do TS. Trần Minh Khoa trực tiếp giảng dạy.';
+          : recommendedCourse
+            ? `Khóa **${recommendedCourse.title}** (${recommendedCohort?.code || ''}) hiện đang tuyển sinh với học phí ${(recommendedCohort?.tuitionVnd || 0).toLocaleString('vi-VN')}đ.`
+            : '';
+
+      const replyText = contextText
+        ? `Dựa trên lộ trình đào tạo chính thức của **3T AI Academy**:\n\n${contextText}`
+        : 'Hiện tại hệ thống chưa tìm thấy lộ trình phù hợp với từ khóa của bạn.';
 
       res.json({
-        answerMd: `Chào bạn! Dựa trên lộ trình đào tạo chính thức của **3T AI Academy**:\n\n${contextText}\n\nBạn có thể nhấn nút **"Đăng ký giữ chỗ"** ở đợt học đang mở để nhận mã thanh toán SePay VietQR tự động nhé!`,
+        replyText,
+        answerMd: replyText,
+        recommendedCourseSlug: recommendedCourse?.slug || '',
+        recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
+        recommendedCohortCodes,
         citations: publicChunks.map((c) => ({
           chunkId: c.id,
           sourceType: c.sourceType,
           snippet: c.content.slice(0, 120),
         })),
-        recommendedCohortCodes: ['AI-ENG-2026-K01', 'PY-SQL-2026-K04'],
       });
     }
   } catch (err) {

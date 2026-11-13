@@ -54,13 +54,13 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
   const [step, setStep] = useState<'CHECKIN' | 'EXAM_ACTIVE'>('CHECKIN');
   const [faceCaptured, setFaceCaptured] = useState<boolean>(true);
   const [proctoringState, setProctoringState] = useState<ProctoringState>('NORMAL');
-  const studentDisplayName = currentUser?.fullName || 'Nguyễn Văn An';
-  const studentDisplayEmail = currentUser?.email || 'an.nguyen.dev@gmail.com';
+  const studentDisplayName = currentUser?.fullName || '';
+  const studentDisplayEmail = currentUser?.email || '';
   const [proctorLogs, setProctorLogs] = useState<
     { time: string; state: ProctoringState; text: string }[]
   >([
     {
-      time: '19:30:05',
+      time: new Date().toTimeString().slice(0, 8),
       state: 'NORMAL',
       text: `Đã xác nhận khuôn mặt trùng khớp với hồ sơ học viên ${studentDisplayName}.`,
     },
@@ -76,14 +76,6 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
   // 25 Multiple Choice Questions (A, B, C, D) — starts empty so student selects answers
   const [currentIdx, setCurrentIdx] = useState<number>(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
-
-  const handleQuickFillExamAnswers = () => {
-    const filled: Record<number, number> = {};
-    examQuestions.forEach((q) => {
-      filled[q.number] = q.number === 3 || q.number === 12 ? 1 : 0;
-    });
-    setSelectedAnswers(filled);
-  };
 
   const [examSeconds, setExamSeconds] = useState<number>(45 * 60);
 
@@ -116,10 +108,31 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
     return () => window.clearInterval(timer);
   }, [step]);
 
+  // Real browser visibilitychange / window blur proctoring telemetry
+  useEffect(() => {
+    if (step !== 'EXAM_ACTIVE') return;
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        void handleTriggerProctorState('ALERT');
+      } else {
+        void handleTriggerProctorState('NORMAL');
+      }
+    };
+    const handleWindowBlur = () => {
+      void handleTriggerProctorState('WARNING');
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [step, assessmentId]);
+
   const handleEnableRealWebcam = async () => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       setWebcamNotice(
-        'Trình duyệt hiện tại không có thiết bị Camera vật lý, hệ thống đã bật chế độ khung hình mô phỏng an toàn cho bạn.'
+        'Trình duyệt hiện tại không có thiết bị Camera vật lý, hệ thống đã bật chế độ khung hình an toàn cho bạn.'
       );
       return;
     }
@@ -159,7 +172,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
         ? 'Camera ổn định — Chúc bạn làm bài thi thật tốt nhé!'
         : nextState === 'WARNING'
         ? 'Hệ thống chưa nhìn rõ khuôn mặt bạn, bạn vui lòng hướng mắt về màn hình làm bài nhé.'
-        : 'Cảnh báo: Phát hiện rời khỏi màn hình thi hoặc có nhiều người trong khung hình. Sự kiện đã được ghi nhận để Giảng viên xem xét.';
+        : 'Cảnh báo: Phát hiện rời khỏi màn hình thi hoặc chuyển tab. Sự kiện đã được ghi nhận để Giảng viên xem xét.';
 
     setProctorLogs((prev) => [{ time: stamp, state: nextState, text: msg }, ...prev]);
     const eventType =
@@ -178,12 +191,14 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
       selectedAnswers
     );
     if (result.passed && !alreadyPassed) {
-      issueNewCertificate(
-        studentDisplayName,
-        studentDisplayEmail,
-        targetCohort?.code || 'AI-ENG-K01',
-        Math.round(result.scoreOutOf10 * 10)
-      );
+      if (currentUser) {
+        issueNewCertificate(
+          studentDisplayName,
+          studentDisplayEmail,
+          targetCohort?.code || '',
+          Math.round(result.scoreOutOf10 * 10)
+        );
+      }
       if (typeof result.updatedInterviewCredits === 'number') {
         setInterviewCredits(result.updatedInterviewCredits);
       } else {
@@ -236,7 +251,9 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
             <button
               type="button"
               onClick={() =>
-                navigate(`/app/cohorts/${targetCohort?.id || 'cohort-ai-k01'}`)
+                targetCohort
+                  ? navigate(`/app/cohorts/${targetCohort.id}`)
+                  : navigate('/app')
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer"
             >
@@ -248,7 +265,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                 KỲ THI TỐT NGHIỆP CUỐI KHÓA · 25 CÂU TRẮC NGHIỆM (A, B, C, D)
               </div>
               <h1 className="text-sm sm:text-base font-bold">
-                Bài Thi Cuối Khóa Kỹ Sư AI Thực Chiến — Khóa K01 (Có Camera Đồng Hành Giám Sát)
+                {examPayload?.title || 'Bài Thi Cuối Khóa (Có Camera Đồng Hành Giám Sát)'}
               </h1>
             </div>
           </div>
@@ -321,7 +338,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                       <div className="text-center">
                         <div className="text-sm font-bold">Học viên: {studentDisplayName}</div>
                         <div className="text-[11px] text-emerald-300">
-                          {studentDisplayEmail} · Khóa K01
+                          {studentDisplayEmail}
                         </div>
                       </div>
                     </div>
@@ -416,13 +433,6 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                     Danh sách {examQuestions.length} câu hỏi trắc nghiệm (A, B, C, D):
                   </span>
                   <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleQuickFillExamAnswers}
-                      className="px-2.5 py-1 rounded-md bg-[#D1FAE5]/70 dark:bg-emerald-950/70 border border-[#10B981]/40 text-[11px] font-semibold text-[#065F46] dark:text-emerald-300 hover:bg-[#D1FAE5] cursor-pointer"
-                    >
-                      ⚡ Điền nhanh đáp án mẫu
-                    </button>
                     <span className="font-mono text-[#059669] dark:text-[#34D399] font-bold">
                       Đã chọn: {Object.keys(selectedAnswers).length}/{examQuestions.length} câu
                     </span>
@@ -542,7 +552,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
               </article>
             </div>
 
-            {/* Cột Phải 4 phần: Khung Camera Giám sát Thông minh ở góc màn hình + Bộ nút Mô phỏng 3 trạng thái */}
+            {/* Cột Phải 4 phần: Khung Camera Giám sát Thông minh ở góc màn hình */}
             <aside className="lg:col-span-4 space-y-5 lg:sticky lg:top-20">
               <div
                 className={`rounded-2xl bg-[#090F0C] text-white border-2 ${proctorStatusInfo.borderRing} p-5 space-y-4 shadow-lg`}
@@ -580,7 +590,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                       />
                       <div className="min-w-0 space-y-1">
                         <div className="text-xs font-bold text-white truncate">
-                          {studentDisplayName} · Khóa K01
+                          {studentDisplayName}
                         </div>
                         <div className="text-[11px] text-emerald-300">
                           Khuôn mặt trùng khớp với hồ sơ học viên
@@ -603,52 +613,6 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                 >
                   <div className="font-bold mb-1">{proctorStatusInfo.label}</div>
                   <div>{proctorStatusInfo.message}</div>
-                </div>
-
-                {/* 3 Simulation Buttons to Test Proctoring States */}
-                <div className="space-y-2 pt-2 border-t border-slate-800">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Nút mô phỏng kiểm thử 3 trạng thái giám sát:
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleTriggerProctorState('NORMAL')}
-                    className={`w-full py-2 px-3 rounded-lg text-left text-xs font-semibold border transition-all cursor-pointer flex items-center justify-between ${
-                      proctoringState === 'NORMAL'
-                        ? 'bg-[#10B981] text-white border-[#10B981]'
-                        : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-[#10B981]'
-                    }`}
-                  >
-                    <span>1. Trạng thái Bình thường (Màu Xanh lá)</span>
-                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleTriggerProctorState('WARNING')}
-                    className={`w-full py-2 px-3 rounded-lg text-left text-xs font-semibold border transition-all cursor-pointer flex items-center justify-between ${
-                      proctoringState === 'WARNING'
-                        ? 'bg-[#F59E0B] text-slate-950 border-[#F59E0B]'
-                        : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-[#F59E0B]'
-                    }`}
-                  >
-                    <span>2. Nhắc nhở nhẹ (Màu Vàng cam — Quay mặt đi)</span>
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleTriggerProctorState('ALERT')}
-                    className={`w-full py-2 px-3 rounded-lg text-left text-xs font-semibold border transition-all cursor-pointer flex items-center justify-between ${
-                      proctoringState === 'ALERT'
-                        ? 'bg-[#EF4444] text-white border-[#EF4444]'
-                        : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-[#EF4444]'
-                    }`}
-                  >
-                    <span>3. Cảnh báo (Màu Đỏ — Mở tab khác / Có người thứ 2)</span>
-                    <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                  </button>
                 </div>
 
                 {/* Activity Log */}

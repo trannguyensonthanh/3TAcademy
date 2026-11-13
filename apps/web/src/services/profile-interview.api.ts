@@ -97,7 +97,6 @@ export const profileInterviewApi = {
       ? (fileOrNameOrPayload as Partial<StudentResumeData>)
       : resumeData;
 
-    // When a real File is uploaded without manual override, send multipart/form-data (FormData)
     if (isFile && !effectiveResumeData && typeof FormData !== 'undefined') {
       const formData = new FormData();
       formData.append('file', fileOrNameOrPayload as File);
@@ -132,8 +131,7 @@ export const profileInterviewApi = {
   screenCvAgainstJd: (
     targetLevel: 'INTERN' | 'FRESHER' | 'JUNIOR' | 'SENIOR' | string,
     targetRole: string,
-    jdRawText: string,
-    scenarioMode?: 'READY_78' | 'MISSING_COURSE_45'
+    jdRawText: string
   ) => {
     const normalizedLevel =
       targetLevel === 'MIDDLE_SENIOR' ? 'SENIOR' : targetLevel;
@@ -143,7 +141,6 @@ export const profileInterviewApi = {
         targetLevel: normalizedLevel,
         targetRole,
         jdRawText,
-        ...(scenarioMode ? { scenarioMode } : {}),
       }),
     });
   },

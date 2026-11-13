@@ -1,21 +1,18 @@
-import { handleMockRequest } from '../mocks/mockBackendServer';
-
 const env = (import.meta as any).env || {};
 const explicitBaseUrl = env.VITE_API_BASE_URL ? String(env.VITE_API_BASE_URL).trim() : '';
 
 export const API_CONFIG = {
-  BASE_URL: explicitBaseUrl || 'http://localhost:4000/api/v1',
-  HAS_EXPLICIT_BACKEND: Boolean(explicitBaseUrl),
-  USE_MOCK_FALLBACK: explicitBaseUrl
-    ? env.VITE_USE_MOCKS === 'true'
-    : env.VITE_USE_MOCKS !== 'false',
+  BASE_URL: explicitBaseUrl || '/api/v1',
+  HAS_EXPLICIT_BACKEND: true,
 };
 
 const ACCESS_TOKEN_STORAGE_KEY = '3t_academy_access_token';
+let memoryAccessToken: string | null = null;
 
 export function setAuthAccessToken(token: string | null): void {
+  memoryAccessToken = token;
   try {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !window.localStorage) return;
     if (token) {
       window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
     } else {
@@ -28,11 +25,14 @@ export function setAuthAccessToken(token: string | null): void {
 
 export function getAuthAccessToken(): string | null {
   try {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+      if (stored) return stored;
+    }
   } catch {
-    return null;
+    // Fallback to memory token
   }
+  return memoryAccessToken;
 }
 
 function generateRequestId(): string {
@@ -47,10 +47,9 @@ function generateRequestId(): string {
 }
 
 /**
- * HTTP Client chuẩn Production:
- * Tự động đính kèm `Content-Type: application/json`, `X-Request-ID`, `Authorization: Bearer <token>`
- * và `credentials: 'include'`. Khi bật chế độ Mock hoặc chưa chạy Backend local,
- * tự động chuyển tiếp `(method, endpoint, body)` xuống `handleMockRequest` trong `src/mocks/mockBackendServer.ts`.
+ * Production HTTP Client:
+ * Automatically attaches `Content-Type: application/json`, `X-Request-ID`,
+ * `Authorization: Bearer <token>`, and `credentials: 'include'`.
  */
 export async function httpRequest<T>(
   endpoint: string,
@@ -71,31 +70,31 @@ export async function httpRequest<T>(
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
-  if (API_CONFIG.USE_MOCK_FALLBACK) {
-    return await handleMockRequest<T>(method, normalizedEndpoint, options?.body);
+  const response = await fetch(url, {
+    ...options,
+    method,
+    headers,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const errorBody = await response.json();
+      if (errorBody?.message) {
+        errorMessage = errorBody.message;
+      } else if (errorBody?.error?.message) {
+        errorMessage = errorBody.error.message;
+      }
+    } catch {
+      // Keep status text
+    }
+    throw new Error(errorMessage);
   }
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      method,
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const json = await response.json();
-    if (json && typeof json === 'object' && 'data' in json && json.success === true) {
-      return json.data as T;
-    }
-    return json as T;
-  } catch (err) {
-    if (API_CONFIG.USE_MOCK_FALLBACK) {
-      return await handleMockRequest<T>(method, normalizedEndpoint, options?.body);
-    }
-    throw err;
+  const json = await response.json();
+  if (json && typeof json === 'object' && 'data' in json && json.success === true) {
+    return json.data as T;
   }
+  return json as T;
 }

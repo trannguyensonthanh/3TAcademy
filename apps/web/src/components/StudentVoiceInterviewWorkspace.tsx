@@ -252,15 +252,11 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
   const [uploadedJdName, setUploadedJdName] = useState<string | null>(null);
   const [jdText, setJdText] = useState<string>(COMPANY_JD_PRESETS[0].jdDefaultText);
   const [isScreeningCv, setIsScreeningCv] = useState<boolean>(false);
-  const [hasScreenedCv, setHasScreenedCv] = useState<boolean>(true);
-  // Cho phép kiểm thử cả 2 trạng thái CV ở Vòng 1: CV đã đầy đủ (78% - Đạt ngưỡng) hoặc CV quên ghi khóa học vừa học (45% - Cần bổ sung)
-  const [cvScenarioMode, setCvScenarioMode] = useState<'READY_78' | 'MISSING_COURSE_45'>(
-    'READY_78'
-  );
+  const [hasScreenedCv, setHasScreenedCv] = useState<boolean>(false);
   const [screeningResult, setScreeningResult] = useState<CvScreeningResult | null>(null);
 
   // Vòng 2: Phòng phỏng vấn giọng nói trực tiếp
-  const [activeInterviewId, setActiveInterviewId] = useState<string>('intv-draft-01');
+  const [activeInterviewId, setActiveInterviewId] = useState<string>('');
   const [currentTurnIdx, setCurrentTurnIdx] = useState<number>(0);
   const [isAiSpeaking, setIsAiSpeaking] = useState<boolean>(false);
   const [isStudentRecording, setIsStudentRecording] = useState<boolean>(false);
@@ -322,8 +318,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
       const res = await profileAndInterviewApi.screenCvAgainstJd(
         targetLevel,
         activeCompany.roleTitle,
-        jdText,
-        cvScenarioMode
+        jdText
       );
       if (res?.interviewId) {
         setActiveInterviewId(res.interviewId);
@@ -564,8 +559,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
     return `${m}:${s}`;
   };
 
-  const matchPercent =
-    screeningResult?.matchPercent ?? (cvScenarioMode === 'READY_78' ? 78 : 45);
+  const matchPercent = screeningResult?.matchPercent ?? 0;
   const isPassThreshold = screeningResult?.passedGate ?? matchPercent >= 65;
 
   return (
@@ -581,7 +575,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
           </p>
         </div>
 
-        {/* Huy hiệu Credit + Nút kiểm thử trạng thái 0 Credit / Có Credit */}
+        {/* Huy hiệu Credit */}
         <div className="flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end gap-2 shrink-0">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0F172A] text-white text-xs font-mono font-bold">
             <Award className="w-4 h-4 text-[#34D399]" />
@@ -592,40 +586,6 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
               </strong>
             </span>
           </div>
-
-          {!API_CONFIG.HAS_EXPLICIT_BACKEND && (
-            <div className="flex items-center gap-1 p-1 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[11px]">
-              <span className="px-2 text-[#475569] dark:text-[#94A3B8]">Trạng thái:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setInterviewCredits(4);
-                  setStage('ROUND_1_CV_SCREENING');
-                }}
-                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                  interviewCredits > 0
-                    ? 'bg-[#10B981] text-white'
-                    : 'text-[#475569] dark:text-[#94A3B8]'
-                }`}
-              >
-                Đã tốt nghiệp (4 Credits)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setInterviewCredits(0);
-                  setStage('ROUND_1_CV_SCREENING');
-                }}
-                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                  interviewCredits === 0
-                    ? 'bg-[#EF4444] text-white'
-                    : 'text-[#475569] dark:text-[#94A3B8]'
-                }`}
-              >
-                0 Credit (Khóa)
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -653,13 +613,6 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
               className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold cursor-pointer"
             >
               Quay lại học tiếp khóa học đang theo học →
-            </button>
-            <button
-              type="button"
-              onClick={() => setInterviewCredits(4)}
-              className="px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer"
-            >
-              Mở thử với 4 Credits (Đã tốt nghiệp)
             </button>
           </div>
         </section>
@@ -836,44 +789,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
                       className="w-full p-3 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs text-[#0F172A] dark:text-[#ECFDF5] leading-relaxed focus:outline-none focus:border-[#10B981]"
                     />
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                      {/* Công tắc xem thử 2 tình huống thẩm định CV (chỉ hiện ở chế độ Sandbox/Preview) */}
-                      {!API_CONFIG.HAS_EXPLICIT_BACKEND ? (
-                        <div className="flex items-center gap-1.5 text-[11px]">
-                          <span className="text-[#475569] dark:text-[#94A3B8]">Tình huống CV:</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCvScenarioMode('READY_78');
-                              setScreeningResult(null);
-                            }}
-                            className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                              cvScenarioMode === 'READY_78'
-                                ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
-                                : 'text-[#475569] dark:text-[#94A3B8]'
-                            }`}
-                          >
-                            Khớp 78% (Đạt ngưỡng)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCvScenarioMode('MISSING_COURSE_45');
-                              setScreeningResult(null);
-                            }}
-                            className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
-                              cvScenarioMode === 'MISSING_COURSE_45'
-                                ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
-                                : 'text-[#475569] dark:text-[#94A3B8]'
-                            }`}
-                          >
-                            Khớp 45% (Cần bổ sung CV)
-                          </button>
-                        </div>
-                      ) : (
-                        <div />
-                      )}
-
+                    <div className="flex flex-wrap items-center justify-end gap-3 pt-1">
                       <button
                         type="button"
                         onClick={handleRunRound1Screening}

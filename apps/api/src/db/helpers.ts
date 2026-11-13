@@ -9,17 +9,6 @@ import {
   instructorProfiles,
 } from './schema/index.js';
 
-const COHORT_ALIAS_MAP: Record<string, string> = {
-  'cohort-ai-k01': 'AI-ENG-2026-K01',
-  'cohort-ai-k02': 'AI-ENG-2026-K02',
-  'cohort-py-k04': 'PY-SQL-2026-K04',
-  'cohort-rag-k01': 'RAG-AGENTS-2026-K01',
-  'cohort-ops-k01': 'LLM-OPS-2026-K01',
-  'k01': 'AI-ENG-2026-K01',
-  'k02': 'AI-ENG-2026-K02',
-  'k04': 'PY-SQL-2026-K04',
-};
-
 /**
  * Normalizes a mastery score from DB (which may be stored on a 0..1 scale or 0..100 scale)
  * into a 0..100 integer for Frontend consumption.
@@ -46,7 +35,7 @@ export function toDbMasteryScore(score0to100: number): number {
 }
 
 /**
- * Resolves a Cohort record by numeric ID, cohort code, or frontend alias (e.g. 'cohort-ai-k01').
+ * Resolves a Cohort record by numeric ID or cohort code.
  */
 export async function resolveCohort(idOrCode: string | string[] | number | undefined | null) {
   const firstVal = Array.isArray(idOrCode) ? idOrCode[0] : idOrCode;
@@ -59,11 +48,10 @@ export async function resolveCohort(idOrCode: string | string[] | number | undef
     if (byId) return byId;
   }
 
-  const mappedCode = COHORT_ALIAS_MAP[raw.toLowerCase()] || raw;
   const [byCode] = await db
     .select()
     .from(cohorts)
-    .where(ilike(cohorts.code, mappedCode))
+    .where(ilike(cohorts.code, raw))
     .limit(1);
   if (byCode) return byCode;
 
@@ -76,7 +64,7 @@ export async function resolveCohort(idOrCode: string | string[] | number | undef
 }
 
 /**
- * Resolves a ClassSession record by numeric ID or frontend alias (e.g. 'sess-k01-04', 'sess-4').
+ * Resolves a ClassSession record by numeric ID or session identifier.
  */
 export async function resolveSession(
   idOrCode: string | string[] | number | undefined | null,
@@ -92,7 +80,6 @@ export async function resolveSession(
     if (byId) return byId;
   }
 
-  // Match pattern like sess-k01-04 or sess-04 or session-4
   const kMatch = raw.match(/sess(?:ion)?-(?:([a-z0-9]+)-)?0*(\d+)$/i);
   if (kMatch) {
     const cohortAlias = kMatch[1];
@@ -140,8 +127,7 @@ export async function resolveSession(
 }
 
 /**
- * Resolves an Assessment record by numeric ID or frontend alias
- * (e.g. 'quiz-sess-k01-04', 'exam-final-k01', 'final-exam-cohort-ai-k01').
+ * Resolves an Assessment record by numeric ID or assessment identifier.
  */
 export async function resolveAssessment(idOrCode: string | string[] | number | undefined | null) {
   const firstVal = Array.isArray(idOrCode) ? idOrCode[0] : idOrCode;
@@ -156,7 +142,6 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
 
   const lower = raw.toLowerCase();
 
-  // Check if it's a final exam alias (e.g., exam-final-k01, final-exam-cohort-ai-k01, final-exam-1)
   if (lower.includes('final') || lower.startsWith('exam-')) {
     const cleaned = lower
       .replace(/^final-exam-/, '')
@@ -179,7 +164,6 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
     if (anyFinalExam) return anyFinalExam;
   }
 
-  // Check if it's a session quiz alias (e.g., quiz-sess-k01-04, quiz-4)
   if (lower.startsWith('quiz-')) {
     const sessPart = lower.replace(/^quiz-/, '');
     const session = await resolveSession(sessPart.startsWith('sess') ? sessPart : `sess-${sessPart}`);
@@ -206,8 +190,8 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
 export function formatScheduleLabels(slots: Array<{ dayOfWeek: number; startTime: string; endTime: string }>) {
   if (!slots || slots.length === 0) {
     return {
-      scheduleLabel: 'Thứ 3 & Thứ 7',
-      timeRangeLabel: '19:30 - 21:30',
+      scheduleLabel: '',
+      timeRangeLabel: '',
     };
   }
   const dayNames = ['Chủ Nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
@@ -234,11 +218,9 @@ export async function buildInstructorStaffMap() {
     const prof = profileMap.get(instructorId);
     const inst = instructorMap.get(instructorId);
     const acc = accountMap.get(instructorId);
-    const fullName = prof?.fullName || acc?.email || 'TS. Trần Minh Khoa';
-    const headline = inst?.headline || prof?.bio || 'Giảng viên Trưởng Khối Kỹ thuật AI';
-    const avatarUrl =
-      prof?.avatarUrl ||
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80';
+    const fullName = prof?.fullName || acc?.email || '';
+    const headline = inst?.headline || prof?.bio || '';
+    const avatarUrl = prof?.avatarUrl || '';
     const organization = inst?.organization || '3T AI Academy';
 
     return {
@@ -252,6 +234,8 @@ export async function buildInstructorStaffMap() {
           role: 'INSTRUCTOR' as const,
           fullName,
           headline,
+          title: headline,
+          bio: inst?.expertiseSummaryMd || prof?.bio || '',
           avatarUrl,
           organization,
         },

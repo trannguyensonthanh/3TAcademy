@@ -16,10 +16,13 @@ import {
   classSessions,
   sessionProgress,
   orders,
+  paymentTransactions,
   enrollments,
   certificates,
+  chatSessions,
   chatMessages,
   notifications,
+  assessmentAttempts,
 } from '../../db/schema/index.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
@@ -29,6 +32,7 @@ import {
   formatScheduleLabels,
   buildInstructorStaffMap,
 } from '../../db/helpers.js';
+import { buildCertificateRecords } from '../catalog/catalog.routes.js';
 
 export const adminRouter = Router();
 
@@ -48,9 +52,12 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       allEnrollments,
       allSessions,
       allProgress,
+      allAttempts,
+      allChatSessions,
       allChatMsgs,
       allNotifs,
       getStaffForInstructor,
+      certRecordsList,
     ] = await Promise.all([
       db.select().from(orders).where(eq(orders.status, 'PAID')),
       db.select().from(cohorts).orderBy(desc(cohorts.startDate)),
@@ -62,9 +69,12 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       db.select().from(enrollments),
       db.select().from(classSessions),
       db.select().from(sessionProgress),
+      db.select().from(assessmentAttempts),
+      db.select().from(chatSessions),
       db.select().from(chatMessages).orderBy(desc(chatMessages.createdAt)),
       db.select().from(notifications).orderBy(desc(notifications.createdAt)),
       buildInstructorStaffMap(),
+      buildCertificateRecords(),
     ]);
 
     const totalRevenueVnd = paidOrders.reduce((acc, o) => acc + o.amountVnd, 0);
@@ -78,7 +88,7 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
     const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
     const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
     const instMap = new Map(allInstProfiles.map((ip) => [ip.accountId, ip]));
-    const enrollmentMap = new Map(allEnrollments.map((e) => [e.id, e]));
+    const chatSessionMap = new Map(allChatSessions.map((cs) => [cs.id, cs]));
 
     const formattedCohorts = allCohorts.map((ch) => {
       const course = courseMap.get(ch.courseId);
@@ -88,7 +98,8 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       return {
         id: String(ch.id),
         courseId: String(ch.courseId),
-        courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+        instructorId: String(ch.instructorId),
+        courseSlug: course?.slug || '',
         courseTitle: course?.title || ch.name,
         code: ch.code,
         name: ch.name,
@@ -97,7 +108,7 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
         techStackNotes: ch.techStackNotes,
         tuitionVnd: ch.tuitionVnd,
         enrolledCount: ch.enrolledCount,
-        enrollmentOpenAt: ch.enrollmentOpenAt,
+        enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
         startDate: ch.startDate,
         endDate: ch.endDate,
         scheduleLabel: labels.scheduleLabel,
@@ -115,7 +126,7 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       const acc = accountMap.get(enr.accountId);
       const cohort = cohortMap.get(enr.cohortId);
       const cSessions = allSessions.filter((s) => s.cohortId === enr.cohortId);
-      const totalSessionsCount = cSessions.length || 6;
+      const totalSessionsCount = cSessions.length || 1;
       const completedSessionsCount = allProgress.filter(
         (p) =>
           p.accountId === enr.accountId &&
@@ -123,21 +134,29 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
           cSessions.some((s) => s.id === p.sessionId)
       ).length;
       const progressPercent = Math.round((completedSessionsCount / totalSessionsCount) * 100);
+      const stuAttempts = allAttempts.filter((a) => a.accountId === enr.accountId && a.scorePct);
+      const avgScorePct =
+        stuAttempts.length > 0
+          ? Math.round(
+              stuAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / stuAttempts.length
+            )
+          : 0;
 
       return {
         id: String(enr.id),
+        userId: String(enr.accountId),
         accountId: String(enr.accountId),
-        studentName: prof?.fullName || acc?.email || 'Học viên 3T',
-        studentEmail: acc?.email || 'student@3t.edu.vn',
+        studentName: prof?.fullName || acc?.email || '',
+        studentEmail: acc?.email || '',
         avatarUrl: prof?.avatarUrl,
         cohortId: String(enr.cohortId),
-        cohortCode: cohort?.code || 'AI-ENG-2026-K01',
+        cohortCode: cohort?.code || '',
         status: enr.status,
         progressPercent,
         completedSessionsCount,
         totalSessionsCount,
         missingQuizzesCount: Math.max(0, totalSessionsCount - completedSessionsCount),
-        avgScorePct: enr.finalExamPassed ? 94 : 78,
+        avgScorePct,
         finalExamPassed: enr.finalExamPassed,
         dropoutRiskScore: enr.dropoutRiskScore,
         riskLevel: enr.riskLevel as 'LOW' | 'MEDIUM' | 'HIGH',
@@ -147,71 +166,62 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       };
     });
 
-    // Build certificates Record<string, CertificateRecord>
-    const certificatesRecord: Record<string, unknown> = {};
-    for (const cert of allCerts) {
-      const enr = enrollmentMap.get(cert.enrollmentId);
-      const cohort = enr ? cohortMap.get(enr.cohortId) : undefined;
-      const course = cohort ? courseMap.get(cohort.courseId) : undefined;
-      const stuAcc = accountMap.get(cert.accountId);
-      const stuProf = profileMap.get(cert.accountId);
-      const instProf = cohort ? profileMap.get(cohort.instructorId) : undefined;
-      const instMeta = cohort ? instMap.get(cohort.instructorId) : undefined;
-
-      certificatesRecord[cert.certificateCode] = {
-        code: cert.certificateCode,
-        certificateCode: cert.certificateCode,
-        studentEmail: stuAcc?.email || 'an.nguyen.dev@gmail.com',
-        studentName: stuProf?.fullName || 'Nguyễn Văn An',
-        courseTitle: course?.title || 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Agent',
-        cohortCode: cohort?.code || 'AI-ENG-2026-K01',
-        issuedAt: cert.issuedAt.toLocaleDateString('vi-VN'),
-        finalScore: '94/100 (Xuất sắc)',
-        hmacSignature: cert.hmacSignature,
-        instructorName: instProf?.fullName || 'TS. Trần Minh Khoa',
-        instructorTitle: instMeta?.headline || 'Giảng viên Trưởng Khối Kỹ thuật AI — 3T Academy',
-        isRevoked: Boolean(cert.revokedAt),
-        revokedAt: cert.revokedAt ? cert.revokedAt.toLocaleDateString('vi-VN') : undefined,
-        revokeReason: cert.revokeReason || undefined,
-      };
+    const certificatesRecord: Record<string, (typeof certRecordsList)[number]> = {};
+    for (const cRec of certRecordsList) {
+      certificatesRecord[cRec.certificateCode] = cRec;
     }
 
-    // Build accounts (AdminUserAccountItem[])
     const formattedAccounts = allAccounts.map((acc) => {
       const prof = profileMap.get(acc.id);
       const inst = instMap.get(acc.id);
       const cvData = (prof?.cvParsedData ?? {}) as Record<string, unknown>;
-      const phone = typeof cvData.phone === 'string' ? cvData.phone : '0912 345 678';
+      const phone = typeof cvData.phone === 'string' ? cvData.phone : '';
 
       const assignedCohorts =
         acc.role === 'INSTRUCTOR'
           ? allCohorts.filter((c) => c.instructorId === acc.id).map((c) => c.code)
           : allEnrollments
               .filter((e) => e.accountId === acc.id)
-              .map((e) => cohortMap.get(e.cohortId)?.code || 'AI-ENG-2026-K01');
+              .map((e) => cohortMap.get(e.cohortId)?.code || '')
+              .filter(Boolean);
+
+      const roleCategory: 'Học viên' | 'Giảng viên' | 'Quản trị viên' =
+        acc.role === 'INSTRUCTOR'
+          ? 'Giảng viên'
+          : acc.role === 'ADMIN'
+            ? 'Quản trị viên'
+            : 'Học viên';
 
       return {
         id: String(acc.id),
-        fullName: prof?.fullName || acc.email.split('@')[0] || 'Tài khoản 3T',
+        fullName: prof?.fullName || acc.email.split('@')[0] || '',
         email: acc.email,
         phone,
         role: acc.role,
+        roleCategory,
+        roleDetail:
+          inst?.headline ||
+          prof?.bio ||
+          (acc.role === 'ADMIN' ? 'Quản trị viên Hệ thống' : 'Học viên'),
+        cohortAssigned: assignedCohorts.join(', ') || 'Chưa phân lớp',
+        locked: acc.status === 'LOCKED',
         status: acc.status,
         isActive: acc.status === 'ACTIVE',
-        avatarUrl:
-          prof?.avatarUrl ||
-          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(prof?.fullName || acc.email)}`,
+        avatarUrl: prof?.avatarUrl || undefined,
+        bio: prof?.bio || undefined,
+        careerGoal: prof?.careerGoal || undefined,
         createdAt: acc.createdAt.toLocaleDateString('vi-VN'),
         lastLoginAt: acc.lastLoginAt ? acc.lastLoginAt.toLocaleString('vi-VN') : 'Chưa đăng nhập',
         interviewCredits: prof?.interviewCredits ?? 0,
         instructorHeadline: inst?.headline,
         instructorOrganization: inst?.organization || undefined,
+        instructorYearsOfExperience: inst?.yearsOfExperience ?? undefined,
         yearsOfExperience: inst?.yearsOfExperience ?? undefined,
+        instructorExpertiseSummaryMd: inst?.expertiseSummaryMd || undefined,
         assignedCohorts,
       };
     });
 
-    // Build eligibleGraduates (EligibleGraduateItem[])
     const certByEnrollmentId = new Map(allCerts.map((c) => [c.enrollmentId, c]));
     const eligibleGraduates = formattedEnrollments
       .filter((enr) => enr.finalExamPassed || enr.progressPercent >= 80)
@@ -219,17 +229,20 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
         const existingCert = certByEnrollmentId.get(Number(enr.id));
         const cohort = cohortMap.get(Number(enr.cohortId));
         const course = cohort ? courseMap.get(cohort.courseId) : undefined;
+        const scoreOutOf10 = Number((enr.avgScorePct / 10).toFixed(1));
         return {
           id: enr.id,
           enrollmentId: enr.id,
           studentName: enr.studentName,
           studentEmail: enr.studentEmail,
           cohortCode: enr.cohortCode,
-          courseTitle: course?.title || 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Agent',
+          courseTitle: course?.title || '',
+          completedSessionsText: `${enr.completedSessionsCount}/${enr.totalSessionsCount} buổi`,
           completedSessions: `${enr.completedSessionsCount}/${enr.totalSessionsCount} buổi`,
-          finalExamScore: `${enr.avgScorePct}/100`,
+          finalExamScore: scoreOutOf10,
           proctoringStatus: 'CLEAN' as const,
           isIssued: Boolean(existingCert),
+          issuedCertCode: existingCert?.certificateCode,
           certificateCode: existingCert?.certificateCode,
         };
       });
@@ -241,25 +254,53 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       issuedCertificatesCount: allCerts.length,
       cohorts: formattedCohorts,
       enrollments: formattedEnrollments,
-      chatMessages: allChatMsgs.map((m) => ({
-        id: String(m.id),
-        chatSessionId: String(m.chatSessionId),
-        role: m.role,
-        content: m.content,
-        detectedTopic: m.detectedTopic || undefined,
-        createdAt: m.createdAt.toISOString(),
-      })),
-      notifications: allNotifs.map((n) => ({
-        id: String(n.id),
-        recipientId: String(n.recipientId),
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        isRead: n.isRead,
-        readAt: n.readAt ? n.readAt.toISOString() : undefined,
-        actedAt: n.actedAt ? n.actedAt.toISOString() : undefined,
-        createdAt: n.createdAt.toISOString(),
-      })),
+      chatMessages: allChatMsgs.map((m) => {
+        const cs = chatSessionMap.get(m.chatSessionId);
+        const stuProf = cs?.accountId ? profileMap.get(cs.accountId) : undefined;
+        return {
+          id: String(m.id),
+          chatSessionId: String(m.chatSessionId),
+          sessionId: cs?.sessionId ? String(cs.sessionId) : '',
+          cohortId: cs?.cohortId ? String(cs.cohortId) : '',
+          userId: cs?.accountId ? String(cs.accountId) : '',
+          studentName: stuProf?.fullName || '',
+          senderRole: (m.role === 'assistant' ? 'AI_TUTOR' : 'STUDENT') as
+            | 'STUDENT'
+            | 'AI_TUTOR',
+          role: m.role,
+          content: m.content,
+          detectedTopic: m.detectedTopic || null,
+          latencyMs: m.latencyMs ?? null,
+          tokensUsed:
+            m.promptTokens && m.completionTokens ? m.promptTokens + m.completionTokens : null,
+          createdAt: m.createdAt.toISOString(),
+        };
+      }),
+      notifications: allNotifs.map((n) => {
+        const stuProf = profileMap.get(n.recipientId);
+        const meta = (n.metadata || {}) as { cohortId?: number | string };
+        const cohort = meta.cohortId ? cohortMap.get(Number(meta.cohortId)) : undefined;
+        return {
+          id: String(n.id),
+          userId: String(n.recipientId),
+          recipientId: String(n.recipientId),
+          studentName: stuProf?.fullName || '',
+          cohortId: cohort ? String(cohort.id) : '',
+          cohortCode: cohort?.code || '',
+          type: (n.type === 'INSTRUCTOR_REMINDER' ? 'AI_STUDY_REMINDER' : n.type) as
+            | 'AI_STUDY_REMINDER'
+            | 'QUIZ_DEADLINE'
+            | 'SYSTEM',
+          title: n.title,
+          message: n.body,
+          body: n.body,
+          isRead: n.isRead,
+          sentAt: n.createdAt.toISOString(),
+          readAt: n.readAt ? n.readAt.toISOString() : null,
+          actedAt: n.actedAt ? n.actedAt.toISOString() : null,
+          createdAt: n.createdAt.toISOString(),
+        };
+      }),
       certificates: certificatesRecord,
       accounts: formattedAccounts,
       eligibleGraduates,
@@ -269,7 +310,39 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
   }
 });
 
-// 8.2 POST /admin/courses (Supports both creating a new course AND updating an existing course syllabus)
+// 8.1B GET /admin/sepay-transactions
+adminRouter.get('/admin/sepay-transactions', async (_req, res, next) => {
+  try {
+    const [txs, allOrders] = await Promise.all([
+      db.select().from(paymentTransactions).orderBy(desc(paymentTransactions.createdAt)),
+      db.select().from(orders),
+    ]);
+
+    const orderMap = new Map(allOrders.map((o) => [o.id, o]));
+
+    res.json(
+      txs.map((tx) => {
+        const ord = tx.orderId ? orderMap.get(tx.orderId) : undefined;
+        const payload = (tx.rawPayload ?? {}) as Record<string, unknown>;
+        return {
+          id: String(tx.id),
+          orderId: tx.orderId ? String(tx.orderId) : null,
+          orderCode: ord?.orderCode || null,
+          gateway: 'SEPAY_VIETQR' as const,
+          amountVnd: tx.amountVnd,
+          transferContent: String(payload.content || payload.transferContent || ord?.orderCode || ''),
+          referenceNumber: String(payload.referenceCode || payload.referenceNumber || tx.gatewayTxnId),
+          matchStatus: tx.matchStatus as 'MATCHED' | 'UNMATCHED_ORDER' | 'AMOUNT_MISMATCH',
+          processedAt: tx.createdAt.toLocaleString('vi-VN'),
+        };
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 8.2 POST /admin/courses
 const createOrUpdateCourseSchema = z.object({
   id: z.union([z.string(), z.number()]).optional(),
   versionId: z.string().optional(),
@@ -316,7 +389,6 @@ adminRouter.post(
         syllabusTemplate,
       } = req.body;
 
-      // Case 1: Updating syllabusTemplate on an existing course
       if (rawCourseId && !title) {
         const numId = Number(rawCourseId);
         const [existingCourse] = await db
@@ -338,7 +410,7 @@ adminRouter.post(
           res.json({
             courseId: String(updated!.id),
             slug: updated!.slug,
-            status: updated!.status,
+            status: 'SAVED',
             versionId: versionId || 'v2026.1',
             course: {
               ...updated,
@@ -349,7 +421,6 @@ adminRouter.post(
         }
       }
 
-      // Case 2: Creating a new course
       let resolvedCategoryId = categoryId ?? 1;
       if (!categoryId && category) {
         const allCats = await db.select().from(categories);
@@ -361,7 +432,7 @@ adminRouter.post(
         }
       }
 
-      const courseTitle = title || 'Khóa học Kỹ sư AI Thực chiến Mới';
+      const courseTitle = title || 'Khóa học Mới';
       const courseSlug =
         slug ||
         courseTitle
@@ -381,9 +452,7 @@ adminRouter.post(
           slug: courseSlug,
           shortDescription: shortDescription || courseTitle,
           descriptionMd: descriptionMd || shortDescription || courseTitle,
-          thumbnailUrl:
-            thumbnailUrl ||
-            'https://images.unsplash.com/photo-1677442136019-21780ecad995?w=800&auto=format&fit=crop&q=80',
+          thumbnailUrl: thumbnailUrl || '',
           difficultyLevel,
           syllabusTemplate,
           status: 'PUBLISHED',
@@ -427,11 +496,11 @@ adminRouter.post(
       res.status(201).json({
         courseId: String(created!.id),
         slug: created!.slug,
-        status: created!.status,
+        status: 'SAVED',
         course: {
           ...created,
           id: String(created!.id),
-          category: category || 'Kỹ thuật AI & Phần mềm',
+          category: category || '',
           skills: reqSkills || [],
         },
       });
@@ -443,16 +512,18 @@ adminRouter.post(
 
 // 8.3 POST /admin/cohorts
 const createCohortSchema = z.object({
+  cohortId: z.union([z.number(), z.string()]).optional(),
   courseId: z.union([z.number(), z.string()]),
   code: z.string().min(3),
   name: z.string().min(3),
   instructorId: z.union([z.number(), z.string()]),
+  instructorName: z.string().optional(),
   curriculumVersion: z.string().default('v1.0'),
   techStackNotes: z.string().optional(),
   tuitionVnd: z.number().int().min(0),
   enrollmentOpenAt: z.string().optional(),
   startDate: z.string(),
-  endDate: z.string(),
+  endDate: z.string().optional(),
   scheduleSlots: z
     .array(
       z.object({
@@ -467,7 +538,7 @@ const createCohortSchema = z.object({
 adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res, next) => {
   try {
     const body = req.body;
-    const instructorIdNum = Number(body.instructorId) || 2;
+    const instructorIdNum = Number(body.instructorId) || req.user!.id;
 
     let courseIdNum = Number(body.courseId);
     let [course] = !Number.isNaN(courseIdNum)
@@ -480,7 +551,10 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
     }
     courseIdNum = course?.id ?? 1;
 
-    // Check instructor schedule conflict on overlapping active cohorts
+    const effectiveEndDate =
+      body.endDate ||
+      new Date(Date.parse(body.startDate) + 42 * 86400000).toISOString().slice(0, 10);
+
     const instructorCohorts = await db
       .select()
       .from(cohorts)
@@ -492,7 +566,7 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
         const conflict = (existing.scheduleSlots || []).some(
           (s) => s.dayOfWeek === newSlot.dayOfWeek && s.startTime === newSlot.startTime
         );
-        if (conflict && existing.endDate >= body.startDate && existing.startDate <= body.endDate) {
+        if (conflict && existing.endDate >= body.startDate && existing.startDate <= effectiveEndDate) {
           const message = `Giảng viên đã có lịch dạy trùng vào khung giờ ${newSlot.startTime} - ${newSlot.endTime} tại lớp ${existing.code}`;
           res.status(409).json({
             success: false,
@@ -521,7 +595,7 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
         tuitionVnd: body.tuitionVnd,
         enrollmentOpenAt: body.enrollmentOpenAt ? new Date(body.enrollmentOpenAt) : new Date(),
         startDate: body.startDate,
-        endDate: body.endDate,
+        endDate: effectiveEndDate,
         scheduleSlots: body.scheduleSlots as Array<{
           dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
           startTime: string;
@@ -531,13 +605,13 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
       })
       .returning();
 
-    // Auto-seed class_sessions from course.syllabusTemplate
     const syllabus = Array.isArray(course?.syllabusTemplate) ? course.syllabusTemplate : [];
     for (let idx = 0; idx < syllabus.length; idx++) {
       const mod = syllabus[idx] as {
         order?: number;
         title?: string;
         description?: string;
+        summary?: string;
         topics?: string[];
       };
       await db.insert(classSessions).values({
@@ -546,8 +620,10 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
         sessionOrder: mod.order ?? idx + 1,
         title: mod.title || `Buổi ${idx + 1}`,
         descriptionMd:
-          mod.description || (Array.isArray(mod.topics) ? mod.topics.join(', ') : ''),
-        activityTags: ['BÀI GIẢNG TRỰC TUYẾN', 'TRẮC NGHIỆM'],
+          mod.summary ||
+          mod.description ||
+          (Array.isArray(mod.topics) ? mod.topics.join(', ') : ''),
+        activityTags: ['THEORY', 'LIVE_CODING'],
         status: 'SCHEDULED',
         durationSeconds: 5400,
       });
@@ -560,7 +636,8 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
     const cohortDto = {
       id: String(created!.id),
       courseId: String(created!.courseId),
-      courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+      instructorId: String(created!.instructorId),
+      courseSlug: course?.slug || '',
       courseTitle: course?.title || created!.name,
       code: created!.code,
       name: created!.name,
@@ -569,7 +646,7 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
       techStackNotes: created!.techStackNotes,
       tuitionVnd: created!.tuitionVnd,
       enrolledCount: created!.enrolledCount,
-      enrollmentOpenAt: created!.enrollmentOpenAt,
+      enrollmentOpenAt: created!.enrollmentOpenAt.toISOString(),
       startDate: created!.startDate,
       endDate: created!.endDate,
       scheduleLabel: labels.scheduleLabel,
@@ -584,11 +661,12 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
     res.status(201).json({
       cohortId: String(created!.id),
       code: created!.code,
-      status: created!.status,
+      status: 'CREATED',
       instructorId: String(created!.instructorId),
       curriculumVersion: created!.curriculumVersion,
       scheduleSlots: created!.scheduleSlots,
       cohort: cohortDto,
+      payload: body,
     });
   } catch (err) {
     next(err);
@@ -603,6 +681,8 @@ const updateUserSchema = z.object({
   isActive: z.boolean().optional(),
   fullName: z.string().optional(),
   email: z.string().email().optional(),
+  roleDetail: z.string().optional(),
+  cohortAssigned: z.string().optional(),
 });
 
 adminRouter.put('/admin/users', validate(updateUserSchema), async (req, res, next) => {
@@ -664,17 +744,24 @@ adminRouter.put('/admin/users', validate(updateUserSchema), async (req, res, nex
   }
 });
 
-// 8.5 POST /admin/accounts (3-Table Account Creation: accounts + user_profiles + instructor_profiles)
+// 8.5 POST /admin/accounts
 const createAccountSchema = z.object({
   fullName: z.string().min(2, 'Họ tên tối thiểu 2 ký tự'),
   email: z.string().email('Email không hợp lệ'),
   password: z.string().min(6, 'Mật khẩu tối thiểu 6 ký tự').default('3tAcademy@2026'),
   role: z.enum(['STUDENT', 'INSTRUCTOR', 'ADMIN']),
   phone: z.string().optional(),
+  avatarUrl: z.string().optional(),
+  bio: z.string().optional(),
+  careerGoal: z.string().optional(),
+  interviewCredits: z.number().int().min(0).optional(),
   instructorHeadline: z.string().optional(),
   instructorOrganization: z.string().optional(),
+  instructorYearsOfExperience: z.number().int().min(0).optional(),
   yearsOfExperience: z.number().int().min(0).optional(),
+  instructorExpertiseSummaryMd: z.string().optional(),
   expertiseSummaryMd: z.string().optional(),
+  instructorSocialLinks: z.record(z.string()).optional(),
 });
 
 adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, res, next) => {
@@ -685,10 +772,17 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
       password,
       role,
       phone,
+      avatarUrl: reqAvatarUrl,
+      bio,
+      careerGoal,
+      interviewCredits,
       instructorHeadline,
       instructorOrganization,
+      instructorYearsOfExperience,
       yearsOfExperience,
+      instructorExpertiseSummaryMd,
       expertiseSummaryMd,
+      instructorSocialLinks,
     } = req.body;
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -730,11 +824,11 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
     }
 
     const passwordHash = await argon2.hash(password);
-    const avatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fullName)}`;
-    const defaultCredits = role === 'STUDENT' ? 2 : 0;
+    const defaultCredits = interviewCredits ?? (role === 'STUDENT' ? 2 : 0);
+    const expYears = instructorYearsOfExperience ?? yearsOfExperience ?? 5;
+    const expSummary = instructorExpertiseSummaryMd || expertiseSummaryMd || '';
 
     const createdAccount = await db.transaction(async (tx) => {
-      // 1. Insert into accounts
       const [acc] = await tx
         .insert(accounts)
         .values({
@@ -746,26 +840,25 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
         })
         .returning();
 
-      // 2. Insert into user_profiles
       await tx.insert(userProfiles).values({
         accountId: acc!.id,
         fullName,
-        avatarUrl,
+        avatarUrl: reqAvatarUrl || null,
         bio:
-          role === 'INSTRUCTOR'
+          bio ||
+          (role === 'INSTRUCTOR'
             ? instructorHeadline
             : role === 'ADMIN'
               ? 'Quản trị viên Hệ thống 3T Academy'
-              : 'Học viên tại 3T AI Academy',
-        careerGoal:
-          role === 'STUDENT' ? 'Trở thành Kỹ sư AI ứng dụng thực chiến' : undefined,
+              : 'Học viên tại 3T AI Academy'),
+        careerGoal: careerGoal || undefined,
         interviewCredits: defaultCredits,
         cvParsedData: {
           fullName,
           email: normalizedEmail,
-          phone: phone || '0912 345 678',
-          avatarUrl,
-          headline: instructorHeadline || 'Học viên tại 3T AI Academy',
+          phone: phone || '',
+          avatarUrl: reqAvatarUrl || '',
+          headline: instructorHeadline || bio || '',
           skills: [],
           projects: [],
           workExperience: [],
@@ -774,22 +867,26 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
         },
       });
 
-      // 3. If INSTRUCTOR, insert into instructor_profiles
       if (role === 'INSTRUCTOR') {
         await tx.insert(instructorProfiles).values({
           accountId: acc!.id,
           headline: instructorHeadline!.trim(),
           organization: instructorOrganization || '3T AI Academy',
-          yearsOfExperience: yearsOfExperience ?? 5,
-          expertiseSummaryMd:
-            expertiseSummaryMd ||
-            `Chuyên gia giảng dạy trực tiếp tại 3T AI Academy (${instructorHeadline}).`,
-          socialLinks: {},
+          yearsOfExperience: expYears,
+          expertiseSummaryMd: expSummary,
+          socialLinks: instructorSocialLinks || {},
         });
       }
 
       return acc!;
     });
+
+    const roleCategory: 'Học viên' | 'Giảng viên' | 'Quản trị viên' =
+      role === 'INSTRUCTOR'
+        ? 'Giảng viên'
+        : role === 'ADMIN'
+          ? 'Quản trị viên'
+          : 'Học viên';
 
     res.status(201).json({
       success: true,
@@ -797,18 +894,27 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
         id: String(createdAccount.id),
         fullName,
         email: createdAccount.email,
-        phone: phone || '0912 345 678',
+        phone: phone || '',
         role: createdAccount.role,
+        roleCategory,
+        roleDetail:
+          instructorHeadline ||
+          bio ||
+          (role === 'ADMIN' ? 'Quản trị viên Hệ thống' : 'Học viên'),
+        cohortAssigned: 'Chưa phân lớp',
+        locked: false,
         status: createdAccount.status,
         isActive: true,
-        avatarUrl,
+        avatarUrl: reqAvatarUrl,
         createdAt: createdAccount.createdAt.toLocaleDateString('vi-VN'),
         lastLoginAt: 'Mới khởi tạo',
         interviewCredits: defaultCredits,
         instructorHeadline: role === 'INSTRUCTOR' ? instructorHeadline : undefined,
         instructorOrganization:
           role === 'INSTRUCTOR' ? instructorOrganization || '3T AI Academy' : undefined,
-        yearsOfExperience: role === 'INSTRUCTOR' ? (yearsOfExperience ?? 5) : undefined,
+        instructorYearsOfExperience: role === 'INSTRUCTOR' ? expYears : undefined,
+        yearsOfExperience: role === 'INSTRUCTOR' ? expYears : undefined,
+        instructorExpertiseSummaryMd: role === 'INSTRUCTOR' ? expSummary : undefined,
         assignedCohorts: [],
       },
     });
@@ -877,7 +983,7 @@ adminRouter.post(
             cvParsedData: {
               fullName: studentName,
               email: normalizedEmail,
-              phone: '0912 345 678',
+              phone: '',
               skills: [],
               projects: [],
               workExperience: [],
@@ -930,6 +1036,7 @@ adminRouter.post(
         status: enrollment!.status,
         enrollment: {
           id: String(enrollment!.id),
+          userId: String(account.id),
           accountId: String(account.id),
           studentName: prof?.fullName || fullName || account.email,
           studentEmail: account.email,
@@ -966,33 +1073,17 @@ adminRouter.post(
     try {
       const { enrollmentIds } = req.body;
       const issuedCodes: string[] = [];
-      const issuedCertificates: Array<Record<string, unknown>> = [];
-
-      const [allCohorts, allCourses, allAccounts, allProfiles, allInst] = await Promise.all([
-        db.select().from(cohorts),
-        db.select().from(courses),
-        db.select().from(accounts),
-        db.select().from(userProfiles),
-        db.select().from(instructorProfiles),
-      ]);
-
-      const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
-      const courseMap = new Map(allCourses.map((c) => [c.id, c]));
-      const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
-      const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
-      const instMap = new Map(allInst.map((ip) => [ip.accountId, ip]));
 
       await db.transaction(async (tx) => {
         for (const rawEnrId of enrollmentIds) {
           const numId = Number(rawEnrId);
-          let [enr] = !Number.isNaN(numId)
-            ? await tx.select().from(enrollments).where(eq(enrollments.id, numId)).limit(1)
-            : [];
+          if (Number.isNaN(numId)) continue;
 
-          if (!enr) {
-            const allEnr = await tx.select().from(enrollments).limit(1);
-            enr = allEnr[0];
-          }
+          const [enr] = await tx
+            .select()
+            .from(enrollments)
+            .where(eq(enrollments.id, numId))
+            .limit(1);
           if (!enr) continue;
 
           const [existingCert] = await tx
@@ -1003,7 +1094,7 @@ adminRouter.post(
 
           let certRecord = existingCert;
           if (!certRecord) {
-            const certCode = `3T-CERT-2026-00${enr.id}`;
+            const certCode = `3T-CERT-${new Date().getFullYear()}-00${enr.id}`;
             const hmacSig = crypto
               .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
               .update(`${enr.id}:${enr.accountId}:${certCode}`)
@@ -1029,7 +1120,6 @@ adminRouter.post(
               })
               .where(eq(enrollments.id, enr.id));
 
-            // Spec v3.1 API 8.7: Add +4 interview credits when issuing graduation certificate
             await tx
               .update(userProfiles)
               .set({
@@ -1040,32 +1130,16 @@ adminRouter.post(
           }
 
           issuedCodes.push(certRecord.certificateCode);
-
-          const cohort = cohortMap.get(enr.cohortId);
-          const course = cohort ? courseMap.get(cohort.courseId) : undefined;
-          const stuAcc = accountMap.get(enr.accountId);
-          const stuProf = profileMap.get(enr.accountId);
-          const instProf = cohort ? profileMap.get(cohort.instructorId) : undefined;
-          const instMeta = cohort ? instMap.get(cohort.instructorId) : undefined;
-
-          issuedCertificates.push({
-            code: certRecord.certificateCode,
-            certificateCode: certRecord.certificateCode,
-            studentEmail: stuAcc?.email || 'an.nguyen.dev@gmail.com',
-            studentName: stuProf?.fullName || 'Nguyễn Văn An',
-            courseTitle:
-              course?.title || 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Agent',
-            cohortCode: cohort?.code || 'AI-ENG-2026-K01',
-            issuedAt: certRecord.issuedAt.toLocaleDateString('vi-VN'),
-            finalScore: '94/100 (Xuất sắc)',
-            hmacSignature: certRecord.hmacSignature,
-            instructorName: instProf?.fullName || 'TS. Trần Minh Khoa',
-            instructorTitle:
-              instMeta?.headline || 'Giảng viên Trưởng Khối Kỹ thuật AI — 3T Academy',
-            isRevoked: Boolean(certRecord.revokedAt),
-          });
         }
       });
+
+      const allCertRecords = await buildCertificateRecords();
+      const issuedCertificates: Record<string, (typeof allCertRecords)[number]> = {};
+      for (const cRec of allCertRecords) {
+        if (issuedCodes.includes(cRec.certificateCode)) {
+          issuedCertificates[cRec.certificateCode] = cRec;
+        }
+      }
 
       res.status(201).json({
         issuedCount: issuedCodes.length,
@@ -1081,7 +1155,7 @@ adminRouter.post(
 
 // 8.8 PUT /admin/certificates/:certificateCode/revoke
 const revokeCertSchema = z.object({
-  isRevoked: z.boolean(),
+  isRevoked: z.boolean().optional(),
   reason: z.string().optional(),
 });
 
@@ -1091,7 +1165,7 @@ adminRouter.put(
   async (req, res, next) => {
     try {
       const certificateCode = String(req.params.certificateCode || '').trim();
-      const { isRevoked, reason } = req.body;
+      const { isRevoked: reqIsRevoked, reason } = req.body || {};
 
       const [existing] = await db
         .select()
@@ -1113,23 +1187,33 @@ adminRouter.put(
         return;
       }
 
+      const nextRevokedState =
+        reqIsRevoked !== undefined ? reqIsRevoked : !Boolean(existing.revokedAt);
       const now = new Date();
+
       const [updated] = await db
         .update(certificates)
         .set({
-          revokedAt: isRevoked ? now : null,
-          revokeReason: isRevoked
+          revokedAt: nextRevokedState ? now : null,
+          revokeReason: nextRevokedState
             ? reason || 'Thu hồi theo quyết định của Hội đồng Đào tạo 3T Academy'
             : null,
         })
         .where(eq(certificates.id, existing.id))
         .returning();
 
+      const allCertRecords = await buildCertificateRecords(existing.accountId);
+      const matchedRecord = allCertRecords.find(
+        (c) => c.certificateCode === updated!.certificateCode
+      );
+
       res.json({
         certificateCode: updated!.certificateCode,
         isRevoked: Boolean(updated!.revokedAt),
         revokedAt: updated!.revokedAt ? updated!.revokedAt.toLocaleDateString('vi-VN') : undefined,
+        revokedReason: updated!.revokeReason || undefined,
         revokeReason: updated!.revokeReason || undefined,
+        certificate: matchedRecord || null,
       });
     } catch (err) {
       next(err);

@@ -44,9 +44,45 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
   const fallbackCohort =
     cohorts.find(
       (c) => c.id === cohortId || c.code.toLowerCase() === cohortId.toLowerCase()
-    ) ?? cohorts[0];
+    ) ??
+    cohorts[0] ?? {
+      id: cohortId,
+      courseId: '',
+      code: cohortId,
+      name: '',
+      mode: 'HYBRID' as const,
+      startDate: '',
+      endDate: '',
+      scheduleLabel: '',
+      scheduleSlots: [],
+      tuitionVnd: 0,
+      capacity: 0,
+      enrolledCount: 0,
+      seatsRemaining: 0,
+      status: 'UPCOMING' as const,
+      staff: [],
+    };
   const fallbackCourse =
-    courses.find((cr) => cr.id === fallbackCohort.courseId) ?? courses[0];
+    courses.find((cr) => cr.id === fallbackCohort.courseId) ??
+    courses[0] ?? {
+      id: fallbackCohort.courseId,
+      categoryId: '',
+      categorySlug: 'ai',
+      categoryName: '',
+      code: '',
+      slug: '',
+      title: 'Đang tải khóa học...',
+      subtitle: '',
+      level: 'INTERMEDIATE' as const,
+      durationWeeks: 0,
+      totalSessions: 0,
+      priceVnd: 0,
+      rating: 0,
+      reviewCount: 0,
+      capstoneSummary: '',
+      skills: [],
+      syllabusTemplate: [],
+    };
 
   const { data: workspaceData } = useAsyncQuery(
     () => studentLearningApi.getCohortWorkspace(cohortId),

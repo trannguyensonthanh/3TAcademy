@@ -11,9 +11,9 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
 }) => {
   const { setRole, setCurrentUser, navigate } = useAcademy();
   const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>(initialMode);
-  const [fullName, setFullName] = useState('Nguyễn Văn An');
-  const [email, setEmail] = useState('an.nguyen.ai@3tacademy.vn');
-  const [password, setPassword] = useState('3TAcademy@2026');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const strength = evaluatePasswordStrength(password);
@@ -30,53 +30,62 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
     }
     setErrorMsg(null);
 
-    if (mode === 'REGISTER') {
-      const res = await authApi.register(fullName, email, password);
-      if (res.accessToken) {
-        setAuthAccessToken(res.accessToken);
-      }
-      if (res.user) {
-        setCurrentUser(res.user);
-      }
-      setRole(res.user.role || 'STUDENT');
-      navigate('/onboarding');
-    } else {
-      const res = await authApi.login(email, password);
-      if (res.accessToken) {
-        setAuthAccessToken(res.accessToken);
-      }
-      if (res.user) {
-        setCurrentUser(res.user);
-      }
-      const userRole = res.user.role || 'STUDENT';
-      setRole(userRole);
-      if (userRole === 'INSTRUCTOR') {
-        navigate('/teach');
-      } else if (userRole === 'ADMIN') {
-        navigate('/admin');
+    try {
+      if (mode === 'REGISTER') {
+        const res = await authApi.register(fullName, email, password);
+        if (res.accessToken) {
+          setAuthAccessToken(res.accessToken);
+        }
+        if (res.user) {
+          setCurrentUser(res.user);
+        }
+        setRole(res.user.role || 'STUDENT');
+        navigate('/onboarding');
       } else {
-        navigate('/app');
+        const res = await authApi.login(email, password);
+        if (res.accessToken) {
+          setAuthAccessToken(res.accessToken);
+        }
+        if (res.user) {
+          setCurrentUser(res.user);
+        }
+        const userRole = res.user.role || 'STUDENT';
+        setRole(userRole);
+        if (userRole === 'INSTRUCTOR') {
+          navigate('/teach');
+        } else if (userRole === 'ADMIN') {
+          navigate('/admin');
+        } else {
+          navigate('/app');
+        }
       }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Đăng nhập / đăng ký thất bại. Vui lòng kiểm tra lại thông tin.');
     }
   };
 
   const handleGoogleOneTap = async () => {
-    const idToken = 'google-onetap-token-2026';
-    const res = await authApi.googleLogin(idToken);
-    if (res.accessToken) {
-      setAuthAccessToken(res.accessToken);
-    }
-    if (res.user) {
-      setCurrentUser(res.user);
-    }
-    const nextRole = res.user?.role || 'STUDENT';
-    setRole(nextRole);
-    if (nextRole === 'INSTRUCTOR') {
-      navigate('/teach');
-    } else if (nextRole === 'ADMIN') {
-      navigate('/admin');
-    } else {
-      navigate('/onboarding');
+    setErrorMsg(null);
+    try {
+      const idToken = 'google-oauth-id-token';
+      const res = await authApi.googleLogin(idToken);
+      if (res.accessToken) {
+        setAuthAccessToken(res.accessToken);
+      }
+      if (res.user) {
+        setCurrentUser(res.user);
+      }
+      const nextRole = res.user?.role || 'STUDENT';
+      setRole(nextRole);
+      if (nextRole === 'INSTRUCTOR') {
+        navigate('/teach');
+      } else if (nextRole === 'ADMIN') {
+        navigate('/admin');
+      } else {
+        navigate('/onboarding');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Xác thực Google OAuth không thành công.');
     }
   };
 

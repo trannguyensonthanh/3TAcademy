@@ -47,67 +47,11 @@ interface FloatingReaction {
   leftPct: number;
 }
 
-const INITIAL_LIVE_CHAT: LiveChatMessage[] = [
-  {
-    id: 'lc-1',
-    sender: 'TS. Trần Minh Khoa',
-    roleLabel: 'Giảng viên',
-    time: '19:32',
-    text: 'Chào cả lớp K01 nhé! Tối nay mình cùng thực hành viết bộ kết hợp tìm kiếm từ khóa và ngữ nghĩa trực tiếp trên dữ liệu thật.',
-  },
-  {
-    id: 'lc-3',
-    sender: 'Lê Hoàng Mai',
-    time: '19:38',
-    text: 'Ví dụ minh họa trực tiếp trên màn hình của thầy dễ hiểu quá ạ!',
-  },
-];
+const INITIAL_LIVE_CHAT: LiveChatMessage[] = [];
 
-const INITIAL_LIVE_QA: LiveQuestionItem[] = [
-  {
-    id: 'lqa-1',
-    author: 'Nguyễn Văn An',
-    time: '19:40',
-    question:
-      'Thầy ơi, khi kết hợp điểm tìm kiếm từ khóa và điểm tìm kiếm theo ý nghĩa câu hỏi thì mình nên chia tỷ lệ trọng số thế nào cho hợp lý ạ?',
-    votes: 18,
-    answeredByInstructor: true,
-  },
-  {
-    id: 'lqa-2',
-    author: 'Trần Minh Quân',
-    time: '19:42',
-    question:
-      'Nếu người dùng gõ sai chính tả tên mã hợp đồng thì bước tìm kiếm nào sẽ đỡ lại giúp mình ạ?',
-    votes: 11,
-  },
-  {
-    id: 'lqa-3',
-    author: 'Phạm Thu Hà',
-    time: '19:45',
-    question:
-      'Làm sao để giới hạn chỉ trả về các tài liệu mà phòng ban của nhân viên đó được phép xem ngay từ câu lệnh truy vấn đầu tiên ạ?',
-    votes: 9,
-  },
-];
+const INITIAL_LIVE_QA: LiveQuestionItem[] = [];
 
-const LIVE_TRANSCRIPT_LINES = [
-  {
-    time: '19:35',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Đầu tiên, các bạn luôn lọc theo phòng ban của người hỏi ngay trong câu truy vấn SQL để đảm bảo an toàn dữ liệu.',
-  },
-  {
-    time: '19:39',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Tiếp theo, chúng ta lấy ra 20 đoạn văn bản khớp từ khóa nhất và 20 đoạn khớp ý nghĩa nhất rồi gộp lại chấm điểm.',
-  },
-  {
-    time: '19:43',
-    speaker: 'TS. Trần Minh Khoa',
-    text: 'Các bạn chú ý dòng số 28 trên màn hình chia sẻ nhé, chúng ta luôn giữ lại số trang gốc để hiển thị trích dẫn.',
-  },
-];
+const LIVE_TRANSCRIPT_LINES: { time: string; speaker: string; text: string }[] = [];
 
 export const LivestreamClassView: React.FC<{
   sessionId: string;
@@ -117,20 +61,14 @@ export const LivestreamClassView: React.FC<{
 
   // Guest speaker 1-click entry mode (/live/guest)
   const [guestMode, setGuestMode] = useState<boolean>(isGuestEntry);
-  const [joinedAsVerifiedGuest, setJoinedAsVerifiedGuest] = useState<boolean>(isGuestEntry);
-  const [guestInviteToken, setGuestInviteToken] = useState<string>('guest-token-k01-live');
+  const [joinedAsVerifiedGuest, setJoinedAsVerifiedGuest] = useState<boolean>(false);
+  const [guestInviteToken, setGuestInviteToken] = useState<string>('');
   const [guestVerifyError, setGuestVerifyError] = useState<string | null>(null);
   const [isVerifyingGuest, setIsVerifyingGuest] = useState<boolean>(false);
-  const [guestDisplayName, setGuestDisplayName] = useState<string>(
-    'ThS. Lê Quốc Bảo (Chuyên gia Khách mời)'
-  );
-  const [guestRoleHeadline, setGuestRoleHeadline] = useState<string>(
-    'Kiến trúc sư Hệ thống AI Doanh nghiệp'
-  );
+  const [guestDisplayName, setGuestDisplayName] = useState<string>('');
+  const [guestRoleHeadline, setGuestRoleHeadline] = useState<string>('');
   const [joinedGuestName, setJoinedGuestName] = useState<string>(
-    isGuestEntry
-      ? 'ThS. Lê Quốc Bảo (Khách mời)'
-      : currentUser?.fullName || 'Nguyễn Văn An'
+    currentUser?.fullName || 'Học viên'
   );
 
   // Real Webcam via navigator.mediaDevices.getUserMedia({ video: true })
@@ -216,7 +154,23 @@ export const LivestreamClassView: React.FC<{
   const activeSession =
     sessions.find((s) => s.id === sessionId) ??
     sessions.find((s) => s.status === 'LIVE') ??
-    sessions[0];
+    sessions[0] ?? {
+      id: sessionId,
+      cohortId: '',
+      sessionOrder: 1,
+      title: 'Đang tải phòng học trực tuyến...',
+      status: 'LIVE' as const,
+      scheduledStart: '',
+      scheduledEnd: '',
+      durationSeconds: 3600,
+      lastPositionSec: 0,
+      isCompleted: false,
+      quizScore: 0,
+      hostInstructorName: '',
+      attachmentsCount: 0,
+      aiSummaryMd: '',
+      aiCitations: [],
+    };
   const activeCohort =
     cohorts.find((c) => c.id === activeSession.cohortId) ?? cohorts[0];
 

@@ -79,105 +79,6 @@ interface CurriculumVersionItem {
   sessions: SyllabusTemplateItem[];
 }
 
-const INITIAL_AI_COURSE_VERSIONS: CurriculumVersionItem[] = [
-  {
-    versionId: 'v2025',
-    versionLabel: 'Phiên bản 2025 (v2025 — Chuẩn khóa cũ)',
-    yearTag: 'Năm học 2025',
-    appliedCohortsText: 'Đang áp dụng cho: Đợt K01 (Giữ nguyên để học viên cũ xem lại không bị xáo trộn)',
-    isLockedHistorical: true,
-    sessions: [
-      {
-        order: 1,
-        title: 'Kiến trúc tổng thể hệ thống Trợ lý AI doanh nghiệp (Chuẩn 2025)',
-        summary: 'Làm quen quy trình xử lý văn bản và kết nối mô hình ngôn ngữ.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-      },
-      {
-        order: 2,
-        title: 'Chia nhỏ văn bản PDF & Lưu trữ chỉ mục tìm kiếm cơ bản',
-        summary: 'Tách đoạn tài liệu hợp đồng và tạo bảng dữ liệu tìm kiếm.',
-        activityTags: ['LIVE_CODING'],
-      },
-      {
-        order: 3,
-        title: 'Xây dựng bộ tìm kiếm ngữ nghĩa trên cơ sở dữ liệu PostgreSQL',
-        summary: 'Truy vấn các đoạn tài liệu sát nghĩa với câu hỏi nhân viên.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-      },
-      {
-        order: 4,
-        title: 'Phân quyền truy cập tài liệu nội bộ theo từng phòng ban',
-        summary: 'Đảm bảo nhân viên chỉ tra cứu được tài liệu đúng thẩm quyền.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-      },
-      {
-        order: 5,
-        title: 'Kết hợp tìm kiếm từ khóa & tìm kiếm ngữ nghĩa cho Trợ lý AI',
-        summary: 'Gộp kết quả tìm chính xác mã hợp đồng và tìm theo ý nghĩa.',
-        activityTags: ['LIVE_CODING'],
-      },
-      {
-        order: 6,
-        title: 'Kiểm thử chất lượng câu trả lời & Đưa hệ thống vào vận hành',
-        summary: 'Đánh giá độ chính xác và bảo vệ tài liệu doanh nghiệp.',
-        activityTags: ['WORKSHOP'],
-      },
-    ],
-  },
-  {
-    versionId: 'v2026',
-    versionLabel: 'Phiên bản 2026 mới (v2026 — Cập nhật công nghệ mới)',
-    yearTag: 'Năm học 2026',
-    appliedCohortsText: 'Đang áp dụng cho: Đợt K02, Đợt K03 (Độc lập hoàn toàn với Đợt K01 năm 2025)',
-    isLockedHistorical: false,
-    sessions: [
-      {
-        order: 1,
-        title: 'Kiến trúc Hệ thống AI Đa tác vụ & Chuẩn giao tiếp dữ liệu 2026',
-        summary: 'Cập nhật bộ thư viện mới nhất năm 2026 và thiết kế luồng xử lý tốc độ cao.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-      },
-      {
-        order: 2,
-        title: 'Bóc tách bảng biểu, biểu đồ phức tạp & Làm sạch dữ liệu tự động',
-        summary: 'Nâng cấp kỹ thuật đọc báo cáo tài chính nhiều cột và hợp đồng scan.',
-        activityTags: ['LIVE_CODING'],
-      },
-      {
-        order: 3,
-        title: 'Thiết kế Cơ sở dữ liệu Tìm kiếm Kết hợp (Từ khóa + Ngữ nghĩa thế hệ mới)',
-        summary: 'Tối ưu tốc độ truy vấn dưới 50ms cho hàng triệu trang tài liệu.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-      },
-      {
-        order: 4,
-        title: 'Bảo mật nhiều lớp & Kiểm soát quyền truy cập theo vai trò nhân sự',
-        summary: 'Chặn rò rỉ thông tin nhạy cảm ngay từ bước truy vấn đầu tiên.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-      },
-      {
-        order: 5,
-        title: 'Xây dựng Trợ lý AI tự động tra cứu & Trích dẫn chính xác số trang gốc',
-        summary: 'Hiển thị rõ đoạn trích dẫn để người dùng kiểm chứng ngay lập tức.',
-        activityTags: ['LIVE_CODING'],
-      },
-      {
-        order: 6,
-        title: 'Tự động giám sát chất lượng câu trả lời & Triển khai thực tế cho doanh nghiệp',
-        summary: 'Thiết lập bộ tiêu chí chấm điểm tự động và vận hành ổn định.',
-        activityTags: ['WORKSHOP'],
-      },
-      {
-        order: 7,
-        title: 'Buổi 7 (Mới bổ sung cho v2026): Tối ưu chi phí vận hành & Bảo trì hệ thống AI',
-        summary: 'Buổi học mới chỉ có ở Phiên bản đề cương 2026 dành cho Khóa K02 trở đi.',
-        activityTags: ['WORKSHOP', 'LIVE_CODING'],
-      },
-    ],
-  },
-];
-
 export const AdminPortalView: React.FC = () => {
   const {
     adminSidebarTab,
@@ -189,6 +90,7 @@ export const AdminPortalView: React.FC = () => {
     receipts,
     certificates: contextCertificates,
     toggleCertificateRevoke,
+    currentUser,
     setRole,
     navigate,
   } = useAcademy();
@@ -219,13 +121,11 @@ export const AdminPortalView: React.FC = () => {
   );
   const courseCatalog = apiCourses && apiCourses.length > 0 ? apiCourses : courses;
   const [selectedCourseForVersionId, setSelectedCourseForVersionId] = useState<string>(
-    courseCatalog[0]?.id ?? 'course-ai-eng'
+    courseCatalog[0]?.id ?? ''
   );
   const [courseVersionsMap, setCourseVersionsMap] = useState<
     Record<string, CurriculumVersionItem[]>
-  >({
-    'course-ai-eng': INITIAL_AI_COURSE_VERSIONS,
-  });
+  >({});
   const [activeVersionId, setActiveVersionId] = useState<string>('v2026');
   const [newSessionTitleInput, setNewSessionTitleInput] = useState<string>('');
   const [newSessionSummaryInput, setNewSessionSummaryInput] = useState<string>('');
@@ -320,7 +220,20 @@ export const AdminPortalView: React.FC = () => {
 
   // Lấy danh sách phiên bản đề cương của khóa học đang chọn
   const currentCourseobj =
-    courseCatalog.find((c) => c.id === selectedCourseForVersionId) ?? courseCatalog[0];
+    courseCatalog.find((c) => c.id === selectedCourseForVersionId) ??
+    courseCatalog[0] ?? {
+      id: selectedCourseForVersionId,
+      slug: '',
+      title: 'Chưa có khóa học',
+      category: 'AI & Dữ liệu' as const,
+      shortDescription: '',
+      descriptionMd: '',
+      difficultyLevel: 3 as const,
+      ratingAvg: 0,
+      reviewCount: 0,
+      skills: [],
+      syllabusTemplate: [],
+    };
   const currentVersionsList: CurriculumVersionItem[] = courseVersionsMap[
     selectedCourseForVersionId
   ] ?? [
@@ -330,7 +243,7 @@ export const AdminPortalView: React.FC = () => {
       yearTag: 'Năm học 2025',
       appliedCohortsText: 'Đang áp dụng cho: Đợt K01 (Giữ nguyên lịch sử học tập)',
       isLockedHistorical: true,
-      sessions: currentCourseobj.syllabusTemplate,
+      sessions: currentCourseobj.syllabusTemplate ?? [],
     },
     {
       versionId: 'v2026',
@@ -338,7 +251,7 @@ export const AdminPortalView: React.FC = () => {
       yearTag: 'Năm học 2026',
       appliedCohortsText: 'Đang áp dụng cho: Đợt K02, K03 (Cho phép chỉnh sửa độc lập)',
       isLockedHistorical: false,
-      sessions: currentCourseobj.syllabusTemplate,
+      sessions: currentCourseobj.syllabusTemplate ?? [],
     },
   ];
 
@@ -826,7 +739,9 @@ export const AdminPortalView: React.FC = () => {
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold truncate">Phạm Thu Trang</p>
+              <p className="text-xs font-bold truncate">
+                {currentUser?.fullName || 'Quản trị viên'}
+              </p>
               <p className="text-[11px] text-[#059669] dark:text-[#34D399] font-semibold truncate">
                 Quản lý Đào tạo &amp; Giáo vụ
               </p>
@@ -1049,10 +964,10 @@ export const AdminPortalView: React.FC = () => {
                         Tổng số học viên đang học
                       </p>
                       <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-[#0F172A] dark:text-white">
-                        {(overviewData?.totalStudentsCount ?? 1420).toLocaleString('vi-VN')} học viên
+                        {(overviewData?.totalStudentsCount ?? 0).toLocaleString('vi-VN')} học viên
                       </p>
                       <p className="text-xs text-[#10B981] font-semibold mt-1">
-                        +18% so với tháng trước
+                        Dữ liệu đồng bộ từ hệ thống
                       </p>
                     </div>
 
@@ -1061,10 +976,10 @@ export const AdminPortalView: React.FC = () => {
                         Học phí VietQR thu trong tháng
                       </p>
                       <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-[#10B981]">
-                        {formatCurrencyVnd(overviewData?.totalRevenueVnd ?? 685000000)}
+                        {formatCurrencyVnd(overviewData?.totalRevenueVnd ?? 0)}
                       </p>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8] mt-1">
-                        Khớp lệnh tự động SePay đạt 99.8%
+                        Đối soát tự động qua SePay Webhook
                       </p>
                     </div>
 
@@ -1076,7 +991,7 @@ export const AdminPortalView: React.FC = () => {
                         {overviewData?.activeCohortsCount ?? cohorts.length} lớp học
                       </p>
                       <p className="text-xs text-[#10B981] font-semibold mt-1">
-                        Tỷ lệ tham gia học đầy đủ đạt 94%
+                        Theo dõi thời gian thực
                       </p>
                     </div>
 
@@ -1085,7 +1000,7 @@ export const AdminPortalView: React.FC = () => {
                         Số chứng chỉ số đã cấp
                       </p>
                       <p className="text-2xl font-bold font-mono tabular-nums mt-1.5 text-[#0F172A] dark:text-white">
-                        {(overviewData?.issuedCertificatesCount ?? Object.keys(certificates).length + 310).toLocaleString('vi-VN')} chứng chỉ
+                        {(overviewData?.issuedCertificatesCount ?? Object.keys(certificates).length).toLocaleString('vi-VN')} chứng chỉ
                       </p>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8] mt-1">
                         Đạt chuẩn đầu ra của học viện

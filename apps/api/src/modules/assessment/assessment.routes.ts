@@ -4,6 +4,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { db } from '../../db/index.js';
 import {
+  assessments,
   assessmentItems,
   assessmentAttempts,
   submissionAnswers,
@@ -28,6 +29,7 @@ export const assessmentRouter = Router();
 
 interface PromptConfigShape {
   number?: number;
+  scenarioTag?: string;
   prompt?: string;
   question?: string;
   options?: string[];
@@ -112,46 +114,61 @@ assessmentRouter.get('/assessments/:assessmentId', requireAuth, async (req, res,
     );
     const isRetakeLocked = Boolean(isFinalExam && hasPassedFinalExam);
 
-    const sanitizedItems = items.map((item, idx) => {
+    const sanitizedPromptConfig = items.map((item, idx) => {
       const pCfg = (item.promptConfig || {}) as PromptConfigShape;
       const sk = skillMap.get(item.skillId);
+      const number = pCfg.number ?? item.itemOrder ?? idx + 1;
+      const prompt = pCfg.prompt || pCfg.question || '';
+      const options = Array.isArray(pCfg.options) ? pCfg.options : [];
+      const slideLabel = pCfg.slideLabel || '';
+      const scenarioTag = pCfg.scenarioTag || (isFinalExam ? 'Tình huống thực chiến' : 'Câu hỏi củng cố');
+
       return {
         id: String(item.id),
-        number: pCfg.number ?? item.itemOrder ?? idx + 1,
+        number,
         itemOrder: item.itemOrder,
         itemType: item.itemType,
         skillId: item.skillId,
-        skillName: sk?.name || 'Kỹ thuật RAG & Vector Search',
+        skillCode: sk?.code || String(item.skillId),
+        skillName: sk?.name || '',
+        scenarioTag,
         points: Number(item.points),
-        prompt: pCfg.prompt || pCfg.question || '',
-        options: Array.isArray(pCfg.options) ? pCfg.options : [],
-        slideLabel: pCfg.slideLabel || 'Slide Trang 8',
+        prompt,
+        options,
+        slideLabel,
         promptConfig: {
-          number: pCfg.number ?? item.itemOrder ?? idx + 1,
-          prompt: pCfg.prompt || pCfg.question || '',
-          options: Array.isArray(pCfg.options) ? pCfg.options : [],
-          slideLabel: pCfg.slideLabel || 'Slide Trang 8',
+          number,
+          scenarioTag,
+          prompt,
+          options,
+          slideLabel,
         },
       };
     });
 
+    const timeLimitMinutes = assessment.durationMinutes || (isFinalExam ? 45 : 20);
+
     res.json({
       id: String(assessment.id),
+      assessmentId: String(assessment.id),
       cohortId: String(assessment.cohortId),
-      sessionId: assessment.sessionId ? String(assessment.sessionId) : null,
+      sessionId: assessment.sessionId ? String(assessment.sessionId) : undefined,
       purpose: assessment.purpose,
       isFinalExam,
       title: assessment.title,
       instructionsMd: assessment.instructionsMd,
-      durationMinutes: assessment.durationMinutes || (isFinalExam ? 45 : 20),
+      durationMinutes: timeLimitMinutes,
+      timeLimitMinutes,
+      questionCount: sanitizedPromptConfig.length,
       passScorePct: assessment.passScorePct,
       maxAttempts: assessment.maxAttempts,
       proctoringConfig: assessment.proctoringConfig,
       status: assessment.status,
       hasPassedFinalExam,
       isRetakeLocked,
-      items: sanitizedItems,
-      questions: sanitizedItems,
+      promptConfig: sanitizedPromptConfig,
+      items: sanitizedPromptConfig,
+      questions: sanitizedPromptConfig,
     });
   } catch (err) {
     next(err);
@@ -160,15 +177,21 @@ assessmentRouter.get('/assessments/:assessmentId', requireAuth, async (req, res,
 
 // 4.2 POST /assessments/:assessmentId/submit
 const submitSchema = z.object({
-  answers: z.array(
-    z.object({
-      itemId: z.union([z.number(), z.string()]).optional(),
-      questionNumber: z.number().int().positive().optional(),
-      selectedIndex: z.number().int().min(-1).optional(),
-      chosenIndex: z.number().int().min(-1).optional(),
-      answerText: z.string().optional(),
-    })
-  ),
+  answers: z.union([
+    z.record(z.string(), z.number().int()),
+    z.array(
+      z.object({
+        itemId: z.union([z.number(), z.string()]).optional(),
+        itemOrder: z.number().int().positive().optional(),
+        questionNumber: z.number().int().positive().optional(),
+        selectedIndex: z.number().int().min(-1).optional(),
+        selectedIdx: z.number().int().min(-1).optional(),
+        chosenIndex: z.number().int().min(-1).optional(),
+        answerText: z.string().optional(),
+      })
+    ),
+  ]),
+  telemetryLog: z.unknown().optional(),
 });
 
 assessmentRouter.post(
@@ -195,7 +218,6 @@ assessmentRouter.post(
       const accountId = req.user!.id;
       const isFinalExam = assessment.purpose === 'FINAL_EXAM';
 
-      // Check Final Exam 1-attempt pass lock (Spec v3.1 API 4.1 & 4.2)
       const [existingEnrollment] = await db
         .select()
         .from(enrollments)
@@ -223,7 +245,7 @@ assessmentRouter.post(
         return;
       }
 
-      const { answers } = req.body;
+      const rawAnswers = req.body.answers;
       const [items, allSkills] = await Promise.all([
         db
           .select()
@@ -238,6 +260,8 @@ assessmentRouter.post(
       let totalScore = 0;
       let maxPossibleScore = 0;
       let correctCount = 0;
+      const selectedAnswersRecord: Record<number, number> = {};
+      const selectedIndices: number[] = [];
 
       const gradedAnswers: Array<{
         itemId: number;
@@ -279,15 +303,29 @@ assessmentRouter.post(
         const options = Array.isArray(pCfg.options) ? pCfg.options : [];
         const sk = skillMap.get(item.skillId);
 
-        const userAns =
-          answers.find(
-            (a: { itemId?: number | string; questionNumber?: number }) =>
-              (a.itemId !== undefined && String(a.itemId) === String(item.id)) ||
-              a.questionNumber === qNumber
-          ) || answers[idx];
+        let chosenIndex = -1;
+        if (Array.isArray(rawAnswers)) {
+          const userAns =
+            rawAnswers.find(
+              (a) =>
+                (a.itemId !== undefined && String(a.itemId) === String(item.id)) ||
+                a.questionNumber === qNumber ||
+                a.itemOrder === qNumber
+            ) || rawAnswers[idx];
+          chosenIndex =
+            userAns?.selectedIndex ?? userAns?.selectedIdx ?? userAns?.chosenIndex ?? -1;
+        } else if (rawAnswers && typeof rawAnswers === 'object') {
+          const recordAns = rawAnswers as Record<string, number>;
+          if (recordAns[String(qNumber)] !== undefined) {
+            chosenIndex = Number(recordAns[String(qNumber)]);
+          } else if (recordAns[String(idx)] !== undefined) {
+            chosenIndex = Number(recordAns[String(idx)]);
+          }
+        }
 
-        const chosenIndex =
-          userAns?.selectedIndex ?? userAns?.chosenIndex ?? -1;
+        selectedAnswersRecord[qNumber] = chosenIndex;
+        selectedIndices.push(chosenIndex);
+
         const isCorrect = chosenIndex === correctIdx;
         const pointsEarned = isCorrect ? maxPts : 0;
 
@@ -300,7 +338,7 @@ assessmentRouter.post(
             id: String(item.id),
             number: qNumber,
             skillId: item.skillId,
-            skillName: sk?.name || 'Xây dựng luồng Hybrid RAG',
+            skillName: sk?.name || '',
             prompt: pCfg.prompt || pCfg.question || '',
             options,
             chosenIndex,
@@ -309,14 +347,12 @@ assessmentRouter.post(
                 ? options[chosenIndex]!
                 : 'Chưa chọn đáp án',
             correctIndex: correctIdx,
-            correctOptionText: options[correctIdx] || 'Đáp án A',
-            explanation:
-              item.explanationMd ||
-              'Xem lại đoạn bài giảng tương ứng để nắm vững kiến thức trọng tâm.',
+            correctOptionText: options[correctIdx] || '',
+            explanation: item.explanationMd || '',
             reviewTimestampLabel: gCfg.reviewTimestampLabel || '00:10 — 00:25',
             reviewJumpSec: jumpSec,
             reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec || [jumpSec, jumpSec + 15],
-            slideLabel: pCfg.slideLabel || 'Slide Trang 8',
+            slideLabel: pCfg.slideLabel || '',
           });
         }
 
@@ -333,7 +369,8 @@ assessmentRouter.post(
       });
 
       const scorePercent =
-        maxPossibleScore > 0 ? Math.round((totalScore / maxPossibleScore) * 100) : 100;
+        maxPossibleScore > 0 ? Math.round((totalScore / maxPossibleScore) * 100) : 0;
+      const scoreOutOf10 = Number((scorePercent / 10).toFixed(1));
       const isPassed = scorePercent >= assessment.passScorePct;
       const now = new Date();
 
@@ -343,6 +380,8 @@ assessmentRouter.post(
 
       const updatedSkills: Array<{
         skillId: string;
+        code: string;
+        name: string;
         skillName: string;
         previousScore: number;
         newScore: number;
@@ -383,7 +422,6 @@ assessmentRouter.post(
           });
         }
 
-        // Update student_skill_states on 0..100 display scale
         const uniqueSkillIds = [...new Set(gradedAnswers.map((a) => a.skillId))];
         for (const skId of uniqueSkillIds) {
           const skItems = gradedAnswers.filter((a) => a.skillId === skId);
@@ -404,11 +442,11 @@ assessmentRouter.post(
 
           const prevScore = existingState
             ? normalizeMasteryScore(existingState.masteryScore)
-            : 75;
+            : 0;
           const targetScore = Math.round(skRatio * 100);
           const newScore = existingState
-            ? Math.min(100, Math.max(prevScore, Math.round(prevScore * 0.7 + targetScore * 0.3 + (skRatio >= 0.7 ? 4 : 0))))
-            : Math.max(70, targetScore);
+            ? Math.min(100, Math.max(prevScore, Math.round(prevScore * 0.7 + targetScore * 0.3)))
+            : targetScore;
           const diff = newScore - prevScore;
 
           await tx
@@ -433,21 +471,22 @@ assessmentRouter.post(
 
           updatedSkills.push({
             skillId: String(skId),
-            skillName: sk?.name || 'Kỹ năng Thực chiến AI',
+            code: sk?.code || String(skId),
+            name: sk?.name || '',
+            skillName: sk?.name || '',
             previousScore: prevScore,
             newScore,
             delta: diff >= 0 ? `+${diff} điểm` : `${diff} điểm`,
           });
         }
 
-        // If Session Quiz passed -> mark session_progress.isCompleted = true
         if (assessment.sessionId && isPassed) {
           await tx
             .insert(sessionProgress)
             .values({
               accountId,
               sessionId: assessment.sessionId,
-              lastPositionSec: 1200,
+              lastPositionSec: 0,
               isCompleted: true,
               completedAt: now,
               lastActivityAt: now,
@@ -462,7 +501,6 @@ assessmentRouter.post(
             });
         }
 
-        // If Final Exam passed -> mark enrollment.finalExamPassed = true, issue Certificate & +4 Interview Credits
         if (isFinalExam && isPassed && existingEnrollment) {
           await tx
             .update(enrollments)
@@ -482,7 +520,7 @@ assessmentRouter.post(
           if (existingCert) {
             issuedCertificateCode = existingCert.certificateCode;
           } else {
-            const certCode = `3T-AI-2026-K01-00${accountId}`;
+            const certCode = `3T-CERT-${new Date().getFullYear()}-${existingEnrollment.id}-${accountId}`;
             const hmacSig = crypto
               .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
               .update(`${existingEnrollment.id}:${accountId}:${certCode}`)
@@ -497,7 +535,6 @@ assessmentRouter.post(
             });
             issuedCertificateCode = certCode;
 
-            // Bonus +4 interview credits per API 4.2 & 8.7
             bonusInterviewCreditsAdded = 4;
             const [updatedProf] = await tx
               .update(userProfiles)
@@ -514,23 +551,35 @@ assessmentRouter.post(
         return newAttempt!;
       });
 
-      res.json({
+      const submission = {
         attemptId: String(attempt.id),
         assessmentId: String(assessment.id),
+        title: assessment.title,
         isFinalExam,
         submittedAt: (attempt.submittedAt || now).toLocaleString('vi-VN'),
         totalQuestions: items.length,
         correctCount,
         totalScore,
         maxPossibleScore,
+        scoreOutOf10,
         scorePercent,
         scorePct: scorePercent,
         passed: isPassed,
         isPassed,
+        selectedAnswers: selectedAnswersRecord,
+        selectedIndices,
         integrityStatus: attempt.integrityStatus,
         wrongItems,
         remedialRecommendations: wrongItems,
         updatedSkills,
+      };
+
+      res.json({
+        ...submission,
+        submission,
+        sessionMarkedCompleted: Boolean(assessment.sessionId && isPassed),
+        isRetakeLocked: Boolean(isFinalExam && isPassed),
+        certificateIssuedCode: issuedCertificateCode,
         issuedCertificateCode,
         bonusInterviewCreditsAdded,
         updatedInterviewCredits,
@@ -541,165 +590,215 @@ assessmentRouter.post(
   }
 );
 
-// 4.3 GET /assessments/:assessmentId/result
-assessmentRouter.get(
-  '/assessments/:assessmentId/result',
-  requireAuth,
-  async (req, res, next) => {
-    try {
-      const assessment = await resolveAssessment(req.params.assessmentId);
-      if (!assessment) {
-        res.status(404).json({
-          success: false,
-          status: 404,
+// 4.3 GET /assessments/:assessmentId/result & /assessments/:assessmentId/results
+async function handleGetAssessmentResult(req: any, res: any, next: any) {
+  try {
+    const assessment = await resolveAssessment(req.params.assessmentId);
+    if (!assessment) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'ASSESSMENT_NOT_FOUND',
+        message: 'Không tìm thấy bài kiểm tra',
+        error: {
           code: 'ASSESSMENT_NOT_FOUND',
           message: 'Không tìm thấy bài kiểm tra',
-          error: {
-            code: 'ASSESSMENT_NOT_FOUND',
-            message: 'Không tìm thấy bài kiểm tra',
-          },
-        });
-        return;
-      }
-
-      const accountId = req.user!.id;
-      const [attempt] = await db
-        .select()
-        .from(assessmentAttempts)
-        .where(
-          and(
-            eq(assessmentAttempts.assessmentId, assessment.id),
-            eq(assessmentAttempts.accountId, accountId)
-          )
-        )
-        .orderBy(desc(assessmentAttempts.submittedAt))
-        .limit(1);
-
-      const [items, allSkills] = await Promise.all([
-        db
-          .select()
-          .from(assessmentItems)
-          .where(eq(assessmentItems.assessmentId, assessment.id))
-          .orderBy(asc(assessmentItems.itemOrder)),
-        db.select().from(skills),
-      ]);
-
-      const skillMap = new Map(allSkills.map((s) => [s.id, s]));
-      const questionsWithExplanations = items.map((item, idx) => {
-        const pCfg = (item.promptConfig || {}) as PromptConfigShape;
-        const gCfg = (item.gradingConfig || {}) as GradingConfigShape;
-        const sk = skillMap.get(item.skillId);
-        const jumpSec = gCfg.reviewJumpSec ?? 10;
-
-        return {
-          id: String(item.id),
-          number: pCfg.number ?? item.itemOrder ?? idx + 1,
-          skillId: String(item.skillId),
-          skillName: sk?.name || 'Xây dựng luồng Hybrid RAG',
-          prompt: pCfg.prompt || pCfg.question || '',
-          options: Array.isArray(pCfg.options) ? pCfg.options : [],
-          correctIndex: gCfg.correctIndex ?? 0,
-          explanation:
-            item.explanationMd ||
-            'Xem lại đoạn bài giảng tương ứng để nắm vững kiến thức trọng tâm.',
-          reviewTimestampLabel: gCfg.reviewTimestampLabel || '00:10 — 00:25',
-          reviewJumpSec: jumpSec,
-          reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec || [jumpSec, jumpSec + 15],
-          slideLabel: pCfg.slideLabel || 'Slide Trang 8',
-        };
+        },
       });
+      return;
+    }
 
-      if (!attempt) {
-        res.status(404).json({
-          success: false,
-          status: 404,
+    const accountId = req.user!.id;
+    const [attempt] = await db
+      .select()
+      .from(assessmentAttempts)
+      .where(
+        and(
+          eq(assessmentAttempts.assessmentId, assessment.id),
+          eq(assessmentAttempts.accountId, accountId)
+        )
+      )
+      .orderBy(desc(assessmentAttempts.submittedAt))
+      .limit(1);
+
+    const [items, allSkills, cohortAssessments] = await Promise.all([
+      db
+        .select()
+        .from(assessmentItems)
+        .where(eq(assessmentItems.assessmentId, assessment.id))
+        .orderBy(asc(assessmentItems.itemOrder)),
+      db.select().from(skills),
+      db
+        .select()
+        .from(assessments)
+        .where(eq(assessments.cohortId, assessment.cohortId)),
+    ]);
+
+    const finalExam = cohortAssessments.find((a) => a.purpose === 'FINAL_EXAM');
+    const skillMap = new Map(allSkills.map((s) => [s.id, s]));
+    const isFinalExam = assessment.purpose === 'FINAL_EXAM';
+
+    const questionsWithExplanations = items.map((item, idx) => {
+      const pCfg = (item.promptConfig || {}) as PromptConfigShape;
+      const gCfg = (item.gradingConfig || {}) as GradingConfigShape;
+      const sk = skillMap.get(item.skillId);
+      const jumpSec = gCfg.reviewJumpSec ?? 10;
+
+      return {
+        id: String(item.id),
+        number: pCfg.number ?? item.itemOrder ?? idx + 1,
+        scenarioTag: pCfg.scenarioTag || (isFinalExam ? 'Tình huống thực chiến' : 'Câu hỏi củng cố'),
+        skillId: String(item.skillId),
+        skillCode: sk?.code || String(item.skillId),
+        skillName: sk?.name || '',
+        prompt: pCfg.prompt || pCfg.question || '',
+        options: Array.isArray(pCfg.options) ? pCfg.options : [],
+        correctIndex: gCfg.correctIndex ?? 0,
+        explanation: item.explanationMd || '',
+        reviewTimestampLabel: gCfg.reviewTimestampLabel || '00:10 — 00:25',
+        reviewJumpSec: jumpSec,
+        reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec || [jumpSec, jumpSec + 15],
+        slideLabel: pCfg.slideLabel || '',
+      };
+    });
+
+    if (!attempt) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'ATTEMPT_NOT_FOUND',
+        message: 'Chưa có kết quả bài làm',
+        error: {
           code: 'ATTEMPT_NOT_FOUND',
           message: 'Chưa có kết quả bài làm',
-          error: {
-            code: 'ATTEMPT_NOT_FOUND',
-            message: 'Chưa có kết quả bài làm',
-          },
-        });
-        return;
-      }
+        },
+      });
+      return;
+    }
 
-      const answers = await db
+    const [answers, userSkills] = await Promise.all([
+      db
         .select()
         .from(submissionAnswers)
-        .where(eq(submissionAnswers.attemptId, attempt.id));
+        .where(eq(submissionAnswers.attemptId, attempt.id)),
+      db
+        .select()
+        .from(studentSkillStates)
+        .where(eq(studentSkillStates.accountId, accountId)),
+    ]);
 
-      const storedWrongItems = Array.isArray(attempt.remedialRecommendations)
-        ? attempt.remedialRecommendations
-        : [];
+    const answerByItemId = new Map(answers.map((a) => [a.itemId, a]));
+    const selectedAnswers: Record<number, number> = {};
+    const selectedIndices: number[] = [];
 
-      const scorePercent = Math.round(Number(attempt.scorePct ?? 0));
-      const isFinalExam = assessment.purpose === 'FINAL_EXAM';
-      const passed = Boolean(attempt.isPassed);
-      const correctCount =
-        answers.length > 0
-          ? answers.filter((a) => a.isCorrect).length
-          : Math.round((scorePercent / 100) * items.length);
+    items.forEach((item, idx) => {
+      const pCfg = (item.promptConfig || {}) as PromptConfigShape;
+      const qNum = pCfg.number ?? item.itemOrder ?? idx + 1;
+      const ans = answerByItemId.get(item.id);
+      const rData = (ans?.responseData || {}) as { selectedIndex?: number };
+      const chosen = rData.selectedIndex ?? -1;
+      selectedAnswers[qNum] = chosen;
+      selectedIndices.push(chosen);
+    });
 
-      const submission = {
-        attemptId: String(attempt.id),
-        assessmentId: String(assessment.id),
-        isFinalExam,
-        submittedAt: (attempt.submittedAt || attempt.startedAt).toLocaleString('vi-VN'),
-        totalQuestions: items.length,
-        correctCount,
-        totalScore: Number(attempt.totalScore ?? correctCount),
-        maxPossibleScore: Number(attempt.maxPossibleScore ?? items.length),
-        scorePercent,
-        scorePct: scorePercent,
-        passed,
-        isPassed: passed,
-        integrityStatus: attempt.integrityStatus,
-        wrongItems: storedWrongItems,
-        remedialRecommendations: storedWrongItems,
-        updatedSkills: [
-          {
-            skillId: '5',
-            skillName: 'Xây dựng luồng Hybrid RAG',
-            previousScore: 80,
-            newScore: 86,
-            delta: '+6 điểm',
-          },
-        ],
+    const storedWrongItems = Array.isArray(attempt.remedialRecommendations)
+      ? attempt.remedialRecommendations
+      : [];
+
+    const scorePercent = Math.round(Number(attempt.scorePct ?? 0));
+    const scoreOutOf10 = Number((scorePercent / 10).toFixed(1));
+    const passed = Boolean(attempt.isPassed);
+    const correctCount =
+      answers.length > 0
+        ? answers.filter((a) => a.isCorrect).length
+        : Math.round((scorePercent / 100) * items.length);
+
+    const updatedSkills = userSkills.map((us) => {
+      const sk = skillMap.get(us.skillId);
+      const currentScore = normalizeMasteryScore(us.masteryScore);
+      const deltaPoints = Math.round((us.trend || 0) * 100);
+      return {
+        skillId: String(us.skillId),
+        code: sk?.code || String(us.skillId),
+        name: sk?.name || '',
+        skillName: sk?.name || '',
+        previousScore: Math.max(0, currentScore - deltaPoints),
+        newScore: currentScore,
+        delta: deltaPoints >= 0 ? `+${deltaPoints} điểm` : `${deltaPoints} điểm`,
       };
+    });
 
-      res.json({
-        ...submission,
-        hasStoredAttempt: true,
-        hasPassedFinalExam: Boolean(isFinalExam && passed),
-        questionsWithExplanations,
-        submission,
-        attempt,
-        answers,
-      });
-    } catch (err) {
-      next(err);
-    }
+    const submission = {
+      attemptId: String(attempt.id),
+      assessmentId: String(assessment.id),
+      title: assessment.title,
+      isFinalExam,
+      submittedAt: (attempt.submittedAt || attempt.startedAt).toLocaleString('vi-VN'),
+      totalQuestions: items.length,
+      correctCount,
+      totalScore: Number(attempt.totalScore ?? correctCount),
+      maxPossibleScore: Number(attempt.maxPossibleScore ?? items.length),
+      scoreOutOf10,
+      scorePercent,
+      scorePct: scorePercent,
+      passed,
+      isPassed: passed,
+      selectedAnswers,
+      selectedIndices,
+      integrityStatus: attempt.integrityStatus,
+      wrongItems: storedWrongItems,
+      remedialRecommendations: storedWrongItems,
+      updatedSkills,
+    };
+
+    res.json({
+      ...submission,
+      cohortId: String(assessment.cohortId),
+      sessionId: assessment.sessionId ? String(assessment.sessionId) : undefined,
+      finalExamId: finalExam ? String(finalExam.id) : undefined,
+      hasStoredAttempt: true,
+      hasPassedFinalExam: Boolean(isFinalExam && passed),
+      questionsWithExplanations,
+      submission,
+      attempt,
+      answers,
+    });
+  } catch (err) {
+    next(err);
   }
-);
+}
 
-// 4.4 POST /assessments/attempts/:attemptId/proctoring-events
+assessmentRouter.get('/assessments/:assessmentId/result', requireAuth, handleGetAssessmentResult);
+assessmentRouter.get('/assessments/:assessmentId/results', requireAuth, handleGetAssessmentResult);
+
+// 4.4 POST /assessments/attempts/:attemptId/proctoring-events & /assessments/:assessmentId/proctoring-events
 const proctoringEventSchema = z.object({
   tier: z.enum(['EDGE', 'SERVER']).default('EDGE'),
-  eventType: z.enum(['NO_FACE', 'MULTI_FACE', 'FACE_MISMATCH', 'TAB_HIDDEN', 'FULLSCREEN_EXIT']),
+  eventType: z.string().min(1),
   videoOffsetSec: z.number().int().min(0).optional(),
   confidence: z.number().min(0).max(1).default(0.95),
   snapshotR2Key: z.string().optional(),
+  snapshotNote: z.string().optional(),
   details: z.record(z.unknown()).optional(),
 });
 
 assessmentRouter.post(
-  '/assessments/attempts/:attemptId/proctoring-events',
+  '/assessments/:assessmentId/proctoring-events',
   requireAuth,
   validate(proctoringEventSchema),
   async (req, res, next) => {
     try {
-      const attemptId = Number(req.params.attemptId);
-      const { tier, eventType, videoOffsetSec, confidence, snapshotR2Key, details } = req.body;
+      const assessment = await resolveAssessment(req.params.assessmentId);
+      const accountId = req.user!.id;
+      const { tier, eventType, videoOffsetSec, confidence, snapshotR2Key, snapshotNote, details } = req.body;
+
+      const normalizedEventType = (
+        ['NO_FACE', 'MULTI_FACE', 'FACE_MISMATCH', 'TAB_HIDDEN', 'FULLSCREEN_EXIT'].includes(
+          eventType
+        )
+          ? eventType
+          : 'TAB_HIDDEN'
+      ) as 'NO_FACE' | 'MULTI_FACE' | 'FACE_MISMATCH' | 'TAB_HIDDEN' | 'FULLSCREEN_EXIT';
 
       const riskDeltaMap: Record<string, number> = {
         MULTI_FACE: 40,
@@ -708,7 +807,86 @@ assessmentRouter.post(
         FULLSCREEN_EXIT: 15,
         NO_FACE: 15,
       };
-      const riskDelta = riskDeltaMap[eventType] || 15;
+      const riskDelta = riskDeltaMap[normalizedEventType] || 15;
+
+      let [attempt] = assessment
+        ? await db
+            .select()
+            .from(assessmentAttempts)
+            .where(
+              and(
+                eq(assessmentAttempts.assessmentId, assessment.id),
+                eq(assessmentAttempts.accountId, accountId)
+              )
+            )
+            .orderBy(desc(assessmentAttempts.startedAt))
+            .limit(1)
+        : [];
+
+      if (attempt) {
+        const newTotalRisk = Number(attempt.totalRiskScore) + riskDelta;
+        const newIntegrityStatus = newTotalRisk >= 60 ? 'FLAGGED' : attempt.integrityStatus;
+
+        await db.transaction(async (tx) => {
+          await tx.insert(proctoringEvents).values({
+            attemptId: attempt!.id,
+            tier,
+            eventType: normalizedEventType,
+            videoOffsetSec,
+            confidence,
+            riskDelta: riskDelta.toFixed(2),
+            snapshotR2Key,
+            details: { ...(details || {}), note: snapshotNote },
+          });
+
+          await tx
+            .update(assessmentAttempts)
+            .set({
+              totalRiskScore: newTotalRisk.toFixed(2),
+              integrityStatus: newIntegrityStatus,
+            })
+            .where(eq(assessmentAttempts.id, attempt!.id));
+        });
+      }
+
+      res.status(201).json({
+        assessmentId: String(assessment?.id ?? req.params.assessmentId),
+        recorded: true,
+        eventType: normalizedEventType,
+        riskDelta,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+assessmentRouter.post(
+  '/assessments/attempts/:attemptId/proctoring-events',
+  requireAuth,
+  validate(proctoringEventSchema),
+  async (req, res, next) => {
+    try {
+      const attemptId = Number(req.params.attemptId);
+      const { tier, eventType, videoOffsetSec, confidence, snapshotR2Key, snapshotNote, details } = req.body;
+
+      const normalizedEventType = (
+        ['NO_FACE', 'MULTI_FACE', 'FACE_MISMATCH', 'TAB_HIDDEN', 'FULLSCREEN_EXIT'].includes(
+          eventType
+        )
+          ? eventType
+          : 'TAB_HIDDEN'
+      ) as 'NO_FACE' | 'MULTI_FACE' | 'FACE_MISMATCH' | 'TAB_HIDDEN' | 'FULLSCREEN_EXIT';
+
+      const riskDeltaMap: Record<string, number> = {
+        MULTI_FACE: 40,
+        FACE_MISMATCH: 50,
+        TAB_HIDDEN: 20,
+        FULLSCREEN_EXIT: 15,
+        NO_FACE: 15,
+      };
+      const riskDelta = riskDeltaMap[normalizedEventType] || 15;
 
       const [attempt] = await db
         .select()
@@ -737,12 +915,12 @@ assessmentRouter.post(
         await tx.insert(proctoringEvents).values({
           attemptId,
           tier,
-          eventType,
+          eventType: normalizedEventType,
           videoOffsetSec,
           confidence,
           riskDelta: riskDelta.toFixed(2),
           snapshotR2Key,
-          details: details || {},
+          details: { ...(details || {}), note: snapshotNote },
         });
 
         await tx

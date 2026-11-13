@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.js';
 import { accounts, userProfiles, accountIdentities } from '../../db/schema/index.js';
+import { requireAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { env } from '../../config/env.js';
 
@@ -57,24 +58,20 @@ function formatUserResponse(
   }
 ) {
   const cvData = (profile?.cvParsedData ?? {}) as Record<string, unknown>;
-  const phone = typeof cvData.phone === 'string' ? cvData.phone : '0912 345 678';
+  const phone = typeof cvData.phone === 'string' && cvData.phone.trim() ? cvData.phone : undefined;
   return {
     id: String(account.id),
     email: account.email,
-    fullName: profile?.fullName || account.email.split('@')[0] || 'Học viên 3T',
+    fullName: profile?.fullName || account.email.split('@')[0] || '',
     role: account.role,
-    avatarUrl:
-      profile?.avatarUrl ||
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+    avatarUrl: profile?.avatarUrl || undefined,
     phone,
     bio:
       profile?.bio ||
-      (typeof cvData.headline === 'string' ? cvData.headline : 'Học viên tại 3T AI Academy'),
+      (typeof cvData.headline === 'string' ? cvData.headline : undefined),
     careerGoal:
       profile?.careerGoal ||
-      (typeof cvData.careerObjective === 'string'
-        ? cvData.careerObjective
-        : 'Trở thành Kỹ sư AI ứng dụng thực chiến'),
+      (typeof cvData.careerObjective === 'string' ? cvData.careerObjective : undefined),
     interviewCredits: profile?.interviewCredits ?? (account.role === 'STUDENT' ? 2 : 0),
   };
 }
@@ -153,6 +150,7 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
     res.json({
       ...tokens,
       user: formatUserResponse(account, profile),
+      isNewUser: false,
     });
   } catch (err) {
     next(err);
@@ -188,8 +186,8 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
 
     const passwordHash = await argon2.hash(password);
     const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fullName)}`;
-    const defaultGoal = careerGoal || 'Trở thành Kỹ sư AI ứng dụng thực chiến';
-    const defaultBio = 'Học viên tại 3T AI Academy';
+    const resolvedGoal = careerGoal || '';
+    const resolvedBio = '';
 
     const result = await db.transaction(async (tx) => {
       const [newAccount] = await tx
@@ -207,10 +205,10 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
       const initialCvData = {
         fullName,
         email: normalizedEmail,
-        phone: phone || '0900 000 000',
+        phone: phone || '',
         avatarUrl: defaultAvatar,
-        headline: defaultBio,
-        careerObjective: defaultGoal,
+        headline: resolvedBio,
+        careerObjective: resolvedGoal,
         location: 'Việt Nam',
         skills: [],
         projects: [],
@@ -226,9 +224,9 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
           accountId: newAccount!.id,
           fullName,
           avatarUrl: defaultAvatar,
-          bio: defaultBio,
-          careerGoal: defaultGoal,
-          interviewCredits: 2, // API 1.2: default 2 free interview credits for new STUDENT
+          bio: resolvedBio || null,
+          careerGoal: resolvedGoal || null,
+          interviewCredits: 2,
           cvParsedData: initialCvData,
         })
         .returning();
@@ -241,6 +239,7 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
     res.status(201).json({
       ...tokens,
       user: formatUserResponse(result.account, result.profile),
+      isNewUser: true,
     });
   } catch (err) {
     next(err);
@@ -252,10 +251,10 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
   try {
     const { idToken } = req.body;
 
-    // Decode JWT payload if structured as a JWT, otherwise fallback to seeded student account
-    let targetEmail = 'an.nguyen.dev@gmail.com';
-    let targetName = 'Nguyễn Văn An';
-    let targetUid = `google_uid_${idToken.slice(0, 24)}`;
+    let targetEmail = '';
+    let targetName = '';
+    let targetUid = '';
+    let targetPicture = '';
 
     const parts = idToken.split('.');
     if (parts.length === 3 && parts[1]) {
@@ -265,13 +264,37 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
           email?: string;
           name?: string;
           sub?: string;
+          picture?: string;
         };
         if (payload.email) targetEmail = payload.email.trim().toLowerCase();
-        if (payload.name) targetName = payload.name;
+        if (payload.name) targetName = payload.name.trim();
         if (payload.sub) targetUid = payload.sub;
+        if (payload.picture) targetPicture = payload.picture;
       } catch {
-        // Fallback to default Google demo identity
+        // Handled below if targetEmail is empty
       }
+    }
+
+    if (!targetEmail) {
+      res.status(400).json({
+        success: false,
+        status: 400,
+        code: 'INVALID_GOOGLE_TOKEN',
+        message: 'Google ID Token không hợp lệ hoặc không chứa thông tin email',
+        error: {
+          code: 'INVALID_GOOGLE_TOKEN',
+          message: 'Google ID Token không hợp lệ hoặc không chứa thông tin email',
+        },
+        requestId: req.correlationId,
+      });
+      return;
+    }
+
+    if (!targetName) {
+      targetName = targetEmail.split('@')[0] || 'Học viên';
+    }
+    if (!targetUid) {
+      targetUid = `google_${targetEmail}`;
     }
 
     let [account] = await db
@@ -280,7 +303,10 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
       .where(eq(accounts.email, targetEmail))
       .limit(1);
 
+    let isNewUser = false;
+
     if (!account) {
+      isNewUser = true;
       account = await db.transaction(async (tx) => {
         const [createdAcc] = await tx
           .insert(accounts)
@@ -300,21 +326,23 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
           providerEmail: targetEmail,
         });
 
-        const avatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(targetName)}`;
+        const avatarUrl =
+          targetPicture ||
+          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(targetName)}`;
         await tx.insert(userProfiles).values({
           accountId: createdAcc!.id,
           fullName: targetName,
           avatarUrl,
-          bio: 'Học viên tại 3T AI Academy',
-          careerGoal: 'Trở thành Kỹ sư AI ứng dụng thực chiến',
+          bio: null,
+          careerGoal: null,
           interviewCredits: 2,
           cvParsedData: {
             fullName: targetName,
             email: targetEmail,
-            phone: '0912 345 678',
+            phone: '',
             avatarUrl,
-            headline: 'Học viên tại 3T AI Academy',
-            careerObjective: 'Trở thành Kỹ sư AI ứng dụng thực chiến',
+            headline: '',
+            careerObjective: '',
             skills: [],
             projects: [],
             workExperience: [],
@@ -326,6 +354,21 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
         return createdAcc!;
       });
     } else {
+      if (account.status === 'LOCKED') {
+        res.status(403).json({
+          success: false,
+          status: 403,
+          code: 'ACCOUNT_LOCKED',
+          message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên',
+          error: {
+            code: 'ACCOUNT_LOCKED',
+            message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên',
+          },
+          requestId: req.correlationId,
+        });
+        return;
+      }
+
       await db
         .update(accounts)
         .set({ lastLoginAt: new Date(), updatedAt: new Date() })
@@ -343,6 +386,7 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
     res.json({
       ...tokens,
       user: formatUserResponse(account, profile),
+      isNewUser,
     });
   } catch (err) {
     next(err);
@@ -381,5 +425,63 @@ authRouter.post('/refresh', validate(refreshSchema), async (req, res) => {
 
 // 1.5 POST /auth/logout
 authRouter.post('/logout', (_req, res) => {
-  res.json({ message: 'Đã đăng xuất thành công' });
+  res.json({
+    success: true,
+    loggedOutAt: new Date().toISOString(),
+    message: 'Đã đăng xuất thành công',
+  });
+});
+
+// 1.6 GET /auth/me
+authRouter.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    const accountId = req.user!.id;
+    const [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1);
+
+    if (!account) {
+      res.status(401).json({
+        success: false,
+        status: 401,
+        code: 'ACCOUNT_NOT_FOUND',
+        message: 'Không tìm thấy tài khoản người dùng',
+        error: {
+          code: 'ACCOUNT_NOT_FOUND',
+          message: 'Không tìm thấy tài khoản người dùng',
+        },
+        requestId: req.correlationId,
+      });
+      return;
+    }
+
+    if (account.status === 'LOCKED') {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'ACCOUNT_LOCKED',
+        message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên',
+        error: {
+          code: 'ACCOUNT_LOCKED',
+          message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên',
+        },
+        requestId: req.correlationId,
+      });
+      return;
+    }
+
+    const [profile] = await db
+      .select()
+      .from(userProfiles)
+      .where(eq(userProfiles.accountId, account.id))
+      .limit(1);
+
+    res.json({
+      user: formatUserResponse(account, profile),
+    });
+  } catch (err) {
+    next(err);
+  }
 });

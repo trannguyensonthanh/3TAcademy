@@ -18,9 +18,8 @@ import {
   QuizEvaluationOutput,
   updateSessionWatchPosition,
 } from '../utils/academyLogic';
-import { AVATAR_MINH_KHOA } from '../components/BotanicalStickers';
 import { authApi, AuthUserProfile } from '../services/auth.api';
-import { API_CONFIG, getAuthAccessToken, setAuthAccessToken } from '../services/apiClient';
+import { getAuthAccessToken, setAuthAccessToken } from '../services/apiClient';
 import { catalogApi } from '../services/catalog.api';
 import { learningApi } from '../services/learning.api';
 import { orderApi } from '../services/order.api';
@@ -146,110 +145,6 @@ interface AcademyContextValue {
   setSearchQueryGlobal: (q: string) => void;
 }
 
-const FALLBACK_BOOT_COURSE: Course = {
-  id: 'course-ai-eng',
-  slug: 'ky-su-ai-thuc-chien-rag-agents',
-  title: 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Đa Tác Tử Doanh Nghiệp',
-  category: 'AI & Dữ liệu',
-  difficultyLevel: 2,
-  shortDescription: 'Đang tải thông tin khóa học từ hệ thống...',
-  descriptionMd: 'Đang tải thông tin khóa học từ hệ thống...',
-  syllabusTemplate: [
-    {
-      order: 1,
-      title: 'Buổi 1: Kiến trúc tổng thể hệ thống Trợ lý AI doanh nghiệp',
-      summary: 'Khởi tạo luồng dữ liệu và chỉ mục tìm kiếm.',
-      activityTags: ['THEORY', 'LIVE_CODING'],
-    },
-  ],
-  skills: [
-    { type: 'LEARNING_OUTCOME', code: 'HYBRID-RAG', name: 'Xây dựng Tìm kiếm Kết hợp (Hybrid RAG)' },
-  ],
-  ratingAvg: 4.9,
-  reviewCount: 128,
-};
-
-const FALLBACK_BOOT_COHORT: Cohort = {
-  id: 'cohort-ai-k01',
-  courseId: 'course-ai-eng',
-  instructorId: 'usr-inst-khoa',
-  code: 'AI-ENG-K01',
-  name: 'Kỹ Sư AI Thực Chiến — Khóa K01',
-  curriculumVersion: 'v2.4',
-  tuitionVnd: 6800000,
-  enrolledCount: 48,
-  enrollmentOpenAt: '01/10/2026',
-  startDate: '15/10/2026',
-  endDate: '15/12/2026',
-  scheduleSlots: [
-    { dayOfWeek: 3, startTime: '19:30', endTime: '21:30' },
-    { dayOfWeek: 6, startTime: '19:30', endTime: '21:30' },
-  ],
-  status: 'ONGOING',
-  staff: [
-    {
-      id: 'st-01',
-      role: 'INSTRUCTOR',
-      fullName: 'TS. Trần Minh Khoa',
-      headline: 'Giảng viên chính',
-      avatarUrl: AVATAR_MINH_KHOA,
-      organization: '3T Academy',
-    },
-  ],
-};
-
-const FALLBACK_BOOT_SESSION: ClassSession = {
-  id: 'sess-ai-04',
-  cohortId: 'cohort-ai-k01',
-  sessionOrder: 4,
-  title: 'Buổi 4: Bóc tách PDF an toàn & Phân quyền truy cập tài liệu',
-  activityTags: ['LIVE_CODING', 'WORKSHOP'],
-  hostInstructorName: 'TS. Trần Minh Khoa',
-  scheduledStart: '05/11/2026 · 19:30',
-  scheduledEnd: '05/11/2026 · 21:30',
-  status: 'REPLAY_READY',
-  videoR2Key: 'cohorts/k01/sess-04/master.m3u8',
-  videoProvider: 'R2_HLS_AES128',
-  durationSeconds: 5400,
-  lastPositionSec: 4920,
-  attachmentsCount: 3,
-  quizStatus: 'PASSED',
-  quizScore: 90,
-  isCompleted: true,
-  aiSummaryMd: 'Tóm tắt nội dung buổi học đang được đồng bộ từ hệ thống...',
-  quizQuestions: [
-    {
-      id: 'q-boot-1',
-      question: 'Phương pháp nào giúp giữ nguyên cấu trúc bảng biểu trong tài liệu PDF?',
-      options: [
-        'Nhận diện bảng biểu và chuyển sang Markdown kèm tiêu đề mục cha',
-        'Cắt nhỏ cố định mỗi 100 ký tự',
-        'Xóa toàn bộ bảng biểu',
-        'Chuyển thành ảnh tĩnh không văn bản',
-      ],
-      correctIndex: 0,
-      explanation: 'Giữ nguyên cấu trúc bảng Markdown giúp mô hình hiểu chính xác hàng và cột.',
-    },
-  ],
-  aiCitations: [],
-};
-
-const FALLBACK_BOOT_CERT: CertificateRecord = {
-  certificateCode: 'CERT-3T-2026-8891',
-  studentName: 'Nguyễn Văn An',
-  studentEmail: 'an.nguyen.dev@gmail.com',
-  courseTitle: 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Đa Tác Tử Doanh Nghiệp',
-  cohortCode: 'AI-ENG-K01',
-  issuedAt: '12/11/2026',
-  verificationSignature: '3T-SHA256-VERIFIED-8891',
-  finalScore: 94,
-  proctoringIntegrity: 'Đã xác thực hợp lệ 100% qua hệ thống giám thị AI',
-  isRevoked: false,
-  skillsMastered: [
-    { code: 'HYBRID-RAG', name: 'Xây dựng Tìm kiếm Kết hợp (Hybrid RAG)', score: 94 },
-  ],
-};
-
 const AcademyContext = createContext<AcademyContextValue | undefined>(undefined);
 
 function mapTeachPathToTab(path: string): InstructorSidebarTab {
@@ -275,45 +170,22 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return window.location.pathname || '/';
   });
 
-  const [role, setRoleState] = useState<AppRole>(() => {
-    const p = window.location.pathname || '/';
-    if (p.startsWith('/teach')) return 'INSTRUCTOR';
-    if (p.startsWith('/admin')) return 'ADMIN';
-    return 'STUDENT';
-  });
-
-  const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>(() => {
-    if (API_CONFIG.HAS_EXPLICIT_BACKEND && !getAuthAccessToken()) {
-      return null;
-    }
-    return {
-      id: 'acc-01',
-      fullName: 'Nguyễn Văn An',
-      email: 'an.nguyen.dev@gmail.com',
-      role: 'STUDENT',
-    };
-  });
+  const [role, setRoleState] = useState<AppRole>('GUEST');
+  const [currentUser, setCurrentUser] = useState<AuthUserProfile | null>(null);
 
   const [theme, setThemeState] = useState<'light' | 'dark'>('light');
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
-  const [courses, setCourses] = useState<Course[]>([FALLBACK_BOOT_COURSE]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [categories, setCategories] = useState<CourseCategoryItem[]>([]);
-  const [skills, setSkills] = useState<CourseSkill[]>(FALLBACK_BOOT_COURSE.skills);
-  const [cohorts, setCohorts] = useState<Cohort[]>([FALLBACK_BOOT_COHORT]);
-  const [sessions, setSessions] = useState<ClassSession[]>([FALLBACK_BOOT_SESSION]);
-  const [enrolledCohortIds, setEnrolledCohortIds] = useState<string[]>(() => {
-    if (API_CONFIG.HAS_EXPLICIT_BACKEND && !getAuthAccessToken()) {
-      return [];
-    }
-    return ['cohort-ai-k01', 'cohort-py-k04'];
-  });
+  const [skills, setSkills] = useState<CourseSkill[]>([]);
+  const [cohorts, setCohorts] = useState<Cohort[]>([]);
+  const [sessions, setSessions] = useState<ClassSession[]>([]);
+  const [enrolledCohortIds, setEnrolledCohortIds] = useState<string[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<UpcomingTaskItem[]>([]);
   const [discussions, setDiscussions] = useState<DiscussionThread[]>([]);
   const [materials, setMaterials] = useState<CohortMaterial[]>([]);
-  const [certificates, setCertificates] = useState<Record<string, CertificateRecord>>({
-    [FALLBACK_BOOT_CERT.certificateCode]: FALLBACK_BOOT_CERT,
-  });
+  const [certificates, setCertificates] = useState<Record<string, CertificateRecord>>({});
   const [receipts, setReceipts] = useState<OrderReceipt[]>([]);
 
   const [studentSidebarTab, setStudentSidebarTab] = useState<StudentSidebarTab>(() => {
@@ -323,11 +195,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (p.startsWith('/app/progress')) return 'SKILL_MAP';
     return 'TODAY';
   });
-  const [interviewCredits, setInterviewCredits] = useState<number>(4);
-  const [latestCvFileName, setLatestCvFileName] = useState<string>(
-    'CV_Nguyen_Van_An_2026.pdf'
-  );
-  const [latestCvUpdatedAt, setLatestCvUpdatedAt] = useState<string>('10/11/2026');
+  const [interviewCredits, setInterviewCredits] = useState<number>(0);
+  const [latestCvFileName, setLatestCvFileName] = useState<string>('');
+  const [latestCvUpdatedAt, setLatestCvUpdatedAt] = useState<string>('');
 
   const updateLatestCv = useCallback((fileName: string) => {
     setLatestCvFileName(fileName);
@@ -345,11 +215,11 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [searchQueryGlobal, setSearchQueryGlobal] = useState('');
 
   // 1a. Hydrate Public Catalog, Categories, Skills, Cohorts, Certificates & Current Session on startup
-  // (Decoupled from /teach/schedule so public and student users never fail on RBAC 403)
   useEffect(() => {
     let isMounted = true;
     const hydratePublicCatalogAndAuth = async () => {
       try {
+        const hasToken = Boolean(getAuthAccessToken());
         const [
           coursesRes,
           categoriesRes,
@@ -358,39 +228,28 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           certsRes,
           meRes,
         ] = await Promise.all([
-          catalogApi.getCourses(),
-          catalogApi.getCategories(),
-          catalogApi.getSkills(),
-          catalogApi.getCohorts(),
+          catalogApi.getCourses().catch(() => [] as Course[]),
+          catalogApi.getCategories().catch(() => [] as CourseCategoryItem[]),
+          catalogApi.getSkills().catch(() => [] as CourseSkill[]),
+          catalogApi.getCohorts().catch(() => [] as Cohort[]),
           catalogApi.getCertificates().catch(() => ({} as Record<string, CertificateRecord>)),
-          authApi.getMe().catch(() => null),
+          hasToken ? authApi.getMe().catch(() => null) : Promise.resolve(null),
         ]);
 
         if (!isMounted) return;
-        if (coursesRes.length > 0) setCourses(coursesRes);
+        setCourses(coursesRes);
         setCategories(categoriesRes);
-        if (skillsRes.length > 0) setSkills(skillsRes);
-        if (cohortsRes.length > 0) setCohorts(cohortsRes);
-        if (Object.keys(certsRes).length > 0) setCertificates(certsRes);
+        setSkills(skillsRes);
+        setCohorts(cohortsRes);
+        setCertificates(certsRes);
 
         if (meRes) {
           setCurrentUser(meRes);
-          if (
-            meRes.role &&
-            !window.location.pathname.startsWith('/teach') &&
-            !window.location.pathname.startsWith('/admin')
-          ) {
-            setRoleState(meRes.role);
-          }
-        } else if (API_CONFIG.HAS_EXPLICIT_BACKEND) {
+          setRoleState(meRes.role);
+        } else {
           setCurrentUser(null);
           setEnrolledCohortIds([]);
-          if (
-            !window.location.pathname.startsWith('/teach') &&
-            !window.location.pathname.startsWith('/admin')
-          ) {
-            setRoleState('GUEST');
-          }
+          setRoleState('GUEST');
         }
       } catch {
         // Keep safe initial state on error
@@ -402,13 +261,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, []);
 
-  // 1b. Hydrate Instructor Schedule only when role is INSTRUCTOR/ADMIN or when using local mock fallback
+  // 1b. Hydrate Instructor Schedule when role is INSTRUCTOR or ADMIN
   useEffect(() => {
-    if (
-      API_CONFIG.HAS_EXPLICIT_BACKEND &&
-      role !== 'INSTRUCTOR' &&
-      role !== 'ADMIN'
-    ) {
+    if (role !== 'INSTRUCTOR' && role !== 'ADMIN') {
       return;
     }
     let isMounted = true;
@@ -416,7 +271,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       .getInstructorSchedule()
       .then((scheduleRes) => {
         if (!isMounted || !scheduleRes) return;
-        if (scheduleRes.allSessions && scheduleRes.allSessions.length > 0) {
+        if (scheduleRes.allSessions) {
           setSessions(scheduleRes.allSessions);
         }
         if (scheduleRes.discussions) {
@@ -427,7 +282,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       })
       .catch(() => {
-        // Ignore 401/403 when non-instructor accesses public views
+        // Ignore error when unauthorized
       });
     return () => {
       isMounted = false;
@@ -457,9 +312,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, []);
 
-  // 2. When role === 'STUDENT', call learningApi.getMyEnrollments(), orderApi.getMyOrderHistory(), and authApi.getMe()
+  // 2. When role === 'STUDENT', hydrate student enrollments, orders, dashboard, and current user
   useEffect(() => {
-    if (role !== 'STUDENT') return;
+    if (role !== 'STUDENT' || !getAuthAccessToken()) return;
     let isMounted = true;
     const hydrateStudentAccount = async () => {
       try {
@@ -555,55 +410,13 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const setRole = useCallback((newRole: AppRole) => {
-    setRoleState(newRole);
-    if (newRole === 'INSTRUCTOR') {
-      setCurrentUser((prev) =>
-        prev?.role === 'INSTRUCTOR'
-          ? prev
-          : {
-              id: 'acc-03',
-              fullName: 'TS. Trần Minh Khoa',
-              email: 'khoa.tran@3tacademy.vn',
-              role: 'INSTRUCTOR',
-            }
-      );
-      window.history.pushState({}, '', '/teach');
-      setCurrentPath('/teach');
-    } else if (newRole === 'ADMIN') {
-      setCurrentUser((prev) =>
-        prev?.role === 'ADMIN'
-          ? prev
-          : {
-              id: 'acc-05',
-              fullName: 'Phạm Thu Trang',
-              email: 'trang.pham.admin@3tacademy.vn',
-              role: 'ADMIN',
-            }
-      );
-      window.history.pushState({}, '', '/admin');
-      setCurrentPath('/admin');
-    } else if (newRole === 'STUDENT') {
-      setCurrentUser((prev) =>
-        prev && prev.role === 'STUDENT'
-          ? prev
-          : {
-              id: 'acc-01',
-              fullName: 'Nguyễn Văn An',
-              email: 'an.nguyen.dev@gmail.com',
-              role: 'STUDENT',
-            }
-      );
-      if (
-        window.location.pathname.startsWith('/teach') ||
-        window.location.pathname.startsWith('/admin')
-      ) {
-        window.history.pushState({}, '', '/app');
-        setCurrentPath('/app');
-      }
-    } else if (newRole === 'GUEST') {
+    if (newRole === 'GUEST') {
+      setRoleState('GUEST');
       setAuthAccessToken(null);
       setCurrentUser(null);
-      void authApi.logout();
+      setEnrolledCohortIds([]);
+      setReceipts([]);
+      void authApi.logout().catch(() => undefined);
       if (
         window.location.pathname.startsWith('/app') ||
         window.location.pathname.startsWith('/teach') ||
@@ -612,8 +425,11 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         window.history.pushState({}, '', '/');
         setCurrentPath('/');
       }
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      return;
     }
-    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+
+    setRoleState(newRole);
   }, []);
 
   const setTheme = useCallback((newTheme: 'light' | 'dark') => {
@@ -635,33 +451,11 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       if (!targetCohort) return null;
 
-      const course = courses.find((cr) => cr.id === targetCohort.courseId);
+      void refreshEnrollments();
 
-      void (async () => {
-        const currentEnrollments = await learningApi.getMyEnrollments();
-        if (!currentEnrollments.enrolledCohortIds.includes(targetCohort.id)) {
-          const orderRes = await orderApi.createCohortOrder(
-            targetCohort.id,
-            `idem-ctx-${Date.now()}`
-          );
-          await orderApi.simulateSepayWebhook(orderRes.orderCode);
-        }
-        await refreshEnrollments();
-      })();
-
-      return (
-        receipts.find((r) => r.cohortCode === targetCohort.code) ?? {
-          orderCode: 'ET20268891',
-          cohortCode: targetCohort.code,
-          courseTitle: course?.title ?? targetCohort.name,
-          amountVnd: targetCohort.tuitionVnd,
-          paidAt: 'Vừa xong · Mở khóa lớp học tự động qua SePay Webhook',
-          bankName: 'MBBank — Ngân hàng Quân Đội (Chuyển khoản QR 24/7)',
-          transactionRef: 'MB-QR-99881204',
-        }
-      );
+      return receipts.find((r) => r.cohortCode === targetCohort.code) ?? null;
     },
-    [cohorts, courses, receipts, refreshEnrollments, role]
+    [cohorts, receipts, refreshEnrollments, role]
   );
 
   const createCohort = useCallback(
@@ -680,7 +474,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const resolvedInstructorId =
           newCohort.instructorId ||
           cohorts.find((c) => c.staff[0]?.fullName === newCohort.instructorName)?.instructorId ||
-          (newCohort.instructorName.includes('Hà') ? 'usr-inst-ha' : 'usr-inst-khoa');
+          '1';
         const res = await adminApi.manageCohorts({
           courseId: newCohort.courseId,
           instructorId: resolvedInstructorId,
@@ -709,6 +503,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updateCohortSchedule = useCallback(
     (cohortId: string, scheduleSlots: CohortScheduleSlot[]) => {
       const target = cohorts.find((c) => c.id === cohortId) ?? cohorts[0];
+      if (!target) return;
       void (async () => {
         const res = await adminApi.manageCohorts({
           cohortId,
@@ -749,7 +544,6 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const updateSessionDetails = useCallback(
     (sessionId: string, updates: { title?: string; aiSummaryMd?: string }) => {
-      // Optimistically update session summary in state immediately
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, ...updates } : s))
       );
@@ -788,19 +582,6 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const optimisticEvaluation: QuizEvaluationOutput | null =
         target && hasClientAnswerKey
           ? evaluateSessionQuizAndUnlock(target, answers)
-          : target
-          ? {
-              correctCount: answers.length,
-              totalQuestions: answers.length || 10,
-              scorePercent: 80,
-              passed: true,
-              updatedSession: {
-                ...target,
-                quizStatus: 'PASSED' as const,
-                quizScore: 80,
-                isCompleted: true,
-              },
-            }
           : null;
 
       void (async () => {
@@ -853,11 +634,13 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         sessions.find(
           (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
         ) ?? sessions[0];
-      const parts = (timestampLabel || '14:20').split(':').map(Number);
+      if (!targetSession) return;
+
+      const parts = (timestampLabel || '00:00').split(':').map(Number);
       const sec =
         parts.length === 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])
           ? parts[0] * 60 + parts[1]
-          : 860;
+          : 0;
 
       const res = await learningApi.createSessionQuestion(
         targetSession.id,
@@ -913,6 +696,8 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         sessions.find(
           (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
         ) ?? sessions[0];
+      if (!targetSession) return;
+
       void (async () => {
         const res = await teachApi.updateSessionMaterials(targetSession.id, {
           cohortId,
@@ -947,11 +732,8 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       _cohortCode: string,
       _finalScore: number
     ): string => {
-      let issuedCode = 'CERT-3T-2026-8891';
+      let issuedCode = '';
       void (async () => {
-        // Only ADMIN can call /admin/certificates/issue.
-        // When a STUDENT completes the final exam, the backend issues the certificate in POST /assessments/:id/submit,
-        // so the student client simply refreshes public certificates.
         if (role === 'ADMIN') {
           const batchRes = await adminApi.issueCertificatesBatch([studentEmail]);
           if (batchRes.certificateCodes?.[0]) {

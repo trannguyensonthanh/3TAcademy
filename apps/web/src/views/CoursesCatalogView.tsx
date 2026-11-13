@@ -16,24 +16,6 @@ import { EmptyStateBotanicalIllustration } from '../components/BotanicalStickers
 import { useAsyncData } from '../hooks/useAsyncData';
 import { catalogApi } from '../services/catalog.api';
 
-const FALLBACK_CATEGORIES: CourseCategoryItem[] = [
-  { id: 'cat-ai', name: 'AI & Dữ liệu', slug: 'ai-du-lieu', courseCount: 2, iconName: null },
-  {
-    id: 'cat-swe',
-    name: 'Kỹ thuật Phần mềm & Cloud',
-    slug: 'ky-thuat-phan-mem-cloud',
-    courseCount: 1,
-    iconName: null,
-  },
-  {
-    id: 'cat-data',
-    name: 'Phân tích Dữ liệu',
-    slug: 'phan-tich-du-lieu',
-    courseCount: 1,
-    iconName: null,
-  },
-];
-
 function getCategoryFallbackIcon(cat: CourseCategoryItem) {
   const key = (cat.iconName || cat.slug || cat.name || '').toLowerCase();
   if (key.includes('ai') || key.includes('rag')) return Cpu;
@@ -81,11 +63,7 @@ export const CoursesCatalogView: React.FC = () => {
 
   const courses = apiCourses ?? contextCourses;
   const categoryList =
-    apiCategories && apiCategories.length > 0
-      ? apiCategories
-      : contextCategories.length > 0
-      ? contextCategories
-      : FALLBACK_CATEGORIES;
+    apiCategories && apiCategories.length > 0 ? apiCategories : contextCategories;
 
   const filteredCourses = useMemo(() => {
     const q = searchQueryGlobal.trim().toLowerCase();

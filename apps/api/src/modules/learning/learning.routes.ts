@@ -25,6 +25,8 @@ import {
   knowledgeChunks,
   chatSessions,
   chatMessages,
+  orders,
+  paymentTransactions,
 } from '../../db/schema/index.js';
 import { requireAuth, optionalAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
@@ -59,7 +61,12 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
-async function buildFormattedDiscussions(sessionId: number, sessionOrder: number, sessionTitle: string) {
+export async function buildFormattedDiscussions(
+  sessionId: number,
+  sessionOrder: number,
+  sessionTitle: string,
+  cohortIdStr?: string
+) {
   const threads = await db
     .select({
       id: discussionThreads.id,
@@ -97,34 +104,113 @@ async function buildFormattedDiscussions(sessionId: number, sessionOrder: number
     const threadPosts = posts.filter((p) => p.threadId === t.id);
     const firstUserPost = threadPosts.find((p) => !p.isAiGenerated);
     const aiPost = threadPosts.find((p) => p.isAiGenerated);
+    const tsSec = t.videoTimestampSec ?? 0;
 
     return {
       id: String(t.id),
+      cohortId: cohortIdStr || '',
       sessionId: String(t.sessionId),
+      sessionOrder,
       sessionTitle: `Buổi ${sessionOrder}: ${sessionTitle}`,
-      authorName: t.authorName || 'Nguyễn Văn An',
+      authorName: t.authorName || '',
       title: t.title,
+      questionTitle: t.title,
+      questionBody: firstUserPost?.contentMd || t.title,
       contentMd: firstUserPost?.contentMd || t.title,
-      videoTimestampSec: t.videoTimestampSec ?? 10,
-      timestampSec: t.videoTimestampSec ?? 10,
-      timestampLabel: formatSecondsToMmSs(t.videoTimestampSec ?? 10),
+      videoTimestampSec: tsSec,
+      timestampSec: tsSec,
+      timestampLabel: formatSecondsToMmSs(tsSec),
       isResolved: t.isResolved,
       createdAt: t.createdAt.toISOString(),
       aiSuggestedAnswer: aiPost?.contentMd,
+      hasAiSuggestion: Boolean(aiPost),
       verifiedByStaff: Boolean(aiPost?.isInstructorVerified || t.isResolved),
       replies: threadPosts.map((p) => ({
         id: String(p.id),
-        authorName: p.isAiGenerated
-          ? 'Trợ giảng AI 3T (RAG)'
-          : p.authorName || 'TS. Trần Minh Khoa',
+        authorName: p.isAiGenerated ? 'Trợ giảng AI 3T (RAG)' : p.authorName || '',
+        authorRole: (p.isAiGenerated
+          ? 'AI_TUTOR'
+          : p.authorRole === 'INSTRUCTOR' || p.authorRole === 'ADMIN'
+            ? 'INSTRUCTOR'
+            : 'STUDENT') as 'STUDENT' | 'INSTRUCTOR' | 'AI_TUTOR',
         role: p.isAiGenerated ? 'AI_TUTOR' : p.authorRole || 'INSTRUCTOR',
+        content: p.contentMd,
         contentMd: p.contentMd,
         isAiGenerated: p.isAiGenerated,
         isInstructorVerified: p.isInstructorVerified,
+        isVerifiedByStaff: p.isInstructorVerified,
+        isOfficialVerify: p.isInstructorVerified,
         createdAt: p.createdAt.toISOString(),
       })),
     };
   });
+}
+
+function mapClassSessionDto(
+  s: typeof classSessions.$inferSelect,
+  opts: {
+    hostInstructorName?: string;
+    isCompleted?: boolean;
+    lastPositionSec?: number;
+    attachmentsCount?: number;
+    assessmentId?: string;
+    quizScore?: number | null;
+    quizQuestions?: Array<{
+      id: string;
+      question: string;
+      options: string[];
+      correctIndex: number;
+      explanation: string;
+    }>;
+    aiCitations?: Array<{
+      timestampSec: number;
+      timestampLabel: string;
+      topic: string;
+      snippet: string;
+    }>;
+  } = {}
+) {
+  const isCompleted = Boolean(opts.isCompleted);
+  const quizScore = opts.quizScore ?? (isCompleted ? 100 : null);
+  const quizStatus: 'PASSED' | 'PENDING' | 'NOT_STARTED' = isCompleted
+    ? 'PASSED'
+    : quizScore !== null && quizScore !== undefined
+      ? 'PENDING'
+      : 'NOT_STARTED';
+
+  return {
+    id: String(s.id),
+    cohortId: String(s.cohortId),
+    sessionOrder: s.sessionOrder,
+    title: s.title,
+    descriptionMd: s.descriptionMd || '',
+    activityTags: (s.activityTags || ['THEORY', 'LIVE_CODING']) as Array<
+      'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
+    >,
+    hostInstructorName: opts.hostInstructorName || '',
+    scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
+    scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
+    status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+    videoR2Key: s.videoR2Key || '',
+    videoProvider: (s.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
+    livekitRoomName: s.livekitRoomName,
+    durationSeconds: s.durationSeconds || 5400,
+    durationMinutes: Math.round((s.durationSeconds || 5400) / 60),
+    isCompleted,
+    lastPositionSec: opts.lastPositionSec ?? 0,
+    aiSummaryMd: s.aiSummaryMd || '',
+    attachmentsCount: opts.attachmentsCount ?? 0,
+    assessmentId: opts.assessmentId,
+    hasQuiz: Boolean(opts.assessmentId),
+    quizId: opts.assessmentId || `quiz-sess-${s.id}`,
+    quizTitle: `Trắc nghiệm củng cố Buổi ${s.sessionOrder}`,
+    quizStatus,
+    quizScore,
+    quizQuestions: opts.quizQuestions || [],
+    aiCitations: opts.aiCitations || [],
+    guestJoinUrl:
+      s.status === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
+  };
 }
 
 // 3.1 GET /me/dashboard
@@ -132,140 +218,160 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
 
-    const myEnrollments = await db
-      .select()
-      .from(enrollments)
-      .where(and(eq(enrollments.accountId, accountId), inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])));
-
-    const progressRows = await db
-      .select({
-        sessionId: sessionProgress.sessionId,
-        lastPositionSec: sessionProgress.lastPositionSec,
-        isCompleted: sessionProgress.isCompleted,
-        lastActivityAt: sessionProgress.lastActivityAt,
-        title: classSessions.title,
-        sessionOrder: classSessions.sessionOrder,
-        durationSeconds: classSessions.durationSeconds,
-        cohortId: classSessions.cohortId,
-        cohortCode: cohorts.code,
-        courseTitle: courses.title,
-      })
-      .from(sessionProgress)
-      .innerJoin(classSessions, eq(sessionProgress.sessionId, classSessions.id))
-      .innerJoin(cohorts, eq(classSessions.cohortId, cohorts.id))
-      .innerJoin(courses, eq(cohorts.courseId, courses.id))
-      .where(eq(sessionProgress.accountId, accountId))
-      .orderBy(desc(sessionProgress.lastActivityAt));
-
-    const resumeCandidate =
-      progressRows.find((p) => !p.isCompleted) || progressRows[0] || null;
+    const [myEnrollments, getStaffForInstructor] = await Promise.all([
+      db
+        .select()
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.accountId, accountId),
+            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+          )
+        ),
+      buildInstructorStaffMap(),
+    ]);
 
     const cohortIds = myEnrollments.map((e) => e.cohortId);
-    let upcomingTasks: Array<{
-      id: string;
-      cohortId: string;
-      sessionId: string | null;
-      title: string;
-      purpose: string;
-      dueAt: Date | null;
-      durationMinutes: number | null;
-      passScorePct: number;
-      score?: number;
-      statusLabel: string;
-    }> = [];
 
-    if (cohortIds.length > 0) {
-      const [allAss, myAttempts] = await Promise.all([
+    const [enrolledCohorts, enrolledSessions, progressRows, allAss, myAttempts, skillStates, userNotifs] =
+      await Promise.all([
+        cohortIds.length > 0
+          ? db.select().from(cohorts).where(inArray(cohorts.id, cohortIds))
+          : Promise.resolve([]),
+        cohortIds.length > 0
+          ? db
+              .select()
+              .from(classSessions)
+              .where(inArray(classSessions.cohortId, cohortIds))
+              .orderBy(asc(classSessions.sessionOrder))
+          : Promise.resolve([]),
         db
           .select()
-          .from(assessments)
-          .where(and(inArray(assessments.cohortId, cohortIds), eq(assessments.status, 'PUBLISHED'))),
+          .from(sessionProgress)
+          .where(eq(sessionProgress.accountId, accountId))
+          .orderBy(desc(sessionProgress.lastActivityAt)),
+        cohortIds.length > 0
+          ? db
+              .select()
+              .from(assessments)
+              .where(
+                and(inArray(assessments.cohortId, cohortIds), eq(assessments.status, 'PUBLISHED'))
+              )
+          : Promise.resolve([]),
         db
           .select()
           .from(assessmentAttempts)
           .where(eq(assessmentAttempts.accountId, accountId))
           .orderBy(desc(assessmentAttempts.submittedAt)),
+        db
+          .select({
+            skillId: studentSkillStates.skillId,
+            code: skills.code,
+            name: skills.name,
+            masteryScore: studentSkillStates.masteryScore,
+            evidenceCount: studentSkillStates.evidenceCount,
+            trend: studentSkillStates.trend,
+            updatedAt: studentSkillStates.updatedAt,
+          })
+          .from(studentSkillStates)
+          .innerJoin(skills, eq(studentSkillStates.skillId, skills.id))
+          .where(eq(studentSkillStates.accountId, accountId)),
+        db
+          .select()
+          .from(notifications)
+          .where(eq(notifications.recipientId, accountId))
+          .orderBy(desc(notifications.createdAt))
+          .limit(10),
       ]);
 
-      upcomingTasks = allAss.map((a) => {
-        const bestAttempt = myAttempts.find((att) => att.assessmentId === a.id);
-        const scoreNum = bestAttempt?.scorePct ? Math.round(Number(bestAttempt.scorePct)) : undefined;
-        return {
-          id: String(a.id),
-          cohortId: String(a.cohortId),
-          sessionId: a.sessionId ? String(a.sessionId) : null,
-          title: a.title,
-          purpose: a.purpose,
-          dueAt: a.dueAt,
-          durationMinutes: a.durationMinutes,
-          passScorePct: a.passScorePct,
-          score: scoreNum,
-          statusLabel: bestAttempt?.isPassed
-            ? `Đã đạt (${scoreNum}%)`
-            : bestAttempt
-              ? `Cần làm lại (${scoreNum}%)`
-              : 'Chưa làm bài',
-        };
+    const cohortMap = new Map(enrolledCohorts.map((c) => [c.id, c]));
+    const progressMap = new Map(progressRows.map((p) => [p.sessionId, p]));
+
+    const mappedSessions = enrolledSessions.map((s) => {
+      const cohort = cohortMap.get(s.cohortId);
+      const staffInfo = cohort ? getStaffForInstructor(cohort.instructorId) : undefined;
+      const prog = progressMap.get(s.id);
+      const sessQuiz = allAss.find((a) => a.sessionId === s.id);
+      const bestAttempt = sessQuiz
+        ? myAttempts.find((att) => att.assessmentId === sessQuiz.id)
+        : undefined;
+      const isCompleted = Boolean(prog?.isCompleted || bestAttempt?.isPassed);
+      const quizScore = bestAttempt?.scorePct
+        ? Math.round(Number(bestAttempt.scorePct))
+        : isCompleted
+          ? 100
+          : null;
+
+      return mapClassSessionDto(s, {
+        hostInstructorName: staffInfo?.instructorName,
+        isCompleted,
+        lastPositionSec: prog?.lastPositionSec ?? 0,
+        assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
+        quizScore,
       });
-    }
+    });
 
-    const skillStates = await db
-      .select({
-        skillId: studentSkillStates.skillId,
-        code: skills.code,
-        name: skills.name,
-        masteryScore: studentSkillStates.masteryScore,
-        evidenceCount: studentSkillStates.evidenceCount,
-        trend: studentSkillStates.trend,
-        updatedAt: studentSkillStates.updatedAt,
-      })
-      .from(studentSkillStates)
-      .innerJoin(skills, eq(studentSkillStates.skillId, skills.id))
-      .where(eq(studentSkillStates.accountId, accountId));
+    const liveSession =
+      mappedSessions.find((s) => s.status === 'LIVE') || mappedSessions[0] || null;
 
-    const userNotifs = await db
-      .select()
-      .from(notifications)
-      .where(eq(notifications.recipientId, accountId))
-      .orderBy(desc(notifications.createdAt))
-      .limit(10);
+    const resumeSession =
+      mappedSessions.find((s) => !s.isCompleted && s.lastPositionSec > 0) ||
+      mappedSessions.find((s) => !s.isCompleted) ||
+      mappedSessions[0] ||
+      null;
 
-    const attemptTrend = [
-      {
-        label: 'Buổi 1',
-        subLabel: 'Kiến trúc RAG',
-        value: 82,
-        detailText: '82/100 điểm · Hoàn thành đúng hạn',
-      },
-      {
-        label: 'Buổi 2',
-        subLabel: 'Bóc tách PDF',
-        value: 88,
-        detailText: '88/100 điểm · Tăng +6 điểm',
-      },
-      {
-        label: 'Buổi 3',
-        subLabel: 'pgvector HNSW',
-        value: 90,
-        detailText: '90/100 điểm · Nắm vững chỉ mục Vector',
-      },
-      {
-        label: 'Buổi 4',
-        subLabel: 'Hybrid Search',
-        value: 94,
-        detailText: '94/100 điểm · Đạt chuẩn xuất sắc',
-      },
-    ];
+    const upcomingTasks = allAss.map((a) => {
+      const cohort = cohortMap.get(a.cohortId);
+      const bestAttempt = myAttempts.find((att) => att.assessmentId === a.id);
+      const scoreNum = bestAttempt?.scorePct ? Math.round(Number(bestAttempt.scorePct)) : null;
+      const isPassed = Boolean(bestAttempt?.isPassed);
+
+      return {
+        id: String(a.id),
+        sessionId: a.sessionId ? String(a.sessionId) : String(mappedSessions[0]?.id || ''),
+        cohortId: String(a.cohortId),
+        cohortCode: cohort?.code || '',
+        title: a.title,
+        type: (a.purpose === 'FINAL_EXAM' ? 'PROJECT_MILESTONE' : 'SESSION_ASSIGNMENT') as
+          | 'SESSION_ASSIGNMENT'
+          | 'PROJECT_MILESTONE',
+        dueText: a.dueAt ? a.dueAt.toLocaleDateString('vi-VN') : 'Tuần này',
+        urgency: (isPassed ? 'SAFE' : bestAttempt ? 'WARNING' : 'URGENT') as
+          | 'SAFE'
+          | 'WARNING'
+          | 'URGENT',
+        score: scoreNum,
+        statusLabel: isPassed
+          ? `Đã đạt (${scoreNum}%)`
+          : bestAttempt
+            ? `Cần làm lại (${scoreNum}%)`
+            : 'Chưa làm bài',
+      };
+    });
+
+    // Dynamic attemptTrend from student's actual assessment attempts
+    const chronologicalAttempts = [...myAttempts].reverse();
+    const attemptTrend = chronologicalAttempts.map((att, idx) => {
+      const ass = allAss.find((a) => a.id === att.assessmentId);
+      const sess = ass?.sessionId
+        ? enrolledSessions.find((s) => s.id === ass.sessionId)
+        : undefined;
+      const val = Math.round(Number(att.scorePct || 0));
+      return {
+        label: sess ? `Buổi ${sess.sessionOrder}` : `Lượt ${idx + 1}`,
+        subLabel: sess?.title || ass?.title || '',
+        value: val,
+        detailText: `${val}/100 điểm · ${att.isPassed ? 'Đạt chuẩn' : 'Cần ôn tập thêm'}`,
+      };
+    });
+
+    const completedSessionsCount = progressRows.filter((p) => p.isCompleted).length;
 
     res.json({
-      resumeSession: resumeCandidate
-        ? {
-            ...resumeCandidate,
-            sessionId: String(resumeCandidate.sessionId),
-            cohortId: String(resumeCandidate.cohortId),
-          }
-        : null,
+      liveSession,
+      resumeSession,
       upcomingTasks,
+      streakDays: completedSessionsCount,
       skillMastery: skillStates.map((s) => {
         const score = normalizeMasteryScore(s.masteryScore);
         return {
@@ -301,7 +407,7 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
 
-    const [rows, getStaffForInstructor] = await Promise.all([
+    const [rows, getStaffForInstructor, paidOrders] = await Promise.all([
       db
         .select({
           enrollmentId: enrollments.id,
@@ -323,9 +429,14 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
           )
         ),
       buildInstructorStaffMap(),
+      db
+        .select()
+        .from(orders)
+        .where(and(eq(orders.accountId, accountId), eq(orders.status, 'PAID')))
+        .orderBy(desc(orders.paidAt)),
     ]);
 
-    const enriched = await Promise.all(
+    const enrichedEnrollments = await Promise.all(
       rows.map(async (r) => {
         const allSessions = await db
           .select()
@@ -365,6 +476,7 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
           cohort: {
             id: String(r.cohort.id),
             courseId: String(r.course.id),
+            instructorId: String(r.cohort.instructorId),
             courseSlug: r.course.slug,
             courseTitle: r.course.title,
             code: r.cohort.code,
@@ -374,7 +486,7 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
             techStackNotes: r.cohort.techStackNotes,
             tuitionVnd: r.cohort.tuitionVnd,
             enrolledCount: r.cohort.enrolledCount,
-            enrollmentOpenAt: r.cohort.enrollmentOpenAt,
+            enrollmentOpenAt: r.cohort.enrollmentOpenAt.toISOString(),
             startDate: r.cohort.startDate,
             endDate: r.cohort.endDate,
             scheduleLabel: labels.scheduleLabel,
@@ -396,14 +508,47 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
       })
     );
 
-    res.json(enriched);
+    const receipts = await Promise.all(
+      paidOrders.map(async (ord) => {
+        const [cohort] = await db
+          .select()
+          .from(cohorts)
+          .where(eq(cohorts.id, ord.cohortId))
+          .limit(1);
+        const [course] = cohort
+          ? await db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1)
+          : [];
+        const [tx] = await db
+          .select()
+          .from(paymentTransactions)
+          .where(eq(paymentTransactions.orderId, ord.id))
+          .limit(1);
+
+        return {
+          orderCode: ord.orderCode,
+          cohortCode: cohort?.code || '',
+          courseTitle: course?.title || cohort?.name || '',
+          amountVnd: ord.amountVnd,
+          paidAt: (ord.paidAt || ord.createdAt).toLocaleString('vi-VN'),
+          bankName: env.SEPAY_BANK_NAME,
+          transactionRef: tx?.gatewayTxnId || `FT-${ord.orderCode}`,
+        };
+      })
+    );
+
+    res.json({
+      enrolledCohortIds: enrichedEnrollments.map((e) => e.cohortId),
+      cohorts: enrichedEnrollments.map((e) => e.cohort),
+      receipts,
+      enrollments: enrichedEnrollments,
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // 3.3 GET /cohorts/:cohortId/workspace
-learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res, next) => {
+learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res, next) => {
   try {
     const cohort = await resolveCohort(req.params.cohortId);
     if (!cohort) {
@@ -420,17 +565,16 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
       return;
     }
 
-    // Enrollment Access Control Guard (Spec v3.1 API 3.3)
-    let studentAccountId = req.user?.id;
+    const studentAccountId = req.user!.id;
     let studentEnrollment: typeof enrollments.$inferSelect | undefined;
 
-    if (req.user && req.user.role === 'STUDENT') {
+    if (req.user!.role === 'STUDENT') {
       const [enr] = await db
         .select()
         .from(enrollments)
         .where(
           and(
-            eq(enrollments.accountId, req.user.id),
+            eq(enrollments.accountId, studentAccountId),
             eq(enrollments.cohortId, cohort.id),
             inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
           )
@@ -452,61 +596,69 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
         return;
       }
       studentEnrollment = enr;
-    } else if (!studentAccountId) {
-      const [demoStudent] = await db
-        .select()
-        .from(accounts)
-        .where(eq(accounts.email, 'an.nguyen.dev@gmail.com'))
-        .limit(1);
-      studentAccountId = demoStudent?.id;
-      if (studentAccountId) {
-        const [enr] = await db
-          .select()
-          .from(enrollments)
-          .where(and(eq(enrollments.accountId, studentAccountId), eq(enrollments.cohortId, cohort.id)))
-          .limit(1);
-        studentEnrollment = enr;
-      }
     }
 
-    const [[course], sessions, cohortAssessments, getStaffForInstructor, allCats, allSkills, allCourseSkills] =
-      await Promise.all([
-        db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1),
-        db
-          .select()
-          .from(classSessions)
-          .where(eq(classSessions.cohortId, cohort.id))
-          .orderBy(asc(classSessions.sessionOrder)),
-        db.select().from(assessments).where(eq(assessments.cohortId, cohort.id)),
-        buildInstructorStaffMap(),
-        db.select().from(categories),
-        db.select().from(skills),
-        db.select().from(courseSkills),
-      ]);
-
-    const progressList = studentAccountId
-      ? await db
-          .select()
-          .from(sessionProgress)
-          .where(eq(sessionProgress.accountId, studentAccountId))
-      : [];
-
-    const attemptList = studentAccountId
-      ? await db
-          .select()
-          .from(assessmentAttempts)
-          .where(eq(assessmentAttempts.accountId, studentAccountId))
-          .orderBy(desc(assessmentAttempts.submittedAt))
-      : [];
+    const [
+      [course],
+      sessions,
+      cohortAssessments,
+      getStaffForInstructor,
+      allCats,
+      allSkills,
+      allCourseSkills,
+      progressList,
+      attemptList,
+    ] = await Promise.all([
+      db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1),
+      db
+        .select()
+        .from(classSessions)
+        .where(eq(classSessions.cohortId, cohort.id))
+        .orderBy(asc(classSessions.sessionOrder)),
+      db.select().from(assessments).where(eq(assessments.cohortId, cohort.id)),
+      buildInstructorStaffMap(),
+      db.select().from(categories),
+      db.select().from(skills),
+      db.select().from(courseSkills),
+      db
+        .select()
+        .from(sessionProgress)
+        .where(eq(sessionProgress.accountId, studentAccountId)),
+      db
+        .select()
+        .from(assessmentAttempts)
+        .where(eq(assessmentAttempts.accountId, studentAccountId))
+        .orderBy(desc(assessmentAttempts.submittedAt)),
+    ]);
 
     const sessionIds = sessions.map((s) => s.id);
-    const attachments =
+    const [attachments, allAssessmentItems, allChunks] = await Promise.all([
       sessionIds.length > 0
-        ? await db
+        ? db
             .select()
             .from(sessionAttachments)
             .where(inArray(sessionAttachments.sessionId, sessionIds))
-        : [];
+        : Promise.resolve([]),
+      cohortAssessments.length > 0
+        ? db
+            .select()
+            .from(assessmentItems)
+            .where(
+              inArray(
+                assessmentItems.assessmentId,
+                cohortAssessments.map((a) => a.id)
+              )
+            )
+            .orderBy(asc(assessmentItems.itemOrder))
+        : Promise.resolve([]),
+      sessionIds.length > 0
+        ? db
+            .select()
+            .from(knowledgeChunks)
+            .where(inArray(knowledgeChunks.sessionId, sessionIds))
+            .orderBy(asc(knowledgeChunks.chunkIndex))
+        : Promise.resolve([]),
+    ]);
 
     const progressMap = new Map(progressList.map((p) => [p.sessionId, p]));
     const staffInfo = getStaffForInstructor(cohort.instructorId);
@@ -531,40 +683,52 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
         ? Math.round(Number(bestQuizAttempt.scorePct))
         : isCompleted
           ? 100
-          : undefined;
+          : null;
 
-      return {
-        id: String(s.id),
-        cohortId: String(s.cohortId),
-        sessionOrder: s.sessionOrder,
-        title: s.title,
-        descriptionMd: s.descriptionMd || '',
-        activityTags: s.activityTags || ['BÀI GIẢNG VIDEO', 'TRẮC NGHIỆM'],
-        status: s.status,
-        scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
-        scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
-        livekitRoomName: s.livekitRoomName,
-        durationSeconds: s.durationSeconds || 5400,
-        durationMinutes: Math.round((s.durationSeconds || 5400) / 60),
-        aiSummaryMd: s.aiSummaryMd || '',
+      const sessAttachments = attachments.filter((att) => att.sessionId === s.id);
+      const quizItems = sessQuiz
+        ? allAssessmentItems.filter((item) => item.assessmentId === sessQuiz.id)
+        : [];
+      const sessChunks = allChunks.filter((ch) => ch.sessionId === s.id);
+
+      const quizQuestions = quizItems.map((item) => {
+        const pCfg = (item.promptConfig || {}) as { prompt?: string; question?: string; options?: string[] };
+        const gCfg = (item.gradingConfig || {}) as { correctIndex?: number };
+        return {
+          id: String(item.id),
+          question: pCfg.prompt || pCfg.question || '',
+          options: Array.isArray(pCfg.options) ? pCfg.options : [],
+          correctIndex: gCfg.correctIndex ?? 0,
+          explanation: item.explanationMd || '',
+        };
+      });
+
+      const aiCitations = sessChunks.map((ch, idx) => {
+        const sec = ch.startSec ?? idx * 15 + 10;
+        return {
+          timestampSec: sec,
+          timestampLabel: formatSecondsToMmSs(sec),
+          topic: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Phần ${idx + 1}`,
+          snippet: ch.content,
+        };
+      });
+
+      return mapClassSessionDto(s, {
+        hostInstructorName: staffInfo.instructorName,
         isCompleted,
         lastPositionSec: prog?.lastPositionSec ?? 0,
-        hasQuiz: Boolean(sessQuiz),
-        quizId: sessQuiz ? String(sessQuiz.id) : `quiz-sess-${s.id}`,
-        quizTitle: sessQuiz?.title || `Trắc nghiệm củng cố Buổi ${s.sessionOrder}`,
-        quizStatus: isCompleted
-          ? ('COMPLETED' as const)
-          : bestQuizAttempt
-            ? ('IN_PROGRESS' as const)
-            : ('NOT_STARTED' as const),
+        attachmentsCount: sessAttachments.length,
+        assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
         quizScore,
-        guestJoinUrl:
-          s.status === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
-      };
+        quizQuestions,
+        aiCitations,
+      });
     });
 
     const mappedMaterials = attachments.map((att) => {
       const sess = sessions.find((s) => s.id === att.sessionId);
+      const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+      const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
       return {
         id: String(att.id),
         cohortId: String(cohort.id),
@@ -572,9 +736,11 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
         sessionOrder: sess?.sessionOrder ?? 1,
         title: att.fileName,
         fileName: att.fileName,
-        fileType: inferMaterialFileType(att.fileName, att.mimeType),
+        fileType,
+        type: fileType,
         mimeType: att.mimeType,
-        sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+        fileSize: sizeStr,
+        sizeLabel: sizeStr,
         fileSizeBytes: att.fileSizeBytes,
         downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
         updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
@@ -584,12 +750,15 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
     const catMap = new Map(allCats.map((c) => [c.id, c]));
     const skillMap = new Map(allSkills.map((s) => [s.id, s]));
     const syllabus = Array.isArray(course?.syllabusTemplate) ? course.syllabusTemplate : [];
+    const eligibleForFinalExam =
+      mappedSessions.length > 0 && mappedSessions.every((s) => s.isCompleted);
 
     res.json({
       cohort: {
         id: String(cohort.id),
         courseId: String(cohort.courseId),
-        courseSlug: course?.slug || 'ky-su-ai-rag-thuc-chien',
+        instructorId: String(cohort.instructorId),
+        courseSlug: course?.slug || '',
         courseTitle: course?.title || cohort.name,
         code: cohort.code,
         name: cohort.name,
@@ -598,7 +767,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
         techStackNotes: cohort.techStackNotes,
         tuitionVnd: cohort.tuitionVnd,
         enrolledCount: cohort.enrolledCount,
-        enrollmentOpenAt: cohort.enrollmentOpenAt,
+        enrollmentOpenAt: cohort.enrollmentOpenAt.toISOString(),
         startDate: cohort.startDate,
         endDate: cohort.endDate,
         scheduleLabel: labels.scheduleLabel,
@@ -614,15 +783,15 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
             id: String(course.id),
             slug: course.slug,
             title: course.title,
-            category: catMap.get(course.categoryId)?.name || 'Kỹ thuật AI & Phần mềm',
+            category: catMap.get(course.categoryId)?.name || '',
             shortDescription: course.shortDescription,
             descriptionMd: course.descriptionMd,
             thumbnailUrl: course.thumbnailUrl,
             difficultyLevel: course.difficultyLevel,
-            durationWeeks: Math.max(4, Math.ceil(syllabus.length / 2) || 6),
-            totalHours: Math.max(16, syllabus.length * 3 || 24),
-            ratingAvg: 4.9,
-            reviewCount: 42,
+            durationWeeks: syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0,
+            totalHours: syllabus.length * 3,
+            ratingAvg: 0,
+            reviewCount: 0,
             syllabusTemplate: syllabus,
             skills: allCourseSkills
               .filter((cs) => cs.courseId === course.id)
@@ -648,8 +817,9 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
         cohortId: String(a.cohortId),
         sessionId: a.sessionId ? String(a.sessionId) : null,
       })),
-      finalExamId: finalExam ? String(finalExam.id) : null,
+      finalExamId: finalExam ? String(finalExam.id) : undefined,
       finalExamPassed: Boolean(studentEnrollment?.finalExamPassed || finalExamAttempt),
+      eligibleForFinalExam,
     });
   } catch (err) {
     next(err);
@@ -659,7 +829,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', optionalAuth, async (req, res
 // 3.4 GET /cohorts/:cohortId/sessions/:sessionId
 learningRouter.get(
   '/cohorts/:cohortId/sessions/:sessionId',
-  optionalAuth,
+  requireAuth,
   async (req, res, next) => {
     try {
       const cohort = await resolveCohort(req.params.cohortId);
@@ -679,15 +849,14 @@ learningRouter.get(
         return;
       }
 
-      // Enrollment Access Control Guard (Spec v3.1 API 3.4)
-      let studentAccountId = req.user?.id;
-      if (req.user && req.user.role === 'STUDENT') {
+      const studentAccountId = req.user!.id;
+      if (req.user!.role === 'STUDENT') {
         const [enr] = await db
           .select()
           .from(enrollments)
           .where(
             and(
-              eq(enrollments.accountId, req.user.id),
+              eq(enrollments.accountId, studentAccountId),
               eq(enrollments.cohortId, session.cohortId),
               inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
             )
@@ -708,59 +877,68 @@ learningRouter.get(
           });
           return;
         }
-      } else if (!studentAccountId) {
-        const [demoStudent] = await db
-          .select()
-          .from(accounts)
-          .where(eq(accounts.email, 'an.nguyen.dev@gmail.com'))
-          .limit(1);
-        studentAccountId = demoStudent?.id;
       }
 
-      const [attachments, [quiz], discussions, progRows, chunks] = await Promise.all([
-        db
-          .select()
-          .from(sessionAttachments)
-          .where(eq(sessionAttachments.sessionId, session.id)),
-        db
-          .select()
-          .from(assessments)
-          .where(eq(assessments.sessionId, session.id))
-          .limit(1),
-        buildFormattedDiscussions(session.id, session.sessionOrder, session.title),
-        studentAccountId
-          ? db
-              .select()
-              .from(sessionProgress)
-              .where(
-                and(
-                  eq(sessionProgress.accountId, studentAccountId),
-                  eq(sessionProgress.sessionId, session.id)
-                )
+      const [attachments, [quiz], discussions, progRows, chunks, getStaffForInstructor] =
+        await Promise.all([
+          db
+            .select()
+            .from(sessionAttachments)
+            .where(eq(sessionAttachments.sessionId, session.id)),
+          db
+            .select()
+            .from(assessments)
+            .where(eq(assessments.sessionId, session.id))
+            .limit(1),
+          buildFormattedDiscussions(
+            session.id,
+            session.sessionOrder,
+            session.title,
+            String(session.cohortId)
+          ),
+          db
+            .select()
+            .from(sessionProgress)
+            .where(
+              and(
+                eq(sessionProgress.accountId, studentAccountId),
+                eq(sessionProgress.sessionId, session.id)
               )
-              .limit(1)
-          : Promise.resolve([]),
-        db
-          .select()
-          .from(knowledgeChunks)
-          .where(eq(knowledgeChunks.sessionId, session.id))
-          .orderBy(asc(knowledgeChunks.chunkIndex)),
-      ]);
+            )
+            .limit(1),
+          db
+            .select()
+            .from(knowledgeChunks)
+            .where(eq(knowledgeChunks.sessionId, session.id))
+            .orderBy(asc(knowledgeChunks.chunkIndex)),
+          buildInstructorStaffMap(),
+        ]);
 
       const prog = progRows[0];
+      const staffInfo = getStaffForInstructor(session.instructorId);
+
       let bestQuizAttempt: typeof assessmentAttempts.$inferSelect | undefined;
-      if (quiz && studentAccountId) {
-        const attempts = await db
-          .select()
-          .from(assessmentAttempts)
-          .where(
-            and(
-              eq(assessmentAttempts.assessmentId, quiz.id),
-              eq(assessmentAttempts.accountId, studentAccountId)
+      let quizItems: Array<typeof assessmentItems.$inferSelect> = [];
+      if (quiz) {
+        const [attempts, items] = await Promise.all([
+          db
+            .select()
+            .from(assessmentAttempts)
+            .where(
+              and(
+                eq(assessmentAttempts.assessmentId, quiz.id),
+                eq(assessmentAttempts.accountId, studentAccountId)
+              )
             )
-          )
-          .orderBy(desc(assessmentAttempts.scorePct));
+            .orderBy(desc(assessmentAttempts.scorePct)),
+          db
+            .select()
+            .from(assessmentItems)
+            .where(eq(assessmentItems.assessmentId, quiz.id))
+            .orderBy(asc(assessmentItems.itemOrder)),
+        ]);
         bestQuizAttempt = attempts[0];
+        quizItems = items;
       }
 
       const isCompleted = Boolean(prog?.isCompleted || bestQuizAttempt?.isPassed);
@@ -768,75 +946,66 @@ learningRouter.get(
         ? Math.round(Number(bestQuizAttempt.scorePct))
         : isCompleted
           ? 100
-          : undefined;
+          : null;
 
-      const transcript =
-        chunks.length > 0
-          ? chunks.map((ch, idx) => ({
-              id: `cue-${ch.id}`,
-              startSec: ch.startSec ?? idx * 15 + 10,
-              endSec: ch.endSec ?? (idx + 1) * 15 + 10,
-              timeLabel: formatSecondsToMmSs(ch.startSec ?? idx * 15 + 10),
-              text: ch.content,
-              slideLabel: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
-            }))
-          : [
-              {
-                id: 'cue-1',
-                startSec: 10,
-                endSec: 25,
-                timeLabel: '00:10',
-                text: 'Để giữ nguyên ý nghĩa khi đọc báo cáo PDF dài hàng trăm trang, mình nhận diện các dòng tiêu đề mục lớn và đóng gói toàn bộ bảng số liệu thành một khối Markdown nguyên vẹn kèm theo số trang gốc.',
-                slideLabel: 'Slide Trang 8',
-              },
-              {
-                id: 'cue-2',
-                startSec: 25,
-                endSec: 40,
-                timeLabel: '00:25',
-                text: 'Tại sao chỗ này phải kết hợp cả tìm kiếm từ khóa lẫn tìm kiếm theo ý nghĩa câu hỏi? Vì tìm kiếm từ khóa bắt trúng mã hợp đồng, còn tìm kiếm ngữ nghĩa hiểu câu hỏi tự nhiên của nhân viên.',
-                slideLabel: 'Slide Trang 12',
-              },
-              {
-                id: 'cue-3',
-                startSec: 45,
-                endSec: 65,
-                timeLabel: '00:45',
-                text: 'Lưu ý rất quan trọng về xử lý bất đồng bộ: Chúng ta dùng Promise.all hoặc asyncio.gather để chạy song song hai bộ tìm kiếm, giúp tốc độ phản hồi luôn dưới 1 giây.',
-                slideLabel: 'Slide Trang 18',
-              },
-            ];
+      const quizQuestions = quizItems.map((item) => {
+        const pCfg = (item.promptConfig || {}) as { prompt?: string; question?: string; options?: string[] };
+        const gCfg = (item.gradingConfig || {}) as { correctIndex?: number };
+        return {
+          id: String(item.id),
+          question: pCfg.prompt || pCfg.question || '',
+          options: Array.isArray(pCfg.options) ? pCfg.options : [],
+          correctIndex: gCfg.correctIndex ?? 0,
+          explanation: item.explanationMd || '',
+        };
+      });
 
-      const chapters = [
-        {
-          id: 'chap-1',
-          title: 'Phần 1: Bóc tách PDF phức tạp & Bảo toàn cấu trúc bảng biểu Markdown',
-          startSec: 10,
-          timeLabel: '00:10',
-          slideLabel: 'Slide Trang 8',
-        },
-        {
-          id: 'chap-2',
-          title: 'Phần 2: Kết hợp BM25 Full-Text Search & pgvector Cosine bằng công thức RRF',
-          startSec: 25,
-          timeLabel: '00:25',
-          slideLabel: 'Slide Trang 12',
-        },
-        {
-          id: 'chap-3',
-          title: 'Phần 3: Tối ưu truy vấn bất đồng bộ song song dưới 800ms với asyncio.gather',
-          startSec: 45,
-          timeLabel: '00:45',
-          slideLabel: 'Slide Trang 18',
-        },
-      ];
+      const aiCitations = chunks.map((ch, idx) => {
+        const sec = ch.startSec ?? idx * 15 + 10;
+        return {
+          timestampSec: sec,
+          timestampLabel: formatSecondsToMmSs(sec),
+          topic: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Phần ${idx + 1}`,
+          snippet: ch.content,
+        };
+      });
 
-      // Fetch AI Tutor chat history for this session
+      const transcript = chunks.map((ch, idx) => {
+        const sec = ch.startSec ?? idx * 15 + 10;
+        const slidePage = ch.pageNumber ?? idx * 4 + 8;
+        return {
+          id: `cue-${ch.id}`,
+          sec,
+          startSec: sec,
+          endSec: ch.endSec ?? (idx + 1) * 15 + 10,
+          timeLabel: formatSecondsToMmSs(sec),
+          speaker: staffInfo.instructorName,
+          text: ch.content,
+          slidePage,
+          slideLabel: `Slide Trang ${slidePage}`,
+        };
+      });
+
+      const chapters = chunks.map((ch, idx) => {
+        const sec = ch.startSec ?? idx * 15 + 10;
+        const slidePage = ch.pageNumber ?? idx * 4 + 8;
+        return {
+          id: `chap-${ch.id}`,
+          sec,
+          startSec: sec,
+          timeLabel: formatSecondsToMmSs(sec),
+          title: `Phần ${idx + 1}: ${ch.content.slice(0, 72)}`,
+          slideRange: `Slide ${slidePage}`,
+          slideLabel: `Slide Trang ${slidePage}`,
+        };
+      });
+
       const tutorSessions = await db
         .select()
         .from(chatSessions)
         .where(
           and(
+            eq(chatSessions.accountId, studentAccountId),
             eq(chatSessions.sessionId, session.id),
             eq(chatSessions.scope, 'SESSION_TUTOR')
           )
@@ -845,9 +1014,9 @@ learningRouter.get(
 
       let aiChatHistory: Array<{
         id: string;
-        role: 'user' | 'assistant';
+        role: 'AI' | 'USER';
         content: string;
-        citations?: Array<{ label: string; jumpSec: number; slideLabel?: string }>;
+        citations?: Array<{ label: string; jumpSec: number; slideLabel: string }>;
         createdAt: string;
       }> = [];
 
@@ -860,69 +1029,65 @@ learningRouter.get(
 
         aiChatHistory = msgs.map((m) => ({
           id: String(m.id),
-          role: m.role === 'assistant' ? 'assistant' : 'user',
+          role: m.role === 'assistant' ? 'AI' : 'USER',
           content: m.content,
           citations: Array.isArray(m.citations)
-            ? (m.citations as Array<{ label: string; jumpSec: number; slideLabel?: string }>)
+            ? (m.citations as Array<{ label: string; jumpSec: number; slideLabel: string }>)
             : [],
           createdAt: m.createdAt.toISOString(),
         }));
       }
 
       res.json({
-        session: {
-          id: String(session.id),
-          cohortId: String(session.cohortId),
-          sessionOrder: session.sessionOrder,
-          title: session.title,
-          descriptionMd: session.descriptionMd || '',
-          activityTags: session.activityTags || ['BÀI GIẢNG VIDEO', 'TRẮC NGHIỆM'],
-          status: session.status,
-          scheduledStart: session.scheduledStart ? session.scheduledStart.toISOString() : '',
-          scheduledEnd: session.scheduledEnd ? session.scheduledEnd.toISOString() : '',
-          durationSeconds: session.durationSeconds || 5400,
-          durationMinutes: Math.round((session.durationSeconds || 5400) / 60),
-          aiSummaryMd: session.aiSummaryMd || '',
+        session: mapClassSessionDto(session, {
+          hostInstructorName: staffInfo.instructorName,
           isCompleted,
           lastPositionSec: prog?.lastPositionSec ?? 0,
-          hasQuiz: Boolean(quiz),
-          quizId: quiz ? String(quiz.id) : `quiz-sess-${session.id}`,
-          quizTitle: quiz?.title || `Trắc nghiệm củng cố Buổi ${session.sessionOrder}`,
-          quizStatus: isCompleted
-            ? ('COMPLETED' as const)
-            : bestQuizAttempt
-              ? ('IN_PROGRESS' as const)
-              : ('NOT_STARTED' as const),
+          attachmentsCount: attachments.length,
+          assessmentId: quiz ? String(quiz.id) : undefined,
           quizScore,
-        },
+          quizQuestions,
+          aiCitations,
+        }),
         videoUrl: session.videoR2Key
           ? `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4`
-          : null,
+          : '',
         transcript,
         chapters,
         aiChatHistory,
-        attachments: attachments.map((att) => ({
-          id: String(att.id),
-          cohortId: String(session.cohortId),
-          sessionId: String(session.id),
-          sessionOrder: session.sessionOrder,
-          title: att.fileName,
-          fileName: att.fileName,
-          fileType: inferMaterialFileType(att.fileName, att.mimeType),
-          mimeType: att.mimeType,
-          sizeLabel: `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
-          fileSizeBytes: att.fileSizeBytes,
-          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
-          updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
-        })),
+        attachments: attachments.map((att) => {
+          const fileType = inferMaterialFileType(att.fileName, att.mimeType);
+          const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+          return {
+            id: String(att.id),
+            cohortId: String(session.cohortId),
+            sessionId: String(session.id),
+            sessionOrder: session.sessionOrder,
+            title: att.fileName,
+            fileName: att.fileName,
+            fileType,
+            type: fileType,
+            mimeType: att.mimeType,
+            fileSize: sizeStr,
+            sizeLabel: sizeStr,
+            fileSizeBytes: att.fileSizeBytes,
+            downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+            updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
+          };
+        }),
         quizSummary: quiz
           ? {
               id: String(quiz.id),
+              assessmentId: String(quiz.id),
               title: quiz.title,
+              questionCount: quizItems.length,
               passScorePct: quiz.passScorePct,
+              passingScoreOutOf10: Number((quiz.passScorePct / 10).toFixed(1)),
               durationMinutes: quiz.durationMinutes,
               status: quiz.status,
-              bestScorePct: quizScore ?? null,
+              bestScorePercent: quizScore,
+              bestScorePct: quizScore,
+              isCompleted,
               isPassed: isCompleted,
             }
           : null,
@@ -951,8 +1116,6 @@ learningRouter.put(
       const accountId = req.user!.id;
       const { lastPositionSec } = req.body;
 
-      // Spec v3.1 API 3.5: Watching 100% of video duration does NOT automatically set isCompleted = true!
-      // Preserve existing isCompleted state (only passing the quiz sets isCompleted = true).
       const [existingProg] = await db
         .select()
         .from(sessionProgress)
@@ -991,14 +1154,7 @@ learningRouter.put(
         isCompleted,
         savedAt: now.toISOString(),
         updatedSession: session
-          ? {
-              id: String(session.id),
-              cohortId: String(session.cohortId),
-              sessionOrder: session.sessionOrder,
-              title: session.title,
-              lastPositionSec,
-              isCompleted,
-            }
+          ? mapClassSessionDto(session, { isCompleted, lastPositionSec })
           : undefined,
       });
     } catch (err) {
@@ -1043,7 +1199,7 @@ learningRouter.post(
         .limit(1);
 
       let correctCount = 0;
-      let totalQuestions = answers.length || 3;
+      let totalQuestions = answers.length;
       const passThreshold = quiz?.passScorePct ?? 70;
 
       if (quiz) {
@@ -1063,15 +1219,11 @@ learningRouter.post(
               correctCount += 1;
             }
           });
-        } else {
-          correctCount = answers.filter((a: number) => a >= 0).length;
         }
-      } else {
-        correctCount = answers.filter((a: number) => a >= 0).length;
       }
 
       const scorePercent =
-        totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 100;
+        totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
       const passed = scorePercent >= passThreshold;
       const now = new Date();
 
@@ -1081,7 +1233,7 @@ learningRouter.post(
           .values({
             accountId,
             sessionId: session.id,
-            lastPositionSec: session.durationSeconds || 1200,
+            lastPositionSec: session.durationSeconds || 0,
             isCompleted: true,
             completedAt: now,
             lastActivityAt: now,
@@ -1119,18 +1271,15 @@ learningRouter.post(
         correctCount,
         totalQuestions,
         passed,
+        newQuizStatus: passed ? 'PASSED' : 'PENDING',
+        sessionCompleted: passed,
         feedbackMessage: passed
           ? `Chúc mừng! Bạn đạt ${scorePercent}% (${correctCount}/${totalQuestions} câu đúng) và đã hoàn thành Buổi ${session.sessionOrder}.`
           : `Bạn đạt ${scorePercent}% (${correctCount}/${totalQuestions} câu đúng). Cần tối thiểu ${passThreshold}% để hoàn thành buổi học.`,
-        updatedSession: {
-          id: String(session.id),
-          cohortId: String(session.cohortId),
-          sessionOrder: session.sessionOrder,
-          title: session.title,
+        updatedSession: mapClassSessionDto(session, {
           isCompleted: passed,
-          quizStatus: passed ? 'COMPLETED' : 'IN_PROGRESS',
           quizScore: scorePercent,
-        },
+        }),
       });
     } catch (err) {
       next(err);
@@ -1140,10 +1289,11 @@ learningRouter.post(
 
 // 3.7 POST /ai/tutor/ask
 const tutorAskSchema = z.object({
-  cohortId: z.union([z.number(), z.string()]),
+  cohortId: z.union([z.number(), z.string()]).optional(),
   sessionId: z.union([z.number(), z.string()]),
   question: z.string().min(2),
-  currentVideoSec: z.number().int().min(0).default(0),
+  currentVideoSec: z.number().int().min(0).optional(),
+  currentTimestampSec: z.number().int().min(0).optional(),
 });
 
 learningRouter.post(
@@ -1152,34 +1302,51 @@ learningRouter.post(
   validate(tutorAskSchema),
   async (req, res, next) => {
     try {
-      const { cohortId: rawCohortId, sessionId: rawSessionId, question, currentVideoSec } = req.body;
+      const {
+        cohortId: rawCohortId,
+        sessionId: rawSessionId,
+        question,
+        currentVideoSec,
+        currentTimestampSec,
+      } = req.body;
       const accountId = req.user!.id;
+      const videoSec = currentVideoSec ?? currentTimestampSec ?? 0;
 
-      const cohort = await resolveCohort(rawCohortId);
+      const cohort = rawCohortId ? await resolveCohort(rawCohortId) : undefined;
       const session = await resolveSession(rawSessionId, cohort?.id);
-      const resolvedCohortId = cohort?.id ?? 1;
-      const resolvedSessionId = session?.id ?? 4;
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+          error: {
+            code: 'SESSION_NOT_FOUND',
+            message: 'Không tìm thấy buổi học',
+          },
+        });
+        return;
+      }
+
+      const resolvedCohortId = session.cohortId;
+      const resolvedSessionId = session.id;
 
       let answerMd = '';
       let detectedTopic = 'RAG & Vector Search';
-      let citations: Array<{ label: string; jumpSec: number; slideLabel?: string }> = [
-        { label: '[00:10]', jumpSec: 10, slideLabel: 'Slide Trang 8' },
-        { label: '[00:25]', jumpSec: 25, slideLabel: 'Slide Trang 12' },
-        { label: '[00:45]', jumpSec: 45, slideLabel: 'Slide Trang 18' },
-      ];
+      let citations: Array<{ label: string; jumpSec: number; slideLabel: string }> = [];
 
       try {
         const aiResp = await aiServiceClient.askSessionTutor({
           cohortId: resolvedCohortId,
           sessionId: resolvedSessionId,
           question,
-          currentVideoSec,
+          currentVideoSec: videoSec,
         });
         answerMd = aiResp.answerMd;
         detectedTopic = aiResp.detectedTopic || detectedTopic;
         if (Array.isArray(aiResp.citations) && aiResp.citations.length > 0) {
           citations = aiResp.citations.map((c, idx) => ({
-            label: formatSecondsToMmSs(c.startSec ?? (idx + 1) * 15),
+            label: `[${formatSecondsToMmSs(c.startSec ?? (idx + 1) * 15)}]`,
             jumpSec: c.startSec ?? (idx + 1) * 15,
             slideLabel: c.pageNumber ? `Slide Trang ${c.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
           }));
@@ -1189,16 +1356,24 @@ learningRouter.post(
           .select()
           .from(knowledgeChunks)
           .where(eq(knowledgeChunks.sessionId, resolvedSessionId))
+          .orderBy(asc(knowledgeChunks.chunkIndex))
           .limit(3);
 
-        const snippet =
-          chunks[0]?.content ||
-          'Để bảo toàn cấu trúc bảng biểu trong PDF dài hàng trăm trang, chúng ta nhận diện tiêu đề mục lớn và đóng gói toàn bộ bảng thành khối Markdown nguyên vẹn kèm số trang gốc.';
+        citations = chunks.map((ch, idx) => {
+          const sec = ch.startSec ?? (idx + 1) * 15;
+          return {
+            label: `[${formatSecondsToMmSs(sec)}]`,
+            jumpSec: sec,
+            slideLabel: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
+          };
+        });
 
-        answerMd = `Dựa trên bài giảng của **TS. Trần Minh Khoa** tại mốc **[${formatSecondsToMmSs(currentVideoSec || 10)}]**:\n\n${snippet}\n\nBạn có thể bấm vào các mốc thời gian **[00:10]**, **[00:25]** hoặc **[00:45]** bên dưới để tua nhanh video đến đúng đoạn thầy giải thích chi tiết nhé!`;
+        const snippet = chunks.map((c) => c.content).join('\n\n');
+        answerMd = snippet
+          ? `Dựa trên nội dung bài giảng tại mốc **[${formatSecondsToMmSs(videoSec)}]**:\n\n${snippet}`
+          : `Câu hỏi của bạn tại mốc **[${formatSecondsToMmSs(videoSec)}]** đã được ghi nhận.`;
       }
 
-      // Persist chat message into chat_sessions & chat_messages for instructor topic analytics
       let [chatSess] = await db
         .select()
         .from(chatSessions)
@@ -1219,7 +1394,7 @@ learningRouter.post(
             scope: 'SESSION_TUTOR',
             cohortId: resolvedCohortId,
             sessionId: resolvedSessionId,
-            title: `Hỏi đáp Trợ giảng AI — Buổi ${session?.sessionOrder ?? 4}`,
+            title: `Hỏi đáp Trợ giảng AI — Buổi ${session.sessionOrder}`,
           })
           .returning();
         chatSess = created;
@@ -1259,11 +1434,15 @@ learningRouter.post(
 learningRouter.get('/sessions/:sessionId/discussions', async (req, res, next) => {
   try {
     const session = await resolveSession(req.params.sessionId);
-    const sessionId = session?.id ?? Number(req.params.sessionId);
+    if (!session) {
+      res.json([]);
+      return;
+    }
     const formatted = await buildFormattedDiscussions(
-      sessionId,
-      session?.sessionOrder ?? 4,
-      session?.title ?? 'Xây dựng luồng Hybrid RAG'
+      session.id,
+      session.sessionOrder,
+      session.title,
+      String(session.cohortId)
     );
     res.json(formatted);
   } catch (err) {
@@ -1273,7 +1452,7 @@ learningRouter.get('/sessions/:sessionId/discussions', async (req, res, next) =>
 
 // 3.9 POST /sessions/:sessionId/discussions
 const createDiscussionSchema = z.object({
-  title: z.string().min(3),
+  title: z.string().optional(),
   contentMd: z.string().min(3),
   videoTimestampSec: z.number().int().min(0).optional(),
 });
@@ -1285,18 +1464,41 @@ learningRouter.post(
   async (req, res, next) => {
     try {
       const session = await resolveSession(req.params.sessionId);
-      const sessionId = session?.id ?? Number(req.params.sessionId);
-      const authorId = req.user!.id;
-      const { title, contentMd, videoTimestampSec } = req.body;
-      const tsSec = videoTimestampSec ?? 10;
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+          error: {
+            code: 'SESSION_NOT_FOUND',
+            message: 'Không tìm thấy buổi học',
+          },
+        });
+        return;
+      }
 
-      const aiAnswer = `Chào bạn, dựa trên slide bài giảng tại mốc **[${formatSecondsToMmSs(tsSec)}]**, bạn cần giữ nguyên dòng tiêu đề cột khi chia đoạn bảng biểu Markdown và kết hợp bộ lọc \`department_id\` trực tiếp trong mệnh đề \`WHERE\` trước khi tính khoảng cách Cosine trên pgvector. Giảng viên sẽ xác nhận thêm cho bạn nhé!`;
+      const authorId = req.user!.id;
+      const { title: rawTitle, contentMd, videoTimestampSec } = req.body;
+      const title = rawTitle && rawTitle.trim().length >= 3 ? rawTitle.trim() : contentMd.slice(0, 80);
+      const tsSec = videoTimestampSec ?? 0;
+
+      const chunks = await db
+        .select()
+        .from(knowledgeChunks)
+        .where(eq(knowledgeChunks.sessionId, session.id))
+        .orderBy(asc(knowledgeChunks.chunkIndex))
+        .limit(1);
+
+      const aiAnswer = chunks[0]?.content
+        ? `Gợi ý từ Trợ giảng AI tại mốc **[${formatSecondsToMmSs(tsSec)}]**: ${chunks[0].content}`
+        : `Gợi ý từ Trợ giảng AI tại mốc **[${formatSecondsToMmSs(tsSec)}]**: Câu hỏi của bạn đã được chuyển tới Giảng viên phụ trách lớp để xác thực.`;
 
       const result = await db.transaction(async (tx) => {
         const [thread] = await tx
           .insert(discussionThreads)
           .values({
-            sessionId,
+            sessionId: session.id,
             authorId,
             title,
             videoTimestampSec: tsSec,
@@ -1322,9 +1524,10 @@ learningRouter.post(
       });
 
       const allThreads = await buildFormattedDiscussions(
-        sessionId,
-        session?.sessionOrder ?? 4,
-        session?.title ?? 'Xây dựng luồng Hybrid RAG'
+        session.id,
+        session.sessionOrder,
+        session.title,
+        String(session.cohortId)
       );
       const createdThread = allThreads.find((t) => t.id === String(result.id)) || allThreads[0];
 
@@ -1344,7 +1547,10 @@ learningRouter.post(
 learningRouter.get('/sessions/:sessionId/chat-messages', optionalAuth, async (req, res, next) => {
   try {
     const session = await resolveSession(req.params.sessionId);
-    const sessionId = session?.id ?? 4;
+    if (!session) {
+      res.json([]);
+      return;
+    }
 
     const liveChatSessions = await db
       .select({
@@ -1359,47 +1565,38 @@ learningRouter.get('/sessions/:sessionId/chat-messages', optionalAuth, async (re
       .innerJoin(chatSessions, eq(chatMessages.chatSessionId, chatSessions.id))
       .leftJoin(userProfiles, eq(chatSessions.accountId, userProfiles.accountId))
       .leftJoin(accounts, eq(chatSessions.accountId, accounts.id))
-      .where(and(eq(chatSessions.sessionId, sessionId), eq(chatSessions.scope, 'LIVE_COPILOT')))
+      .where(and(eq(chatSessions.sessionId, session.id), eq(chatSessions.scope, 'LIVE_COPILOT')))
       .orderBy(asc(chatMessages.createdAt));
 
-    const defaultMessages = [
-      {
-        id: 'live-msg-1',
-        sender: 'TS. Trần Minh Khoa',
-        roleLabel: 'Giảng viên',
-        time: '19:32',
-        text: 'Chào cả lớp K01! Tối nay chúng ta thực hành trực tiếp kỹ thuật kết hợp BM25 và pgvector bằng công thức RRF nhé.',
-      },
-      {
-        id: 'live-msg-2',
-        sender: 'Lê Hoàng Nam',
-        roleLabel: 'Học viên K01',
-        time: '19:35',
-        text: 'Thầy ơi khi chạy song song 2 nhánh tìm kiếm bằng asyncio.gather thì mình giới hạn connection pool thế nào ạ?',
-      },
-      {
-        id: 'live-msg-3',
-        sender: 'Nguyễn Văn An',
-        roleLabel: 'Học viên K01',
-        time: '19:38',
-        text: 'Em đã cấu hình xong chỉ mục HNSW trên Docker local, tốc độ truy vấn giảm xuống còn 45ms rồi thầy ạ!',
-      },
-    ];
-
-    const dbMapped = liveChatSessions.map((m) => ({
-      id: String(m.msgId),
-      sender: m.fullName || 'Nguyễn Văn An',
-      roleLabel:
+    const dbMapped = liveChatSessions.map((m) => {
+      const isStaff = m.role === 'INSTRUCTOR' || m.role === 'ADMIN';
+      const roleLabel =
         m.role === 'INSTRUCTOR'
           ? 'Giảng viên'
           : m.role === 'ADMIN'
             ? 'Quản trị viên'
-            : 'Học viên K01',
-      time: m.createdAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-      text: m.content,
-    }));
+            : 'Học viên';
+      const timeLabel = m.createdAt.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const senderName = m.fullName || 'Học viên';
 
-    res.json([...defaultMessages, ...dbMapped]);
+      return {
+        id: String(m.msgId),
+        sessionId: String(session.id),
+        senderName,
+        sender: senderName,
+        senderRole: roleLabel,
+        roleLabel,
+        timeLabel,
+        time: timeLabel,
+        text: m.content,
+        isStaff,
+      };
+    });
+
+    res.json(dbMapped);
   } catch (err) {
     next(err);
   }
@@ -1417,8 +1614,20 @@ learningRouter.post(
   async (req, res, next) => {
     try {
       const session = await resolveSession(req.params.sessionId);
-      const sessionId = session?.id ?? 4;
-      const cohortId = session?.cohortId ?? 1;
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+          error: {
+            code: 'SESSION_NOT_FOUND',
+            message: 'Không tìm thấy buổi học',
+          },
+        });
+        return;
+      }
+
       const accountId = req.user!.id;
       const { text } = req.body;
 
@@ -1434,7 +1643,7 @@ learningRouter.post(
         .where(
           and(
             eq(chatSessions.accountId, accountId),
-            eq(chatSessions.sessionId, sessionId),
+            eq(chatSessions.sessionId, session.id),
             eq(chatSessions.scope, 'LIVE_COPILOT')
           )
         )
@@ -1446,9 +1655,9 @@ learningRouter.post(
           .values({
             accountId,
             scope: 'LIVE_COPILOT',
-            cohortId,
-            sessionId,
-            title: `Live Chat Buổi ${session?.sessionOrder ?? 4}`,
+            cohortId: session.cohortId,
+            sessionId: session.id,
+            title: `Live Chat Buổi ${session.sessionOrder}`,
           })
           .returning();
         liveChatSess = created;
@@ -1464,20 +1673,30 @@ learningRouter.post(
         .returning();
 
       const now = insertedMsg?.createdAt ?? new Date();
+      const isStaff = req.user!.role === 'INSTRUCTOR' || req.user!.role === 'ADMIN';
+      const roleLabel =
+        req.user!.role === 'INSTRUCTOR'
+          ? 'Giảng viên'
+          : req.user!.role === 'ADMIN'
+            ? 'Quản trị viên'
+            : 'Học viên';
+      const timeLabel = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      const senderName = profile?.fullName || req.user!.email;
+
       const message = {
         id: String(insertedMsg?.id ?? Date.now()),
-        sender: profile?.fullName || req.user!.email,
-        roleLabel:
-          req.user!.role === 'INSTRUCTOR'
-            ? 'Giảng viên'
-            : req.user!.role === 'ADMIN'
-              ? 'Quản trị viên'
-              : 'Học viên K01',
-        time: now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        sessionId: String(session.id),
+        senderName,
+        sender: senderName,
+        senderRole: roleLabel,
+        roleLabel,
+        timeLabel,
+        time: timeLabel,
         text,
+        isStaff,
       };
 
-      res.status(201).json({ message });
+      res.status(201).json(message);
     } catch (err) {
       next(err);
     }
@@ -1486,8 +1705,10 @@ learningRouter.post(
 
 // 3.12 POST /live/guest/verify
 const verifyGuestSchema = z.object({
-  inviteToken: z.string().min(1),
-  guestDisplayName: z.string().min(2),
+  token: z.string().optional(),
+  inviteToken: z.string().optional(),
+  sessionId: z.union([z.string(), z.number()]).optional(),
+  guestDisplayName: z.string().optional(),
   guestRoleHeadline: z.string().optional(),
 });
 
@@ -1496,37 +1717,64 @@ learningRouter.post(
   validate(verifyGuestSchema),
   async (req, res, next) => {
     try {
-      const { inviteToken, guestDisplayName, guestRoleHeadline } = req.body;
+      const rawToken = req.body.token || req.body.inviteToken || '';
+      const rawSessionId = req.body.sessionId;
+      const guestDisplayName = req.body.guestDisplayName || 'Diễn giả Khách mời';
+      const guestRoleHeadline = req.body.guestRoleHeadline || 'Diễn giả Khách mời Doanh nghiệp';
 
-      let sessionId = '4';
-      let cohortId = '1';
+      let decodedSessionId: string | number | undefined = rawSessionId;
+      let decodedRoleLabel = guestRoleHeadline;
 
-      try {
-        const decoded = jwt.verify(inviteToken, env.JWT_ACCESS_SECRET) as {
-          sessionId?: number | string;
-          cohortId?: number | string;
-        };
-        if (decoded.sessionId) sessionId = String(decoded.sessionId);
-        if (decoded.cohortId) cohortId = String(decoded.cohortId);
-      } catch {
-        // Fallback: resolve LIVE session from DB if token is custom/demo string
-        const [liveSess] = await db
-          .select()
-          .from(classSessions)
-          .where(eq(classSessions.status, 'LIVE'))
-          .limit(1);
-        if (liveSess) {
-          sessionId = String(liveSess.id);
-          cohortId = String(liveSess.cohortId);
+      if (rawToken) {
+        try {
+          const decoded = jwt.verify(rawToken, env.JWT_ACCESS_SECRET) as {
+            sessionId?: number | string;
+            guestRoleHeadline?: string;
+          };
+          if (decoded.sessionId) decodedSessionId = decoded.sessionId;
+          if (decoded.guestRoleHeadline) decodedRoleLabel = decoded.guestRoleHeadline;
+        } catch {
+          res.status(401).json({
+            valid: false,
+            verified: false,
+            message: 'Mã mời Khách mời không hợp lệ hoặc đã hết hạn.',
+          });
+          return;
         }
       }
 
+      const session = decodedSessionId
+        ? await resolveSession(decodedSessionId)
+        : (
+            await db
+              .select()
+              .from(classSessions)
+              .where(eq(classSessions.status, 'LIVE'))
+              .limit(1)
+          )[0];
+
+      if (!session) {
+        res.status(404).json({
+          valid: false,
+          verified: false,
+          message: 'Không tìm thấy phòng học trực tuyến.',
+        });
+        return;
+      }
+
+      const getStaffForInstructor = await buildInstructorStaffMap();
+      const staffInfo = getStaffForInstructor(session.instructorId);
+
       res.json({
+        valid: true,
         verified: true,
-        sessionId,
-        cohortId,
+        sessionId: String(session.id),
+        cohortId: String(session.cohortId),
+        sessionTitle: session.title,
+        hostInstructorName: staffInfo.instructorName,
         guestDisplayName,
-        guestRoleHeadline: guestRoleHeadline || 'Diễn giả Khách mời Doanh nghiệp',
+        guestRoleLabel: decodedRoleLabel,
+        guestRoleHeadline: decodedRoleLabel,
         joinedAt: new Date().toISOString(),
       });
     } catch (err) {

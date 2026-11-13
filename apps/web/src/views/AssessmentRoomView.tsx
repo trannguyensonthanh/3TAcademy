@@ -78,15 +78,6 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
   // Selected option index (0=A, 1=B, 2=C, 3=D) per question number — starts empty so student genuinely answers
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
 
-  const handleQuickFillDemoAnswers = () => {
-    const filled: Record<number, number> = {};
-    questions.forEach((q) => {
-      filled[q.number] = q.number === 4 ? 1 : 0;
-    });
-    setSelectedAnswers(filled);
-    setAutoSaveText(`Đã điền nhanh ${questions.length}/${questions.length} đáp án mẫu để kiểm thử`);
-  };
-
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     isFinalExam ? 45 * 60 : 15 * 60
   );
@@ -135,12 +126,14 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
 
       // If final exam is passed for the FIRST time, refresh graduation certificate & add +4 interview credits
       if (isFinalExam && result.passed && !alreadyPassedFinal) {
-        issueNewCertificate(
-          currentUser?.fullName || 'Nguyễn Văn An',
-          currentUser?.email || 'an.nguyen.dev@gmail.com',
-          matchedCohort?.code || 'AI-ENG-K01',
-          Math.round(result.scoreOutOf10 * 10)
-        );
+        if (currentUser) {
+          issueNewCertificate(
+            currentUser.fullName,
+            currentUser.email,
+            matchedCohort?.code || '',
+            Math.round(result.scoreOutOf10 * 10)
+          );
+        }
         if (typeof result.updatedInterviewCredits === 'number') {
           setInterviewCredits(result.updatedInterviewCredits);
         } else {
@@ -167,7 +160,9 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
             <button
               type="button"
               onClick={() =>
-                navigate(`/app/cohorts/${session.cohortId}/sessions/${session.id}`)
+                session
+                  ? navigate(`/app/cohorts/${session.cohortId}/sessions/${session.id}`)
+                  : navigate('/app')
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer shrink-0"
             >
@@ -179,12 +174,13 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
               <div className="text-[11px] font-bold uppercase tracking-wider text-[#10B981]">
                 {isFinalExam
                   ? 'BÀI THI TỐT NGHIỆP CUỐI KHÓA (25 CÂU TRẮC NGHIỆM A, B, C, D)'
-                  : `BÀI KIỂM TRA MỞ KHÓA BUỔI ${session.sessionOrder} (10 CÂU TRẮC NGHIỆM A, B, C, D)`}
+                  : `BÀI KIỂM TRA MỞ KHÓA BUỔI ${session?.sessionOrder || ''} (10 CÂU TRẮC NGHIỆM A, B, C, D)`}
               </div>
               <h1 className="text-sm sm:text-base font-bold truncate">
-                {isFinalExam
-                  ? 'Đánh Giá Tổng Kết Toàn Khóa Kỹ Sư AI Thực Chiến — Khóa K01'
-                  : `Kiểm tra nhanh kiến thức Buổi ${session.sessionOrder}: ${session.title}`}
+                {assessmentPayload.title ||
+                  (isFinalExam
+                    ? 'Đánh Giá Tổng Kết Toàn Khóa'
+                    : `Kiểm tra nhanh kiến thức: ${session?.title || ''}`)}
               </h1>
             </div>
           </div>
@@ -250,14 +246,6 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
                 {answeredCount}/{questions.length} đã chọn
               </span>
             </div>
-
-            <button
-              type="button"
-              onClick={handleQuickFillDemoAnswers}
-              className="w-full py-1.5 px-2.5 rounded-lg bg-[#D1FAE5]/70 dark:bg-emerald-950/70 border border-[#10B981]/40 text-[11px] font-semibold text-[#065F46] dark:text-emerald-300 hover:bg-[#D1FAE5] cursor-pointer"
-            >
-              ⚡ Điền nhanh đáp án mẫu để kiểm thử
-            </button>
 
             <div className="grid grid-cols-5 gap-2">
               {questions.map((q, idx) => {

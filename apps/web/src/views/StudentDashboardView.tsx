@@ -68,10 +68,10 @@ export const StudentDashboardView: React.FC = () => {
   } = useAcademy();
 
   const [showNotifPopover, setShowNotifPopover] = useState(false);
-  const [expandedCertCode, setExpandedCertCode] = useState<string | null>('CERT-3T-2026-8891');
+  const [expandedCertCode, setExpandedCertCode] = useState<string | null>(null);
 
-  const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? sessions[4];
-  const fallbackResume = sessions.find((s) => s.sessionOrder === 4) ?? sessions[3];
+  const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? sessions[0];
+  const fallbackResume = sessions.find((s) => !s.isCompleted) ?? sessions[0];
 
   const { data: dashboardSummary } = useAsyncQuery(
     () => studentLearningApi.getDashboardSummary(),
@@ -79,7 +79,7 @@ export const StudentDashboardView: React.FC = () => {
       liveSession: fallbackLive,
       resumeSession: fallbackResume,
       upcomingTasks,
-      streakDays: 7,
+      streakDays: 0,
     },
     []
   );
@@ -98,26 +98,26 @@ export const StudentDashboardView: React.FC = () => {
     () => profileAndInterviewApi.getMyProfileAndSkills(),
     {
       userProfile: {
-        fullName: currentUser?.fullName || 'Nguyễn Văn An',
-        headline: 'Kỹ Sư Backend Python & Ứng Dụng AI (AI Engineer)',
-        email: currentUser?.email || 'an.nguyen.dev@gmail.com',
-        phone: '0908 123 456',
-        githubUrl: 'github.com/nguyenvanan-dev',
-        linkedinUrl: 'linkedin.com/in/nguyenvanan',
-        careerObjective: '',
-        latestCvFileName: 'CV_Nguyen_Van_An_2026.pdf',
-        latestCvUpdatedAt: '10/11/2026',
+        fullName: currentUser?.fullName || '',
+        headline: currentUser?.bio || '',
+        email: currentUser?.email || '',
+        phone: currentUser?.phone || '',
+        githubUrl: '',
+        linkedinUrl: '',
+        careerObjective: currentUser?.careerGoal || '',
+        latestCvFileName: '',
+        latestCvUpdatedAt: '',
         interviewCredits,
         cvParsedData: {
-          fileName: 'CV_Nguyen_Van_An_2026.pdf',
-          updatedAt: '10/11/2026',
-          fullName: currentUser?.fullName || 'Nguyễn Văn An',
-          headline: 'Kỹ Sư Backend Python & Ứng Dụng AI (AI Engineer)',
-          email: currentUser?.email || 'an.nguyen.dev@gmail.com',
-          phone: '0908 123 456',
-          githubUrl: 'github.com/nguyenvanan-dev',
-          linkedinUrl: 'linkedin.com/in/nguyenvanan',
-          careerObjective: '',
+          fileName: '',
+          updatedAt: '',
+          fullName: currentUser?.fullName || '',
+          headline: currentUser?.bio || '',
+          email: currentUser?.email || '',
+          phone: currentUser?.phone || '',
+          githubUrl: '',
+          linkedinUrl: '',
+          careerObjective: currentUser?.careerGoal || '',
           projects: [],
           externalSkills: [],
         },
@@ -129,11 +129,11 @@ export const StudentDashboardView: React.FC = () => {
   );
 
   const studentFullName =
-    currentUser?.fullName || profileAndSkills.userProfile?.fullName || 'Nguyễn Văn An';
+    currentUser?.fullName || profileAndSkills.userProfile?.fullName || 'Học viên';
   const studentAvatarUrl =
     currentUser?.avatarUrl || profileAndSkills.userProfile?.avatarUrl || '';
   const studentPhone =
-    currentUser?.phone || profileAndSkills.userProfile?.phone || '0908 123 456';
+    currentUser?.phone || profileAndSkills.userProfile?.phone || '';
   const studentBio =
     currentUser?.bio ||
     profileAndSkills.userProfile?.bio ||
@@ -256,19 +256,21 @@ export const StudentDashboardView: React.FC = () => {
           </nav>
 
           {/* Direct Jump to Active Class */}
-          <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-2">
-            <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
-              Vào nhanh phòng học chính:
+          {primaryCohort && (
+            <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-2">
+              <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
+                Vào nhanh phòng học chính:
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-left text-xs font-bold text-[#059669] dark:text-[#34D399] cursor-pointer"
+              >
+                <span className="leading-snug">{primaryCohort.name}</span>
+                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
-              className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-left text-xs font-bold text-[#059669] dark:text-[#34D399] cursor-pointer"
-            >
-              <span className="leading-snug">{primaryCohort.name}</span>
-              <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Bottom Student Account Info */}
@@ -352,7 +354,7 @@ export const StudentDashboardView: React.FC = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h1 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                    {myEnrolledCohorts.length > 0
+                    {myEnrolledCohorts.length > 0 && resumeSession
                       ? `Chào ${studentShortName}, hôm nay mình cùng học tiếp bài số ${resumeSession.sessionOrder} nhé!`
                       : `Chào ${studentShortName}, chào mừng bạn đến với Góc Học Tập 3T Academy!`}
                   </h1>
@@ -426,165 +428,169 @@ export const StudentDashboardView: React.FC = () => {
               )}
 
               {/* BLOCK 1: LIVE EVENT BANNER */}
-              <section
-                aria-label="Sự kiện lớp học trực tiếp hôm nay"
-                className="rounded-xl bg-[#0F172A] text-white border border-slate-800 p-6 space-y-5 shadow-xs"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-red-500/20 border border-[#EF4444]/50 text-[#EF4444] font-mono text-xs font-bold">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] animate-pulse" />
-                    <span>ĐANG HỌC TRỰC TUYẾN · {primaryCohort.name.toUpperCase()}</span>
-                  </div>
-                  <span className="font-mono text-xs text-emerald-300">
-                    Khung giờ: 19:30 – 21:30 Hôm nay · Vào muộn có tóm tắt nhanh 1 chạm
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  <h2 className="text-xl sm:text-2xl font-bold text-white leading-snug">
-                    ĐANG LIVE — Buổi {liveSession.sessionOrder}: {liveSession.title}
-                  </h2>
-                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-3xl">
-                    Cùng Giảng viên phụ trách chính {primaryCohort.staff[0]?.fullName || 'TS. Trần Minh Khoa'} thực hành trực tiếp trên cơ sở dữ liệu PostgreSQL và giải đáp câu hỏi ngay tại lớp.
-                  </p>
-                </div>
-
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-800">
-                  <div className="flex flex-wrap items-center gap-4">
-                    {primaryCohort.staff.map((st) => (
-                      <div key={st.id} className="flex items-center gap-2.5">
-                        <AvatarWithFallback
-                          src={st.avatarUrl}
-                          name={st.fullName}
-                          className="w-8 h-8 rounded-full"
-                        />
-                        <div className="text-xs">
-                          <div className="font-semibold text-white">{st.fullName}</div>
-                          <div className="text-[11px] text-slate-400">
-                            Giảng viên phụ trách chính
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/live/${liveSession.id}`)}
-                      className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Vào Phòng Học Live Ngay</span>
-                    </button>
-                  </div>
-                </div>
-              </section>
-
-              {/* BLOCK 2: CONTINUE LEARNING & 7-DAY STREAK */}
-              <section
-                aria-label="Tiếp tục bài học gần nhất và chuỗi ngày học tập"
-                className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch"
-              >
-                <div className="lg:col-span-8 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4">
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
-                      <span className="font-semibold text-[#059669] dark:text-[#34D399]">
-                        HỌC TIẾP BÀI GẦN NHẤT · {primaryCohort.name.toUpperCase()}
-                      </span>
-                      <span className="font-mono font-semibold">
-                        Đã xem tới phút {formatTimestamp(resumeSession.lastPositionSec)} /{' '}
-                        {formatTimestamp(resumeSession.durationSeconds)}
-                      </span>
+              {liveSession && primaryCohort && (
+                <section
+                  aria-label="Sự kiện lớp học trực tiếp hôm nay"
+                  className="rounded-xl bg-[#0F172A] text-white border border-slate-800 p-6 space-y-5 shadow-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-red-500/20 border border-[#EF4444]/50 text-[#EF4444] font-mono text-xs font-bold">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] animate-pulse" />
+                      <span>ĐANG HỌC TRỰC TUYẾN · {primaryCohort.name.toUpperCase()}</span>
                     </div>
+                    <span className="font-mono text-xs text-emerald-300">
+                      Khung giờ: 19:30 – 21:30 Hôm nay · Vào muộn có tóm tắt nhanh 1 chạm
+                    </span>
+                  </div>
 
-                    <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                      Buổi {resumeSession.sessionOrder}: {resumeSession.title} — Đã xem tới phút{' '}
-                      {formatTimestamp(resumeSession.lastPositionSec)}
+                  <div className="space-y-2">
+                    <h2 className="text-xl sm:text-2xl font-bold text-white leading-snug">
+                      ĐANG LIVE — Buổi {liveSession.sessionOrder}: {liveSession.title}
                     </h2>
-
-                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                      {resumeSession.aiSummaryMd}
+                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-3xl">
+                      Cùng Giảng viên phụ trách chính {primaryCohort.staff[0]?.fullName || liveSession.hostInstructorName} thực hành trực tiếp và giải đáp câu hỏi ngay tại lớp.
                     </p>
                   </div>
 
-                  <div className="space-y-3 pt-2">
-                    <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-[#10B981] rounded-full"
-                        style={{
-                          width: `${Math.round(
-                            (resumeSession.lastPositionSec / resumeSession.durationSeconds) * 100
-                          )}%`,
-                        }}
-                      />
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-800">
+                    <div className="flex flex-wrap items-center gap-4">
+                      {primaryCohort.staff.map((st) => (
+                        <div key={st.id} className="flex items-center gap-2.5">
+                          <AvatarWithFallback
+                            src={st.avatarUrl}
+                            name={st.fullName}
+                            className="w-8 h-8 rounded-full"
+                          />
+                          <div className="text-xs">
+                            <div className="font-semibold text-white">{st.fullName}</div>
+                            <div className="text-[11px] text-slate-400">
+                              Giảng viên phụ trách chính
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="text-xs font-medium text-[#475569] dark:text-[#94A3B8]">
-                        {resumeSession.isCompleted ? (
-                          <span className="text-[#10B981] font-semibold">
-                            ✓ Bạn đã hoàn thành bài tập 10 câu của Buổi {resumeSession.sessionOrder} ({resumeSession.quizScore}/100)
-                          </span>
-                        ) : (
-                          `Bạn chỉ cần làm xong bài kiểm tra 10 câu là hoàn thành Buổi ${resumeSession.sessionOrder} nhé!`
-                        )}
-                      </span>
-
-                      <div className="flex items-center gap-2.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            navigate(
-                              `/app/cohorts/${resumeSession.cohortId}/sessions/${resumeSession.id}`
-                            )
-                          }
-                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
-                        >
-                          <Play className="w-3.5 h-3.5" />
-                          <span>Tiếp tục học &amp; Làm bài tập Buổi {resumeSession.sessionOrder}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
-                          className="px-3.5 py-2 rounded-lg border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
-                        >
-                          Xem lộ trình lớp học
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="lg:col-span-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4">
-                  <div className="flex items-center gap-3.5">
-                    <StreakLeafFlameSticker className="w-14 h-14 shrink-0" />
-                    <div>
-                      <div className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
-                        THÓI QUEN HỌC ĐỀU ĐẶN
-                      </div>
-                      <div className="text-2xl font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Chuỗi {dashboardSummary.streakDays} Ngày
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                    Tuyệt vời lắm {studentShortName} ơi! Bạn đã duy trì việc học đều đặn suốt {dashboardSummary.streakDays} ngày qua. Cùng làm xong bài tập ngắn Buổi {resumeSession.sessionOrder} hôm nay để nối dài chuỗi ngày học lên {dashboardSummary.streakDays + 1} ngày nhé!
-                  </p>
-
-                  <div className="grid grid-cols-7 gap-1.5 pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] text-center font-mono text-[11px]">
-                    {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((day) => (
-                      <div
-                        key={day}
-                        className="py-1.5 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-bold"
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/live/${liveSession.id}`)}
+                        className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
                       >
-                        {day}
-                      </div>
-                    ))}
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Vào Phòng Học Live Ngay</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              )}
+
+              {/* BLOCK 2: CONTINUE LEARNING & 7-DAY STREAK */}
+              {resumeSession && primaryCohort && (
+                <section
+                  aria-label="Tiếp tục bài học gần nhất và chuỗi ngày học tập"
+                  className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch"
+                >
+                  <div className="lg:col-span-8 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4">
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
+                        <span className="font-semibold text-[#059669] dark:text-[#34D399]">
+                          HỌC TIẾP BÀI GẦN NHẤT · {primaryCohort.name.toUpperCase()}
+                        </span>
+                        <span className="font-mono font-semibold">
+                          Đã xem tới phút {formatTimestamp(resumeSession.lastPositionSec)} /{' '}
+                          {formatTimestamp(resumeSession.durationSeconds)}
+                        </span>
+                      </div>
+
+                      <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                        Buổi {resumeSession.sessionOrder}: {resumeSession.title} — Đã xem tới phút{' '}
+                        {formatTimestamp(resumeSession.lastPositionSec)}
+                      </h2>
+
+                      <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                        {resumeSession.aiSummaryMd}
+                      </p>
+                    </div>
+
+                    <div className="space-y-3 pt-2">
+                      <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full bg-[#10B981] rounded-full"
+                          style={{
+                            width: `${Math.round(
+                              (resumeSession.lastPositionSec / Math.max(1, resumeSession.durationSeconds)) * 100
+                            )}%`,
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span className="text-xs font-medium text-[#475569] dark:text-[#94A3B8]">
+                          {resumeSession.isCompleted ? (
+                            <span className="text-[#10B981] font-semibold">
+                              ✓ Bạn đã hoàn thành bài tập 10 câu của Buổi {resumeSession.sessionOrder} ({resumeSession.quizScore}/100)
+                            </span>
+                          ) : (
+                            `Bạn chỉ cần làm xong bài kiểm tra 10 câu là hoàn thành Buổi ${resumeSession.sessionOrder} nhé!`
+                          )}
+                        </span>
+
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(
+                                `/app/cohorts/${resumeSession.cohortId}/sessions/${resumeSession.id}`
+                              )
+                            }
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                            <span>Tiếp tục học &amp; Làm bài tập Buổi {resumeSession.sessionOrder}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
+                            className="px-3.5 py-2 rounded-lg border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
+                          >
+                            Xem lộ trình lớp học
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4">
+                    <div className="flex items-center gap-3.5">
+                      <StreakLeafFlameSticker className="w-14 h-14 shrink-0" />
+                      <div>
+                        <div className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
+                          THÓI QUEN HỌC ĐỀU ĐẶN
+                        </div>
+                        <div className="text-2xl font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Chuỗi {dashboardSummary.streakDays} Ngày
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                      Tuyệt vời lắm {studentShortName} ơi! Bạn đã duy trì việc học đều đặn suốt {dashboardSummary.streakDays} ngày qua. Cùng làm xong bài tập ngắn Buổi {resumeSession.sessionOrder} hôm nay để nối dài chuỗi ngày học lên {dashboardSummary.streakDays + 1} ngày nhé!
+                    </p>
+
+                    <div className="grid grid-cols-7 gap-1.5 pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] text-center font-mono text-[11px]">
+                      {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((day) => (
+                        <div
+                          key={day}
+                          className="py-1.5 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-bold"
+                        >
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              )}
 
               {/* BLOCK 3: UPCOMING QUIZZES & ASSIGNMENTS */}
               <section
@@ -754,9 +760,8 @@ export const StudentDashboardView: React.FC = () => {
             const sessionAttemptTrend =
               dashboardSummary.attemptTrend && dashboardSummary.attemptTrend.length > 0
                 ? dashboardSummary.attemptTrend
-                : sessions.slice(0, 5).map((s, idx) => {
-                    const fallbackVal = [85, 80, 90, 90, 76][idx] ?? 80;
-                    const val = typeof s.quizScore === 'number' && s.quizScore > 0 ? s.quizScore : fallbackVal;
+                : sessions.slice(0, 5).map((s) => {
+                    const val = typeof s.quizScore === 'number' ? s.quizScore : 0;
                     return {
                       label: `Buổi ${s.sessionOrder}`,
                       subLabel: s.title.slice(0, 18),
@@ -1294,7 +1299,7 @@ export const StudentDashboardView: React.FC = () => {
                 <div>
                   <div className="text-[#475569] dark:text-[#94A3B8]">Email đăng nhập</div>
                   <div className="font-mono font-bold text-[#059669] dark:text-[#34D399] mt-0.5">
-                    {currentUser?.email || profileAndSkills.userProfile?.email || 'an.nguyen.dev@gmail.com'}
+                    {currentUser?.email || profileAndSkills.userProfile?.email || 'Chưa cập nhật'}
                   </div>
                 </div>
                 <div>

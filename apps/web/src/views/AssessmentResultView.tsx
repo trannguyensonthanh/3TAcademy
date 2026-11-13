@@ -18,30 +18,15 @@ import { assessmentApi, StoredMcqAttemptResult, McqQuestionItem } from '../servi
 import { useAsyncData } from '../hooks/useAsyncData';
 
 const DEFAULT_SUBMISSION: StoredMcqAttemptResult = {
-  assessmentId: 'quiz-sess-k01-04',
+  assessmentId: '',
   isFinalExam: false,
-  selectedAnswers: { 1: 0, 2: 0, 3: 0, 4: 1, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 },
-  correctCount: 9,
-  totalQuestions: 10,
-  scoreOutOf10: 9.0,
-  passed: true,
-  submittedAt: 'Vừa nộp xong · Chấm điểm tự động tức thì (0 giây)',
-  updatedSkills: [
-    {
-      code: 'HYBRID-RAG',
-      name: 'Tìm Kiếm Kết Hợp (Từ Khóa & Ngữ Nghĩa)',
-      previousScore: 76,
-      newScore: 84,
-      delta: '+8 điểm',
-    },
-    {
-      code: 'DOC-PARSE',
-      name: 'Bóc Tách Tài Liệu PDF & Bảng Biểu',
-      previousScore: 82,
-      newScore: 88,
-      delta: '+6 điểm',
-    },
-  ],
+  selectedAnswers: {},
+  correctCount: 0,
+  totalQuestions: 0,
+  scoreOutOf10: 0,
+  passed: false,
+  submittedAt: '',
+  updatedSkills: [],
   wrongItems: [],
 };
 

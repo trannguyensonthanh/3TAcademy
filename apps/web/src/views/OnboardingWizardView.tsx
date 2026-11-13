@@ -142,13 +142,13 @@ export const OnboardingWizardView: React.FC = () => {
 
   const [step, setStep] = useState<1 | 2>(1);
   const [fullName, setFullName] = useState<string>(
-    currentUser?.fullName || 'Nguyễn Văn An'
+    currentUser?.fullName || ''
   );
   const [selectedAvatarUrl, setSelectedAvatarUrl] = useState<string>(
     currentUser?.avatarUrl || TECH_AI_AVATAR_PRESETS[0].avatarUrl
   );
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [phone, setPhone] = useState<string>(currentUser?.phone || '0908 123 456');
+  const [phone, setPhone] = useState<string>(currentUser?.phone || '');
   const [selectedTrackId, setSelectedTrackId] = useState<
     'AI_ENGINEER' | 'BACKEND_CLOUD' | 'DATA_ANALYTICS'
   >('AI_ENGINEER');
@@ -167,7 +167,7 @@ export const OnboardingWizardView: React.FC = () => {
 
   // Đồng bộ Họ tên nếu currentUser vừa được cập nhật từ bước Đăng ký / Google One-Tap
   useEffect(() => {
-    if (currentUser?.fullName && (!fullName || fullName === 'Nguyễn Văn An')) {
+    if (currentUser?.fullName && !fullName) {
       setFullName(currentUser.fullName);
     }
     if (currentUser?.avatarUrl) {
@@ -246,9 +246,9 @@ export const OnboardingWizardView: React.FC = () => {
 
       setRole('STUDENT');
       setCurrentUser((prev) => ({
-        id: prev?.id || res.userProfile?.userId || 'acc-01',
+        id: prev?.id || res.userProfile?.userId || '',
         fullName: res.userProfile?.fullName || fullName.trim(),
-        email: prev?.email || res.userProfile?.email || 'an.nguyen.dev@gmail.com',
+        email: prev?.email || res.userProfile?.email || '',
         role: 'STUDENT',
         avatarUrl: res.userProfile?.avatarUrl || selectedAvatarUrl,
         phone: res.userProfile?.phone || phone.trim(),
@@ -286,9 +286,38 @@ export const OnboardingWizardView: React.FC = () => {
   const currentTrackObj =
     CAREER_GOAL_TRACKS.find((t) => t.id === selectedTrackId) ?? CAREER_GOAL_TRACKS[0];
   const recommendedCourse =
-    courses.find((c) => c.id === currentTrackObj.recommendedCourseId) ?? courses[0];
+    courses.find((c) => c.id === currentTrackObj.recommendedCourseId) ??
+    courses[0] ?? {
+      id: currentTrackObj.recommendedCourseId,
+      slug: '',
+      title: currentTrackObj.title,
+      category: 'AI & Dữ liệu' as const,
+      shortDescription: currentTrackObj.description,
+      descriptionMd: currentTrackObj.description,
+      difficultyLevel: 3 as const,
+      ratingAvg: 5,
+      reviewCount: 0,
+      skills: [],
+      syllabusTemplate: [],
+    };
   const recommendedCohort =
-    cohorts.find((c) => c.id === currentTrackObj.recommendedCohortId) ?? cohorts[0];
+    cohorts.find((c) => c.id === currentTrackObj.recommendedCohortId) ??
+    cohorts[0] ?? {
+      id: currentTrackObj.recommendedCohortId,
+      courseId: recommendedCourse.id,
+      instructorId: '',
+      code: '',
+      name: '',
+      curriculumVersion: 'v2026',
+      tuitionVnd: 0,
+      enrolledCount: 0,
+      enrollmentOpenAt: '',
+      startDate: '',
+      endDate: '',
+      scheduleSlots: [],
+      status: 'OPENING' as const,
+      staff: [],
+    };
 
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10 space-y-6">
