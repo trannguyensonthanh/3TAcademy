@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Camera,
   CloudUpload,
   Disc,
+  FlipHorizontal,
   Hand,
   LayoutGrid,
   Maximize2,
@@ -15,6 +17,7 @@ import {
   Square,
   Users,
   Video,
+  VideoOff,
   VolumeX,
 } from 'lucide-react';
 import type { Track } from 'livekit-client';
@@ -46,6 +49,7 @@ export const LiveMediaTrackView: React.FC<LiveMediaTrackViewProps> = ({ track, c
     const el = videoRef.current;
     if (!el) return;
     track.attach(el);
+    void el.play().catch(() => {});
     return () => {
       track.detach(el);
     };
@@ -57,6 +61,45 @@ export const LiveMediaTrackView: React.FC<LiveMediaTrackViewProps> = ({ track, c
       autoPlay
       playsInline
       className={className || 'w-full h-full object-cover'}
+    />
+  );
+};
+
+interface LocalMediaStreamViewProps {
+  stream: MediaStream | null;
+  muted?: boolean;
+  mirrored?: boolean;
+  className?: string;
+}
+
+export const LocalMediaStreamView: React.FC<LocalMediaStreamViewProps> = ({
+  stream,
+  muted = true,
+  mirrored = false,
+  className,
+}) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !stream) return;
+    if (el.srcObject !== stream) {
+      el.srcObject = stream;
+    }
+    void el.play().catch(() => {});
+  }, [stream]);
+
+  if (!stream) return null;
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      className={`${className || 'w-full h-full object-cover'} ${
+        mirrored ? '-scale-x-100' : ''
+      }`}
     />
   );
 };
@@ -74,6 +117,7 @@ export interface LiveKitClassroomStageProps {
   selfRoleLabel: string;
   isHost: boolean;
   livekitConnected: boolean;
+  livekitConnecting?: boolean;
   livekitRoomName?: string;
   sseConnected: boolean;
   stageViewMode: 'STAGE' | 'GRID' | 'VIDEO';
@@ -84,7 +128,7 @@ export interface LiveKitClassroomStageProps {
   micOn: boolean;
   screenSharing: boolean;
   handRaised: boolean;
-  localMediaStream: MediaStream | null;
+  localVideoStream: MediaStream | null;
   screenShareStream: MediaStream | null;
   remoteVideoTracks: AttachedRemoteTrackItem[];
   activeSpeakerIdentities: string[];
@@ -97,15 +141,10 @@ export interface LiveKitClassroomStageProps {
   isUploadingR2: boolean;
   hostSlideLabel: string;
   hostTopicNote: string;
-  transcriptPreview: {
-    id?: string;
-    sec: number;
-    timeLabel: string;
-    speaker: string;
-    text: string;
-    slidePage: number;
-  }[];
   floatingReactions: { id: string; label: string; leftPct: number }[];
+  onToggleCamera: () => void;
+  onToggleMic: () => void;
+  onToggleScreenShare: () => void;
   onMuteParticipant: (targetIdentity?: string, muteAllStudents?: boolean) => void;
   onStartRecordingToR2: () => void;
   onStopRecordingToR2: () => void;
@@ -122,7 +161,6 @@ function formatDurationClock(totalSeconds: number): string {
 export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   sessionOrder,
   sessionTitle,
-  aiSummaryMd,
   cohortCode,
   hostName,
   selfName,
@@ -130,6 +168,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   selfRoleLabel,
   isHost,
   livekitConnected,
+  livekitConnecting,
   livekitRoomName,
   stageViewMode,
   onChangeStageViewMode,
@@ -139,7 +178,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   micOn,
   screenSharing,
   handRaised,
-  localMediaStream,
+  localVideoStream,
   screenShareStream,
   remoteVideoTracks,
   activeSpeakerIdentities,
@@ -152,33 +191,25 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   isUploadingR2,
   hostSlideLabel,
   hostTopicNote,
-  transcriptPreview,
   floatingReactions,
+  onToggleCamera,
+  onToggleMic,
+  onToggleScreenShare,
   onMuteParticipant,
   onStartRecordingToR2,
   onStopRecordingToR2,
   onUploadVideoFileToR2,
 }) => {
-  const localSelfVideoRef = useRef<HTMLVideoElement | null>(null);
-  const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (localSelfVideoRef.current && webcamActive && localMediaStream) {
-      localSelfVideoRef.current.srcObject = localMediaStream;
-    }
-  }, [webcamActive, camOn, localMediaStream, stageViewMode]);
-
-  useEffect(() => {
-    if (localScreenVideoRef.current && screenSharing && screenShareStream) {
-      localScreenVideoRef.current.srcObject = screenShareStream;
-    }
-  }, [screenSharing, screenShareStream, stageViewMode]);
+  const [mirrorLocalCam, setMirrorLocalCam] = useState<boolean>(true);
+  const [pinnedTarget, setPinnedTarget] = useState<'AUTO' | 'SELF' | 'SCREEN'>('AUTO');
 
   const remoteScreenTrack = remoteVideoTracks.find((t) => t.source === 'screen_share');
   const remoteCameraTracks = remoteVideoTracks.filter((t) => t.source === 'camera');
   const primaryRemoteCamera = remoteCameraTracks[0];
   const isRecording = Boolean(recordingState?.isRecording);
+  const hasLocalCameraVideo = Boolean(webcamActive && camOn && localVideoStream);
+  const hasLocalScreenVideo = Boolean(screenSharing && screenShareStream);
 
   const isParticipantMuted = (accountId: string, isParticipantHost: boolean) => {
     if (isParticipantHost) return false;
@@ -186,6 +217,277 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
       mutedIdentities.includes('ALL_STUDENTS') ||
       mutedIdentities.includes(accountId) ||
       mutedIdentities.includes(`acc-${accountId}`)
+    );
+  };
+
+  // Decide what occupies the primary 16:9 Google Meet stage
+  const renderPrimaryMeetViewport = () => {
+    // 1. Local Screen Share
+    if (
+      hasLocalScreenVideo &&
+      (pinnedTarget === 'AUTO' || pinnedTarget === 'SCREEN')
+    ) {
+      return (
+        <div className="relative w-full aspect-video bg-black overflow-hidden flex items-center justify-center">
+          <LocalMediaStreamView
+            stream={screenShareStream}
+            muted
+            mirrored={false}
+            className="w-full h-full object-contain"
+          />
+          <div className="absolute top-3 left-3 px-3 py-1.5 rounded-lg bg-emerald-950/90 border border-[#10B981]/60 text-emerald-300 text-xs font-mono font-bold flex items-center gap-2">
+            <MonitorUp className="w-4 h-4 text-[#10B981]" />
+            <span>Bạn đang trình bày màn hình trực tiếp ({selfName})</span>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleScreenShare}
+            className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-bold cursor-pointer"
+          >
+            Dừng trình bày màn hình
+          </button>
+
+          {/* Picture-in-Picture Self Camera while Screen Sharing */}
+          {hasLocalCameraVideo && (
+            <div className="absolute bottom-4 right-4 w-44 sm:w-52 aspect-video rounded-xl overflow-hidden border-2 border-[#10B981] shadow-2xl bg-slate-950">
+              <LocalMediaStreamView
+                stream={localVideoStream}
+                muted
+                mirrored={mirrorLocalCam}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute bottom-1.5 left-2 px-2 py-0.5 rounded bg-black/75 text-[10px] font-bold text-white">
+                {selfName} (Camera)
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 2. Remote Screen Share
+    if (remoteScreenTrack && pinnedTarget === 'AUTO') {
+      return (
+        <div className="relative w-full aspect-video bg-black overflow-hidden flex items-center justify-center">
+          <LiveMediaTrackView
+            track={remoteScreenTrack.track}
+            className="w-full h-full object-contain"
+          />
+          <div className="absolute top-3 left-3 px-3 py-1.5 rounded-lg bg-slate-900/90 border border-[#10B981]/50 text-emerald-300 text-xs font-mono font-bold flex items-center gap-2">
+            <MonitorUp className="w-4 h-4 text-[#10B981]" />
+            <span>Đang trình bày màn hình — {remoteScreenTrack.participantName}</span>
+          </div>
+
+          {hasLocalCameraVideo && (
+            <div className="absolute bottom-4 right-4 w-44 sm:w-52 aspect-video rounded-xl overflow-hidden border-2 border-[#10B981] shadow-2xl bg-slate-950">
+              <LocalMediaStreamView
+                stream={localVideoStream}
+                muted
+                mirrored={mirrorLocalCam}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute bottom-1.5 left-2 px-2 py-0.5 rounded bg-black/75 text-[10px] font-bold text-white">
+                Bạn ({selfName})
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 3. Remote Camera (when another participant/instructor has camera on and user hasn't pinned self)
+    if (primaryRemoteCamera && pinnedTarget !== 'SELF') {
+      return (
+        <div className="relative w-full aspect-video bg-black overflow-hidden">
+          <LiveMediaTrackView
+            track={primaryRemoteCamera.track}
+            className="w-full h-full object-cover"
+          />
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-black/75 border border-white/15 text-white text-xs font-bold flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#10B981]" />
+            <span>{primaryRemoteCamera.participantName}</span>
+          </div>
+
+          {hasLocalCameraVideo && (
+            <div
+              onClick={() => setPinnedTarget('SELF')}
+              title="Nhấn để phóng to Camera của bạn"
+              className="absolute bottom-4 right-4 w-44 sm:w-52 aspect-video rounded-xl overflow-hidden border-2 border-[#10B981] shadow-2xl bg-slate-950 cursor-pointer"
+            >
+              <LocalMediaStreamView
+                stream={localVideoStream}
+                muted
+                mirrored={mirrorLocalCam}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute bottom-1.5 left-2 px-2 py-0.5 rounded bg-black/75 text-[10px] font-bold text-white">
+                Bạn ({selfName})
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 4. Local Camera ON (You see your own live camera stream right on the main stage!)
+    if (hasLocalCameraVideo) {
+      return (
+        <div className="relative w-full aspect-video bg-black overflow-hidden">
+          <LocalMediaStreamView
+            stream={localVideoStream}
+            muted
+            mirrored={mirrorLocalCam}
+            className="w-full h-full object-cover"
+          />
+
+          <div className="absolute top-3 right-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMirrorLocalCam((v) => !v)}
+              className="px-2.5 py-1.5 rounded-lg bg-black/70 hover:bg-black/85 border border-white/15 text-slate-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              title="Lật gương hình ảnh Camera"
+            >
+              <FlipHorizontal className="w-3.5 h-3.5 text-[#10B981]" />
+              <span>Lật gương</span>
+            </button>
+            {pinnedTarget === 'SELF' && primaryRemoteCamera && (
+              <button
+                type="button"
+                onClick={() => setPinnedTarget('AUTO')}
+                className="px-2.5 py-1.5 rounded-lg bg-black/70 hover:bg-black/85 border border-white/15 text-emerald-300 text-xs font-semibold cursor-pointer"
+              >
+                Bỏ ghim
+              </button>
+            )}
+          </div>
+
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-black/75 border border-white/15 text-white text-xs font-bold flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                micOn ? 'bg-[#10B981] animate-pulse' : 'bg-rose-500'
+              }`}
+            />
+            <span>
+              {selfName} (Bạn · {selfRoleLabel})
+            </span>
+            {micOn ? (
+              <Mic className="w-3.5 h-3.5 text-[#10B981]" />
+            ) : (
+              <MicOff className="w-3.5 h-3.5 text-rose-400" />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // 5. Default Google Meet / Zoom Camera-Off Video Stage (Clean Avatar + Quick Launch Camera/Mic/Screen Buttons)
+    return (
+      <div className="relative w-full aspect-video bg-gradient-to-b from-[#0E1713] to-[#080D0B] overflow-hidden flex flex-col items-center justify-center p-6 select-none">
+        {/* Top subtle room info pill */}
+        <div className="absolute top-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-black/50 border border-slate-800 text-xs text-slate-300 font-mono">
+            <Radio className="w-3.5 h-3.5 text-[#10B981]" />
+            <span>
+              Buổi {String(sessionOrder).padStart(2, '0')}: {sessionTitle}
+            </span>
+          </div>
+          {(hostSlideLabel || hostTopicNote) && (
+            <div className="px-3 py-1 rounded-lg bg-emerald-950/80 border border-[#10B981]/40 text-xs text-emerald-200 font-medium">
+              {hostSlideLabel ? `${hostSlideLabel} · ` : ''}
+              {hostTopicNote}
+            </div>
+          )}
+        </div>
+
+        {/* Center Google Meet Avatar + Audio Ring */}
+        <div className="flex flex-col items-center gap-3 my-auto">
+          <div className="relative">
+            {micOn && (
+              <span className="absolute -inset-2 rounded-full border-2 border-[#10B981] animate-ping opacity-40" />
+            )}
+            <div
+              className={`p-1.5 rounded-full border-2 transition-all ${
+                micOn
+                  ? 'border-[#10B981] shadow-[0_0_30px_rgba(16,185,129,0.35)]'
+                  : 'border-slate-700'
+              }`}
+            >
+              <AvatarWithFallback
+                name={selfName}
+                className="w-24 h-24 sm:w-28 sm:h-28 rounded-full text-2xl"
+              />
+            </div>
+            <span
+              className={`absolute bottom-1 right-1 p-2 rounded-full border border-slate-900 ${
+                micOn ? 'bg-[#10B981] text-slate-950' : 'bg-rose-600 text-white'
+              }`}
+            >
+              {micOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </span>
+          </div>
+
+          <div className="text-center space-y-1">
+            <div className="text-base sm:text-lg font-bold text-white flex items-center justify-center gap-2">
+              <span>{selfName}</span>
+              <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/15 border border-[#10B981]/30 text-emerald-300">
+                {selfRoleLabel}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Camera của bạn đang tắt · Bật Camera hoặc Chia sẻ màn hình để hiển thị trực tiếp lên sân khấu
+            </p>
+          </div>
+
+          {/* Direct Google Meet Action Buttons right inside the video canvas */}
+          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={onToggleCamera}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-slate-950 text-xs font-extrabold shadow-lg transition-all cursor-pointer"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Bật Camera của tôi</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleScreenShare}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold transition-all cursor-pointer"
+            >
+              <MonitorUp className="w-4 h-4 text-[#10B981]" />
+              <span>Trình bày / Chia sẻ màn hình</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleMic}
+              className={`inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                micOn
+                  ? 'bg-emerald-500/20 border-[#10B981]/50 text-emerald-300'
+                  : 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white'
+              }`}
+            >
+              {micOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4 text-rose-400" />}
+              <span>{micOn ? 'Đang bật Mic' : 'Bật Micro'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Bottom-left participant name badge (Google Meet style) */}
+        <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-xs text-slate-400">
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-black/60 text-slate-200 font-medium">
+            <span>{selfName} (Bạn)</span>
+            {handRaised && (
+              <span className="text-amber-400 font-bold flex items-center gap-1">
+                · <Hand className="w-3.5 h-3.5" /> Đang giơ tay
+              </span>
+            )}
+          </div>
+          <div className="font-mono text-[11px] text-slate-400">
+            Chủ phòng: {hostName}
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -197,13 +499,19 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-slate-900 border border-slate-800 text-xs font-mono text-slate-300">
             <span
               className={`w-2 h-2 rounded-full ${
-                livekitConnected ? 'bg-[#10B981] animate-pulse' : 'bg-amber-400'
+                livekitConnected
+                  ? 'bg-[#10B981] animate-pulse'
+                  : livekitConnecting
+                    ? 'bg-amber-400 animate-ping'
+                    : 'bg-[#10B981]'
               }`}
             />
             <span>
               {livekitConnected
                 ? `LiveKit Cloud SFU · ${livekitRoomName || 'Connected'}`
-                : 'LiveKit Ready · WebRTC Stage'}
+                : livekitConnecting
+                  ? 'Đang kết nối LiveKit Cloud...'
+                  : `Phòng Họp WebRTC · ${livekitRoomName || 'Sẵn sàng'}`}
             </span>
           </div>
 
@@ -356,7 +664,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
         <div className="rounded-2xl bg-[#0B120F] border border-slate-800 p-4 sm:p-5 space-y-4 relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="font-mono font-semibold text-emerald-400">
-              CHẾ ĐỘ LƯỚI PHÒNG HỌP TRỰC TUYẾN ({Math.max(participants.length, 2)} THÀNH VIÊN)
+              CHẾ ĐỘ LƯỚI GOOGLE MEET ({Math.max(participants.length, 2)} THÀNH VIÊN)
             </span>
             {hostSlideLabel && (
               <span className="font-mono text-slate-300">{hostSlideLabel}</span>
@@ -367,15 +675,14 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
             {/* Tile 1: Local User (You) */}
             <div
               className={`relative aspect-video rounded-xl bg-slate-950 border overflow-hidden flex flex-col justify-between p-3 ${
-                micOn ? 'border-[#10B981]' : 'border-slate-800'
+                micOn || hasLocalCameraVideo ? 'border-2 border-[#10B981]' : 'border-slate-800'
               }`}
             >
-              {webcamActive && camOn ? (
-                <video
-                  ref={localSelfVideoRef}
-                  autoPlay
-                  playsInline
+              {hasLocalCameraVideo ? (
+                <LocalMediaStreamView
+                  stream={localVideoStream}
                   muted
+                  mirrored={mirrorLocalCam}
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               ) : (
@@ -389,7 +696,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
               )}
 
               <div className="relative z-10 flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-black/70 text-[11px] font-bold text-emerald-300">
+                <span className="px-2 py-0.5 rounded bg-black/75 text-[11px] font-bold text-emerald-300">
                   Bạn ({selfName})
                 </span>
                 {handRaised && (
@@ -400,18 +707,58 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
               </div>
 
               <div className="relative z-10 flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-black/70 text-[11px] text-slate-200 font-mono">
-                  {webcamActive && camOn ? 'Camera ON' : 'Camera OFF'}
-                </span>
-                <span
-                  className={`p-1.5 rounded-lg ${
+                <button
+                  type="button"
+                  onClick={onToggleCamera}
+                  className="px-2 py-0.5 rounded bg-black/75 hover:bg-black text-[11px] text-slate-200 font-mono flex items-center gap-1 cursor-pointer"
+                >
+                  {hasLocalCameraVideo ? (
+                    <>
+                      <Video className="w-3 h-3 text-[#10B981]" />
+                      <span>Cam ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <VideoOff className="w-3 h-3 text-slate-400" />
+                      <span>Bật Cam</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={onToggleMic}
+                  className={`p-1.5 rounded-lg cursor-pointer ${
                     micOn ? 'bg-[#10B981]/20 text-[#10B981]' : 'bg-red-500/20 text-red-400'
                   }`}
                 >
                   {micOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-                </span>
+                </button>
               </div>
             </div>
+
+            {/* Tile 1B: Local Screen Share Tile if sharing in Grid mode */}
+            {hasLocalScreenVideo && (
+              <div className="relative aspect-video rounded-xl bg-black border-2 border-[#10B981] overflow-hidden flex flex-col justify-between p-3">
+                <LocalMediaStreamView
+                  stream={screenShareStream}
+                  muted
+                  mirrored={false}
+                  className="absolute inset-0 w-full h-full object-contain"
+                />
+                <div className="relative z-10 flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded bg-black/80 text-[11px] font-bold text-emerald-300">
+                    Màn hình của bạn ({selfName})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onChangeStageViewMode('STAGE')}
+                    className="px-2 py-0.5 rounded bg-[#10B981] text-slate-950 text-[10px] font-bold cursor-pointer"
+                  >
+                    Phóng to
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Remote LiveKit Camera/Screen Tiles */}
             {remoteVideoTracks.map((rt) => {
@@ -447,7 +794,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
               );
             })}
 
-            {/* Roster Participant Tiles (who aren't already duplicated) */}
+            {/* Roster Participant Tiles */}
             {participants
               .filter((p) => String(p.accountId) !== String(selfAccountId))
               .slice(0, 8)
@@ -504,7 +851,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                         {muted ? (
                           <>
                             <MicOff className="w-3.5 h-3.5" />
-                            <span>Đã tắt mic</span>
+                            <span>Đã cắt mic</span>
                           </>
                         ) : (
                           <>
@@ -531,137 +878,24 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
           </div>
         </div>
       ) : (
-        /* MODE 3: SPOTLIGHT STAGE (SCREEN SHARE / LIVE STREAM / BOARD) + FILMSTRIP */
+        /* MODE 3: GOOGLE MEET / ZOOM VIDEO STAGE */
         <div className="rounded-2xl bg-[#0B120F] border border-slate-800 overflow-hidden shadow-xl relative">
-          <div className="px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="font-mono text-emerald-400 font-semibold flex items-center gap-2">
-              <Radio className="w-3.5 h-3.5 text-[#10B981]" />
-              {screenSharing
-                ? `Đang chia sẻ màn hình trực tiếp — ${selfName}`
-                : remoteScreenTrack
-                  ? `Màn hình chia sẻ trực tiếp — ${remoteScreenTrack.participantName}`
-                  : primaryRemoteCamera
-                    ? `Luồng Camera LiveKit trực tiếp — ${primaryRemoteCamera.participantName}`
-                    : `Sân khấu giảng dạy trực tuyến · ${hostName}`}
-            </span>
-            {hostSlideLabel && (
-              <span className="font-mono text-[11px] px-2.5 py-0.5 rounded bg-slate-800 text-emerald-300">
-                {hostSlideLabel}
-              </span>
-            )}
-          </div>
+          {renderPrimaryMeetViewport()}
 
-          <div className="p-5 sm:p-6 relative min-h-[360px] flex flex-col justify-between space-y-4">
-            {screenSharing && screenShareStream ? (
-              <video
-                ref={localScreenVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-contain"
-              />
-            ) : remoteScreenTrack ? (
-              <LiveMediaTrackView
-                track={remoteScreenTrack.track}
-                className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-contain"
-              />
-            ) : primaryRemoteCamera ? (
-              <LiveMediaTrackView
-                track={primaryRemoteCamera.track}
-                className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-cover"
-              />
-            ) : webcamActive && camOn && isHost ? (
-              <video
-                ref={localSelfVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full aspect-video rounded-xl bg-black border border-[#10B981]/60 object-cover"
-              />
-            ) : (
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-emerald-400 font-bold">
-                    BUỔI {String(sessionOrder).padStart(2, '0')} · {sessionTitle}
-                  </span>
-                  {playableVideoUrl && (
-                    <button
-                      type="button"
-                      onClick={() => onChangeStageViewMode('VIDEO')}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-slate-950 text-xs font-bold cursor-pointer"
-                    >
-                      Mở Video Bài Giảng / Bản Ghi R2 →
-                    </button>
-                  )}
-                </div>
-
-                {hostTopicNote && (
-                  <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-[#10B981]/50 text-xs sm:text-sm text-emerald-100">
-                    <span className="font-bold text-emerald-300">Chủ đề đang giảng: </span>
-                    {hostTopicNote}
-                  </div>
-                )}
-
-                <div className="p-4 rounded-xl bg-slate-950/85 border border-slate-800 space-y-2">
-                  <div className="text-xs font-mono font-bold text-slate-400">
-                    NỘI DUNG TRỌNG TÂM TRÊN SÂN KHẤU
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">
-                    {(aiSummaryMd || '')
-                      .replace(/^#{1,6}\s*/gm, '')
-                      .replace(/\*\*(.*?)\*\*/g, '$1')
-                      .trim() ||
-                      'Phòng học LiveKit WebRTC đã sẵn sàng. Giảng viên và học viên có thể bật Camera, Micro hoặc Chia sẻ màn hình trực tiếp.'}
-                  </p>
-                </div>
-
-                {transcriptPreview.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {transcriptPreview.slice(0, 4).map((cue) => (
-                      <div
-                        key={cue.id || cue.sec}
-                        className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs space-y-1"
-                      >
-                        <div className="font-mono text-[11px] text-emerald-400 font-bold">
-                          [{cue.timeLabel}] · Slide {cue.slidePage}
-                        </div>
-                        <p className="text-slate-300 line-clamp-2">{cue.text}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Floating Reactions */}
-            {floatingReactions.map((r) => (
-              <div
-                key={r.id}
-                style={{ left: `${r.leftPct}%` }}
-                className="bottom-14 absolute px-3 py-1 rounded-lg bg-black/75 border border-white/20 text-xs font-bold text-white animate-bounce pointer-events-none z-10"
-              >
-                {r.label}
-              </div>
-            ))}
-
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800/80 text-xs text-slate-300">
-              <span>
-                {raisedHands.length > 0
-                  ? `${raisedHands.length} học viên đang giơ tay phát biểu`
-                  : 'Tất cả thành viên đang theo dõi trực tiếp'}
-              </span>
-              {handRaised && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 border border-amber-400/50 text-amber-300 font-bold">
-                  <Hand className="w-3.5 h-3.5" />
-                  Bạn đang giơ tay phát biểu
-                </span>
-              )}
+          {/* Floating Reactions */}
+          {floatingReactions.map((r) => (
+            <div
+              key={r.id}
+              style={{ left: `${r.leftPct}%` }}
+              className="bottom-14 absolute px-3 py-1 rounded-lg bg-black/75 border border-white/20 text-xs font-bold text-white animate-bounce pointer-events-none z-20"
+            >
+              {r.label}
             </div>
-          </div>
+          ))}
         </div>
       )}
 
-      {/* Bottom Participant Filmstrip (Host + Self + Quick Student Mute Controls) */}
+      {/* Bottom Participant Filmstrip (Host + Self Live Camera Tile + Quick Student Mute Controls) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
         {/* Host Tile */}
         <div className="p-3.5 rounded-xl bg-[#111A15] border-2 border-[#10B981] flex items-center gap-3">
@@ -677,16 +911,20 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
           </span>
         </div>
 
-        {/* Local User Tile */}
-        <div className="p-3.5 rounded-xl bg-[#111A15] border border-slate-800 flex items-center justify-between gap-3">
+        {/* Local User Tile (Always shows live mini preview when camera is on) */}
+        <div
+          onClick={() => {
+            if (hasLocalCameraVideo) setPinnedTarget('SELF');
+          }}
+          className="p-3.5 rounded-xl bg-[#111A15] border border-slate-800 flex items-center justify-between gap-3 cursor-pointer hover:border-[#10B981]/60 transition-colors"
+        >
           <div className="flex items-center gap-3 min-w-0">
-            {webcamActive && camOn && !isHost ? (
-              <video
-                ref={localSelfVideoRef}
-                autoPlay
-                playsInline
+            {hasLocalCameraVideo ? (
+              <LocalMediaStreamView
+                stream={localVideoStream}
                 muted
-                className="w-14 h-11 rounded-lg bg-black object-cover border border-[#10B981] shrink-0"
+                mirrored={mirrorLocalCam}
+                className="w-16 h-11 rounded-lg bg-black object-cover border border-[#10B981] shrink-0"
               />
             ) : (
               <AvatarWithFallback name={selfName} className="w-11 h-11 rounded-full shrink-0" />
@@ -695,7 +933,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
               <div className="text-xs font-bold text-white truncate">{selfName} (Bạn)</div>
               <div className="text-[11px] text-slate-400 truncate">
                 {micOn ? 'Micro đang bật' : 'Micro đang tắt'} ·{' '}
-                {camOn && webcamActive ? 'Camera đang bật' : 'Camera đang tắt'}
+                {hasLocalCameraVideo ? 'Camera đang bật' : 'Camera đang tắt'}
               </div>
             </div>
           </div>

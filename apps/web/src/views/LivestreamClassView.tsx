@@ -119,14 +119,14 @@ export const LivestreamClassView: React.FC<{
 
   // Local Camera/Mic & Screen Share streams
   const localMediaStreamRef = useRef<MediaStream | null>(null);
+  const localAudioStreamRef = useRef<MediaStream | null>(null);
   const screenShareStreamRef = useRef<MediaStream | null>(null);
   const guestVideoRef = useRef<HTMLVideoElement | null>(null);
-  const liveSelfVideoRef = useRef<HTMLVideoElement | null>(null);
-  const screenStageVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteStageVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioContainerRef = useRef<HTMLDivElement | null>(null);
   const livekitRoomRef = useRef<Room | null>(null);
 
+  const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
+  const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [webcamActive, setWebcamActive] = useState<boolean>(false);
   const [micOn, setMicOn] = useState<boolean>(false);
   const [camOn, setCamOn] = useState<boolean>(false);
@@ -135,6 +135,7 @@ export const LivestreamClassView: React.FC<{
 
   // LiveKit remote stream tracking
   const [livekitConnected, setLivekitConnected] = useState<boolean>(false);
+  const [livekitConnecting, setLivekitConnecting] = useState<boolean>(false);
   const [remoteVideoTracks, setRemoteVideoTracks] = useState<AttachedRemoteTrackItem[]>([]);
   const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<string[]>([]);
 
@@ -246,30 +247,21 @@ export const LivestreamClassView: React.FC<{
     void loadRoom();
   }, [loadRoom]);
 
-  // Attach local webcam stream whenever video elements mount
+  // Attach local webcam stream to guest preview video element when in guest check screen
   useEffect(() => {
-    if (webcamActive && localMediaStreamRef.current) {
-      if (guestVideoRef.current) {
-        guestVideoRef.current.srcObject = localMediaStreamRef.current;
-      }
-      if (liveSelfVideoRef.current) {
-        liveSelfVideoRef.current.srcObject = localMediaStreamRef.current;
-      }
+    if (webcamActive && localVideoStream && guestVideoRef.current) {
+      guestVideoRef.current.srcObject = localVideoStream;
     }
-  }, [webcamActive, guestMode, roomData]);
-
-  // Attach local screen share stream whenever screenSharing toggles
-  useEffect(() => {
-    if (screenSharing && screenShareStreamRef.current && screenStageVideoRef.current) {
-      screenStageVideoRef.current.srcObject = screenShareStreamRef.current;
-    }
-  }, [screenSharing, stageViewMode]);
+  }, [webcamActive, localVideoStream, guestMode]);
 
   // Cleanup all streams & LiveKit room on unmount
   useEffect(() => {
     return () => {
       if (localMediaStreamRef.current) {
         localMediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (localAudioStreamRef.current) {
+        localAudioStreamRef.current.getTracks().forEach((t) => t.stop());
       }
       if (screenShareStreamRef.current) {
         screenShareStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -283,13 +275,17 @@ export const LivestreamClassView: React.FC<{
   // Connect to LiveKit SFU automatically if backend returns serverUrl & token
   useEffect(() => {
     const lkInfo = joinedAsVerifiedGuest ? guestMeta?.livekit : roomData?.livekit;
-    if (!lkInfo?.enabled || !lkInfo.serverUrl || !lkInfo.token) {
+    const serverUrl =
+      lkInfo?.serverUrl || 'wss://project-3t-academy-live-3vunmpp5.livekit.cloud';
+    if (!lkInfo?.token || !serverUrl) {
       setLivekitConnected(false);
+      setLivekitConnecting(false);
       setRemoteVideoTracks([]);
       return;
     }
 
     let cancelled = false;
+    setLivekitConnecting(true);
     const room = new Room({ adaptiveStream: true, dynacast: true });
     livekitRoomRef.current = room;
 
@@ -348,21 +344,43 @@ export const LivestreamClassView: React.FC<{
     room.on(RoomEvent.Disconnected, () => {
       if (!cancelled) {
         setLivekitConnected(false);
+        setLivekitConnecting(false);
         setRemoteVideoTracks([]);
         setActiveSpeakerIdentities([]);
       }
     });
 
     room
-      .connect(lkInfo.serverUrl, lkInfo.token)
-      .then(() => {
-        if (!cancelled) {
-          setLivekitConnected(true);
+      .connect(serverUrl, lkInfo.token)
+      .then(async () => {
+        if (cancelled) return;
+        setLivekitConnected(true);
+        setLivekitConnecting(false);
+
+        // If user already turned on camera, mic, or screen share before room finished connecting, publish them now
+        const camTrack = localMediaStreamRef.current?.getVideoTracks()?.[0];
+        if (camTrack && camTrack.readyState === 'live' && camTrack.enabled) {
+          await room.localParticipant
+            .publishTrack(camTrack, { source: Track.Source.Camera })
+            .catch(() => {});
+        }
+        const micTrack = localAudioStreamRef.current?.getAudioTracks()?.[0];
+        if (micTrack && micTrack.readyState === 'live' && micTrack.enabled) {
+          await room.localParticipant
+            .publishTrack(micTrack, { source: Track.Source.Microphone })
+            .catch(() => {});
+        }
+        const screenTrack = screenShareStreamRef.current?.getVideoTracks()?.[0];
+        if (screenTrack && screenTrack.readyState === 'live') {
+          await room.localParticipant
+            .publishTrack(screenTrack, { source: Track.Source.ScreenShare })
+            .catch(() => {});
         }
       })
       .catch(() => {
         if (!cancelled) {
           setLivekitConnected(false);
+          setLivekitConnecting(false);
         }
       });
 
@@ -576,15 +594,25 @@ export const LivestreamClassView: React.FC<{
             payload.targetIdentities.includes(`acc-${myId}`));
 
         if (shouldMuteMe) {
+          if (localAudioStreamRef.current) {
+            localAudioStreamRef.current.getAudioTracks().forEach((t) => {
+              t.enabled = false;
+            });
+          }
           if (localMediaStreamRef.current) {
             localMediaStreamRef.current.getAudioTracks().forEach((t) => {
               t.enabled = false;
             });
           }
           if (livekitRoomRef.current) {
-            void livekitRoomRef.current.localParticipant
-              .setMicrophoneEnabled(false)
-              .catch(() => {});
+            const micPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+              Track.Source.Microphone
+            );
+            if (micPub?.track) {
+              void livekitRoomRef.current.localParticipant
+                .unpublishTrack(micPub.track, false)
+                .catch(() => {});
+            }
           }
           setMicOn(false);
           setMediaNotice('Giảng viên đã cắt micro của bạn để đảm bảo chất lượng lớp học.');
@@ -612,51 +640,103 @@ export const LivestreamClassView: React.FC<{
     };
   }, [roomData?.session.id, spawnFloatingReaction, currentUser?.id, isHost]);
 
-  // Real browser camera & microphone control
+  // Real browser camera & microphone control (Google Meet style)
   const handleToggleCamera = async () => {
-    if (localMediaStreamRef.current && webcamActive) {
-      const nextCam = !camOn;
-      localMediaStreamRef.current.getVideoTracks().forEach((t) => {
-        t.enabled = nextCam;
+    // Turn off camera if currently on
+    if (camOn && localMediaStreamRef.current) {
+      const videoTracks = localMediaStreamRef.current.getVideoTracks();
+      videoTracks.forEach((t) => {
+        t.enabled = false;
+        t.stop();
       });
-      setCamOn(nextCam);
+      localMediaStreamRef.current = null;
+      setLocalVideoStream(null);
+      setWebcamActive(false);
+      setCamOn(false);
+      setMediaNotice('Đã tắt Camera.');
+
       if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setCameraEnabled(nextCam).catch(() => {});
+        const camPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+          Track.Source.Camera
+        );
+        if (camPub?.track) {
+          await livekitRoomRef.current.localParticipant
+            .unpublishTrack(camPub.track, false)
+            .catch(() => {});
+        }
       }
       return;
     }
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setMediaNotice('Trình duyệt hiện tại chưa hỗ trợ API Camera/Mic.');
+      setMediaNotice('Trình duyệt hiện tại chưa hỗ trợ API Camera (getUserMedia).');
       return;
     }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user',
+          },
+          audio: false,
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
       localMediaStreamRef.current = stream;
+      setLocalVideoStream(stream);
       setWebcamActive(true);
       setCamOn(true);
-      setMicOn(true);
-      setMediaNotice('Đã bật Camera & Micro trực tiếp trên trình duyệt.');
-      if (guestVideoRef.current) guestVideoRef.current.srcObject = stream;
-      if (liveSelfVideoRef.current) liveSelfVideoRef.current.srcObject = stream;
-      if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setCameraEnabled(true).catch(() => {});
-        await livekitRoomRef.current.localParticipant.setMicrophoneEnabled(true).catch(() => {});
+      if (stageViewMode === 'VIDEO') {
+        setStageViewMode('STAGE');
+      }
+      setMediaNotice('Đã bật Camera trực tiếp trên sân khấu phòng họp.');
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          localMediaStreamRef.current = null;
+          setLocalVideoStream(null);
+          setWebcamActive(false);
+          setCamOn(false);
+        };
+        if (livekitRoomRef.current && livekitConnected) {
+          await livekitRoomRef.current.localParticipant
+            .publishTrack(videoTrack, { source: Track.Source.Camera })
+            .catch(() => {});
+        }
       }
     } catch {
-      setMediaNotice('Chưa cấp quyền Camera/Micro hoặc không tìm thấy thiết bị vật lý.');
+      setMediaNotice(
+        'Không thể mở Camera. Vui lòng kiểm tra quyền truy cập Camera trên thanh địa chỉ trình duyệt hoặc tắt ứng dụng khác đang chiếm webcam.'
+      );
     }
   };
 
   const handleToggleMic = async () => {
-    if (localMediaStreamRef.current) {
-      const nextMic = !micOn;
-      localMediaStreamRef.current.getAudioTracks().forEach((t) => {
-        t.enabled = nextMic;
+    if (micOn && localAudioStreamRef.current) {
+      localAudioStreamRef.current.getAudioTracks().forEach((t) => {
+        t.enabled = false;
+        t.stop();
       });
-      setMicOn(nextMic);
+      localAudioStreamRef.current = null;
+      setMicOn(false);
+      setMediaNotice('Đã tắt Micro.');
+
       if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setMicrophoneEnabled(nextMic).catch(() => {});
+        const micPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+          Track.Source.Microphone
+        );
+        if (micPub?.track) {
+          await livekitRoomRef.current.localParticipant
+            .unpublishTrack(micPub.track, false)
+            .catch(() => {});
+        }
       }
       return;
     }
@@ -666,12 +746,23 @@ export const LivestreamClassView: React.FC<{
       return;
     }
     try {
-      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      localMediaStreamRef.current = audioStream;
+      const audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      localAudioStreamRef.current = audioStream;
       setMicOn(true);
-      setMediaNotice('Đã bật Micro thành công.');
-      if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setMicrophoneEnabled(true).catch(() => {});
+      setMediaNotice('Đã bật Micro trực tiếp.');
+
+      const audioTrack = audioStream.getAudioTracks()[0];
+      if (audioTrack && livekitRoomRef.current && livekitConnected) {
+        await livekitRoomRef.current.localParticipant
+          .publishTrack(audioTrack, { source: Track.Source.Microphone })
+          .catch(() => {});
       }
     } catch {
       setMediaNotice('Không tìm thấy thiết bị Micro hoặc quyền truy cập bị từ chối.');
@@ -684,9 +775,19 @@ export const LivestreamClassView: React.FC<{
         screenShareStreamRef.current.getTracks().forEach((t) => t.stop());
         screenShareStreamRef.current = null;
       }
+      setScreenShareStream(null);
       setScreenSharing(false);
+      setMediaNotice('Đã dừng chia sẻ màn hình.');
+
       if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setScreenShareEnabled(false).catch(() => {});
+        const screenPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+          Track.Source.ScreenShare
+        );
+        if (screenPub?.track) {
+          await livekitRoomRef.current.localParticipant
+            .unpublishTrack(screenPub.track, false)
+            .catch(() => {});
+        }
       }
       return;
     }
@@ -698,26 +799,44 @@ export const LivestreamClassView: React.FC<{
 
     try {
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+        },
         audio: false,
       });
       screenShareStreamRef.current = displayStream;
+      setScreenShareStream(displayStream);
       setScreenSharing(true);
       setStageViewMode('STAGE');
-      setMediaNotice('Đang chia sẻ màn hình trực tiếp lên sân khấu.');
+      setMediaNotice('Đang trình bày / chia sẻ màn hình trực tiếp lên sân khấu.');
 
       const videoTrack = displayStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
-          setScreenSharing(false);
+          if (livekitRoomRef.current && livekitConnected) {
+            const screenPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+              Track.Source.ScreenShare
+            );
+            if (screenPub?.track) {
+              void livekitRoomRef.current.localParticipant
+                .unpublishTrack(screenPub.track, false)
+                .catch(() => {});
+            }
+          }
           screenShareStreamRef.current = null;
+          setScreenShareStream(null);
+          setScreenSharing(false);
         };
-      }
-      if (livekitRoomRef.current && livekitConnected) {
-        await livekitRoomRef.current.localParticipant.setScreenShareEnabled(true).catch(() => {});
+        if (livekitRoomRef.current && livekitConnected) {
+          await livekitRoomRef.current.localParticipant
+            .publishTrack(videoTrack, { source: Track.Source.ScreenShare })
+            .catch(() => {});
+        }
       }
     } catch {
-      setMediaNotice('Bạn đã hủy chia sẻ màn hình hoặc trình duyệt từ chối quyền.');
+      setMediaNotice('Bạn đã hủy chọn cửa sổ chia sẻ màn hình hoặc trình duyệt từ chối quyền.');
     }
   };
 
@@ -1533,6 +1652,7 @@ export const LivestreamClassView: React.FC<{
             }
             isHost={isHost}
             livekitConnected={livekitConnected}
+            livekitConnecting={livekitConnecting}
             livekitRoomName={roomData?.livekit?.roomName}
             sseConnected={sseConnected}
             stageViewMode={stageViewMode}
@@ -1543,8 +1663,8 @@ export const LivestreamClassView: React.FC<{
             micOn={micOn}
             screenSharing={screenSharing}
             handRaised={handRaised}
-            localMediaStream={localMediaStreamRef.current}
-            screenShareStream={screenShareStreamRef.current}
+            localVideoStream={localVideoStream}
+            screenShareStream={screenShareStream}
             remoteVideoTracks={remoteVideoTracks}
             activeSpeakerIdentities={activeSpeakerIdentities}
             mutedIdentities={runtimeState.mutedIdentities || []}
@@ -1556,8 +1676,10 @@ export const LivestreamClassView: React.FC<{
             isUploadingR2={isUploadingR2}
             hostSlideLabel={runtimeState.hostBroadcast.activeSlideLabel}
             hostTopicNote={runtimeState.hostBroadcast.liveTopicNote}
-            transcriptPreview={roomData?.transcript || []}
             floatingReactions={floatingReactions}
+            onToggleCamera={() => void handleToggleCamera()}
+            onToggleMic={() => void handleToggleMic()}
+            onToggleScreenShare={() => void handleToggleScreenShare()}
             onMuteParticipant={(targetIdentity, muteAll) =>
               void handleMuteParticipant(targetIdentity, muteAll)
             }
