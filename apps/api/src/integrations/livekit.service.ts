@@ -180,6 +180,22 @@ export async function muteLiveKitParticipantsAudio(params: {
   }
 }
 
+export async function kickLiveKitParticipant(params: {
+  roomName: string;
+  targetIdentity: string;
+}): Promise<{ sfuRemoved: boolean }> {
+  const client = getRoomServiceClient();
+  if (!client || !params.targetIdentity) {
+    return { sfuRemoved: false };
+  }
+  try {
+    await client.removeParticipant(params.roomName, params.targetIdentity);
+    return { sfuRemoved: true };
+  } catch {
+    return { sfuRemoved: false };
+  }
+}
+
 export async function startLiveKitRoomRecordingToR2(params: {
   roomName: string;
   sessionId: string | number;

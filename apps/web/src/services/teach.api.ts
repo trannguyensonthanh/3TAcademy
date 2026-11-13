@@ -166,6 +166,26 @@ export const teachApi = {
       body: JSON.stringify(payload),
     }),
 
+  kickSessionParticipant: (
+    sessionId: string,
+    payload: {
+      targetIdentity?: string;
+      accountId?: string;
+      kicked?: boolean;
+    }
+  ) =>
+    httpRequest<{
+      sessionId: string;
+      roomName: string;
+      kicked: boolean;
+      targetIdentity: string;
+      kickedIdentities: string[];
+      sfuRemoved: boolean;
+    }>(`/teach/sessions/${encodeURIComponent(sessionId)}/kick-participant`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   startSessionRecording: (sessionId: string) =>
     httpRequest<{
       sessionId: string;

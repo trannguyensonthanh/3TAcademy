@@ -92,6 +92,7 @@ export interface LiveRoomRuntimeState {
   recentReactions: LiveReactionEvent[];
   questionVotes: Record<string, number>;
   mutedIdentities: string[];
+  kickedIdentities: string[];
   recording: LiveRecordingState;
   hostBroadcast: {
     activeSlideLabel: string;
@@ -117,6 +118,7 @@ function getOrCreateBucket(sessionId: string | number): InternalLiveRoomBucket {
         recentReactions: [],
         questionVotes: {},
         mutedIdentities: [],
+        kickedIdentities: [],
         recording: {
           isRecording: false,
         },
@@ -144,6 +146,7 @@ export function getLiveRoomState(sessionId: string | number): LiveRoomRuntimeSta
     recentReactions: [...bucket.state.recentReactions],
     questionVotes: { ...bucket.state.questionVotes },
     mutedIdentities: [...bucket.state.mutedIdentities],
+    kickedIdentities: [...bucket.state.kickedIdentities],
     recording: { ...bucket.state.recording },
     hostBroadcast: { ...bucket.state.hostBroadcast },
   };
@@ -283,6 +286,40 @@ export function updateMutedParticipantsState(
     timestamp: new Date().toISOString(),
   });
   return [...bucket.state.mutedIdentities];
+}
+
+export function updateKickedParticipantsState(
+  sessionId: string | number,
+  params: {
+    targetIdentities: string[];
+    kicked: boolean;
+    kickedBy: string;
+  }
+): string[] {
+  const bucket = getOrCreateBucket(sessionId);
+  const set = new Set(bucket.state.kickedIdentities);
+  for (const id of params.targetIdentities) {
+    const clean = id.trim();
+    if (!clean) continue;
+    if (params.kicked) {
+      set.add(clean);
+      const numericId = clean.replace(/^acc-/, '');
+      bucket.state.raisedHands = bucket.state.raisedHands.filter(
+        (h) => h.accountId !== clean && h.accountId !== numericId
+      );
+    } else {
+      set.delete(clean);
+    }
+  }
+  bucket.state.kickedIdentities = Array.from(set);
+  broadcastLiveRoomEvent(sessionId, 'participant_kicked', {
+    kickedIdentities: bucket.state.kickedIdentities,
+    targetIdentities: params.targetIdentities,
+    kicked: params.kicked,
+    kickedBy: params.kickedBy,
+    timestamp: new Date().toISOString(),
+  });
+  return [...bucket.state.kickedIdentities];
 }
 
 export function updateLiveRecordingState(

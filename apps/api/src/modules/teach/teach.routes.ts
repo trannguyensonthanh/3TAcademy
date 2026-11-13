@@ -38,11 +38,13 @@ import {
   broadcastLiveRoomEvent,
   getLiveRoomState,
   updateHostBroadcastState,
+  updateKickedParticipantsState,
   updateLiveRecordingState,
   updateMutedParticipantsState,
   resolvePlayableVideoSource,
 } from '../learning/liveRoom.helpers.js';
 import {
+  kickLiveKitParticipant,
   muteLiveKitParticipantsAudio,
   startLiveKitRoomRecordingToR2,
   stopLiveKitRoomRecording,
@@ -1112,6 +1114,80 @@ teachRouter.post(
         mutedIdentities,
         sfuMutedTracks: sfuResult.mutedTrackCount,
         sfuSynced: sfuResult.sfuSynced,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 7.5c2 POST /teach/sessions/:sessionId/kick-participant (Host kicks a disruptive student from the live room)
+const kickParticipantSchema = z.object({
+  targetIdentity: z.string().optional(),
+  accountId: z.union([z.string(), z.number()]).optional(),
+  kicked: z.boolean().optional(),
+});
+
+teachRouter.post(
+  '/teach/sessions/:sessionId/kick-participant',
+  validate(kickParticipantSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const { targetIdentity, accountId, kicked = true } = req.body;
+      const roomName = session.livekitRoomName || `live-session-${session.id}`;
+      const normalizedIdentity = targetIdentity
+        ? targetIdentity.trim()
+        : accountId !== undefined
+          ? String(accountId).startsWith('acc-')
+            ? String(accountId)
+            : `acc-${accountId}`
+          : '';
+
+      if (!normalizedIdentity) {
+        res.status(400).json({
+          success: false,
+          status: 400,
+          code: 'INVALID_PARTICIPANT',
+          message: 'Vui lòng chọn học viên cần mời ra khỏi phòng',
+        });
+        return;
+      }
+
+      const sfuResult = kicked
+        ? await kickLiveKitParticipant({
+            roomName,
+            targetIdentity: normalizedIdentity.startsWith('acc-')
+              ? normalizedIdentity
+              : `acc-${normalizedIdentity}`,
+          })
+        : { sfuRemoved: false };
+
+      const plainId = normalizedIdentity.replace(/^acc-/, '');
+      const fullId = `acc-${plainId}`;
+      const kickedIdentities = updateKickedParticipantsState(session.id, {
+        targetIdentities: [plainId, fullId],
+        kicked,
+        kickedBy: req.user!.email,
+      });
+
+      res.json({
+        sessionId: String(session.id),
+        roomName,
+        kicked,
+        targetIdentity: fullId,
+        kickedIdentities,
+        sfuRemoved: sfuResult.sfuRemoved,
       });
     } catch (err) {
       next(err);

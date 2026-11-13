@@ -19,6 +19,28 @@ for (const envPath of [apiRootEnvPath, workspaceRootEnvPath]) {
 const emptyToUndefined = (val: unknown) =>
   typeof val === 'string' && val.trim() === '' ? undefined : val;
 
+const PLACEHOLDER_ENV_VALUES = new Set([
+  'https://media.yourdomain.com',
+  'wss://your-livekit.livekit.cloud',
+  'ws://localhost:7880',
+  'your-livekit-api-key',
+  'your-livekit-api-secret',
+  'your-r2-account-id',
+  'your-r2-access-key',
+  'your-r2-secret-key',
+  'devkey',
+  'secret',
+]);
+
+const mediaEnvPreprocess = (val: unknown) => {
+  if (typeof val !== 'string') return undefined;
+  const trimmed = val.trim().replace(/\/+$/, '');
+  if (!trimmed || PLACEHOLDER_ENV_VALUES.has(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+};
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(4000),
@@ -32,41 +54,41 @@ const envSchema = z.object({
   HMAC_CERTIFICATE_SECRET: z.string().default('3t-academy-hmac-certificate-secret-key-2026'),
   AI_SERVICE_URL: z.string().default('http://localhost:8000'),
   LIVEKIT_API_URL: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z
       .string()
       .trim()
       .default('wss://project-3t-academy-live-3vunmpp5.livekit.cloud')
   ),
   LIVEKIT_API_KEY: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z.string().trim().default('APIAK2UGEYhMadd')
   ),
   LIVEKIT_API_SECRET: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z.string().trim().default('KVR8YFo2c2FwZEwCAOMhP2sFzQlwZ7ylmgTdPeRKavV')
   ),
   R2_ACCOUNT_ID: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z.string().trim().default('e3075f23d1126bc8bfb3bb679a533e58')
   ),
   R2_ACCESS_KEY_ID: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z.string().trim().default('371c3ac7558bb2bb64f62df8aca59deb')
   ),
   R2_SECRET_ACCESS_KEY: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z
       .string()
       .trim()
       .default('12c612ace0b0fc2ad6a41d062695cb0cf419938bc5eeb1cc5ae9fc994dc58114')
   ),
   R2_BUCKET_NAME: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z.string().trim().default('edutech-storage')
   ),
   R2_PUBLIC_DOMAIN: z.preprocess(
-    emptyToUndefined,
+    mediaEnvPreprocess,
     z
       .string()
       .trim()

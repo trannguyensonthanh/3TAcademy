@@ -475,5 +475,39 @@ describe('live classroom & video HTTP routes', () => {
     expect(stopRecBody.status).toBe('REPLAY_READY');
     expect(stopRecBody.recording.isRecording).toBe(false);
     expect(stopRecBody.r2PublicUrl).toContain('.r2.dev/recordings/session-5/');
+
+    // Kick a disruptive student (id=4) and verify they cannot re-join
+    const kickRes = await fetch(`${baseUrl}/api/v1/teach/sessions/5/kick-participant`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${instructorToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        targetIdentity: 'acc-4',
+        kicked: true,
+      }),
+    });
+    const kickBody = (await kickRes.json()) as {
+      kicked: boolean;
+      kickedIdentities: string[];
+    };
+    expect(kickRes.status).toBe(200);
+    expect(kickBody.kicked).toBe(true);
+    expect(kickBody.kickedIdentities).toContain('acc-4');
+
+    const studentToken = signToken({
+      id: 4,
+      email: 'an.student@3t.edu.vn',
+      role: 'STUDENT',
+    });
+    const kickedJoinRes = await fetch(`${baseUrl}/api/v1/live/sessions/5`, {
+      headers: {
+        Authorization: `Bearer ${studentToken}`,
+      },
+    });
+    const kickedJoinBody = (await kickedJoinRes.json()) as { code: string };
+    expect(kickedJoinRes.status).toBe(403);
+    expect(kickedJoinBody.code).toBe('KICKED_FROM_SESSION');
   });
 });

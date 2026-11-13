@@ -1904,6 +1904,27 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
     const staffInfo = getStaffForInstructor(session.instructorId);
     const roomState = getLiveRoomState(session.id);
     const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+
+    if (
+      !isHost &&
+      (roomState.kickedIdentities.includes(String(accountId)) ||
+        roomState.kickedIdentities.includes(`acc-${accountId}`))
+    ) {
+      const kickedMsg =
+        'Giảng viên đã mời bạn rời khỏi phòng học trực tuyến của buổi học này.';
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'KICKED_FROM_SESSION',
+        message: kickedMsg,
+        error: {
+          code: 'KICKED_FROM_SESSION',
+          message: kickedMsg,
+        },
+      });
+      return;
+    }
+
     const roomName = session.livekitRoomName || `live-session-${session.id}`;
     const livekitServerUrl = (env.LIVEKIT_API_URL || '').trim();
     const livekitToken = await createLiveKitToken({
@@ -1956,17 +1977,23 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
       };
     });
 
+    const kickedSet = new Set(roomState.kickedIdentities);
     const participants = [
       {
         accountId: String(session.instructorId),
         fullName: staffInfo.instructorName,
         role: 'INSTRUCTOR',
-        roleLabel: 'Giảng viên chính',
+        roleLabel: 'Giảng viên',
         avatarUrl: staffInfo.instructorAvatarUrl,
         isHost: true,
       },
       ...participantRows
-        .filter((p) => p.accountId !== session.instructorId)
+        .filter(
+          (p) =>
+            p.accountId !== session.instructorId &&
+            !kickedSet.has(String(p.accountId)) &&
+            !kickedSet.has(`acc-${p.accountId}`)
+        )
         .map((p) => ({
           accountId: String(p.accountId),
           fullName: p.fullName || 'Học viên',

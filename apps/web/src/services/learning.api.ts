@@ -88,6 +88,7 @@ export interface LiveRoomRuntimeState {
   recentReactions: LiveReactionPayload[];
   questionVotes: Record<string, number>;
   mutedIdentities?: string[];
+  kickedIdentities?: string[];
   recording?: LiveRecordingState;
   hostBroadcast: {
     activeSlideLabel: string;
