@@ -1,5 +1,22 @@
-# Logs
-logs
+# ==============================================================================
+# Gitignore for 3T Academy / EduTech AI Platform Monorepo
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Dependencies & Package Managers
+# ------------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# ------------------------------------------------------------------------------
+# Logs & Debugging
+# ------------------------------------------------------------------------------
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,14 +24,27 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Node dependencies
-node_modules
-dist
-build
-.turbo
-.next
+# ------------------------------------------------------------------------------
+# Build outputs & Caches (Node / TypeScript / Vite / Next.js)
+# ------------------------------------------------------------------------------
+dist/
+dist-ssr/
+build/
+out/
+.next/
+.turbo/
+.vite/
+.vite-temp/
+**/.vite/
+**/.vite-temp/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+.parcel-cache/
 
-# Python / AI Service
+# ------------------------------------------------------------------------------
+# Python & AI Service
+# ------------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -24,9 +54,9 @@ env/
 venv/
 .venv/
 ENV/
-build/
+env.bak/
+venv.bak/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -40,37 +70,93 @@ wheels/
 .installed.cfg
 *.egg
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
+.ipynb_checkpoints/
 
-# Heavy AI model weights & checkpoints (mount via volume or download on startup)
+# ------------------------------------------------------------------------------
+# Heavy AI Model Weights, Checkpoints & Datasets (Do NOT commit to Git)
+# ------------------------------------------------------------------------------
 models_onnx/*.onnx
+!models_onnx/.gitkeep
+*.onnx
 *.bin
 *.pt
+*.pth
 *.safetensors
+*.ckpt
+*.h5
+*.pb
+*.tflite
 *.tar.gz
+huggingface/
+.cache/
 
-# Environment variables & secrets (NEVER COMMIT)
+# ------------------------------------------------------------------------------
+# Environment Variables & Secrets (CRITICAL: NEVER COMMIT)
+# ------------------------------------------------------------------------------
 .env
-.env.local
-.env.*.local
+.env.*
+*.env
+*.local
+!.env.example
+!**/.env.example
 *.key
 *.pem
 *.cert
+*.crt
 *.pfx
+*.p12
+id_rsa*
+id_ed25519*
 
-# IDE & OS
+# ------------------------------------------------------------------------------
+# AI Studio, Gemini & Temporary Agent Artifacts
+# ------------------------------------------------------------------------------
+.aistudio/
+**/.aistudio/
+.gemini/
+.antigravity/
+
+# ------------------------------------------------------------------------------
+# IDEs & Code Editors
+# ------------------------------------------------------------------------------
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+!.vscode/launch.json
 .idea/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
-.DS_Store
-Thumbs.db
+*~
 
-# Test coverage & reports
+# ------------------------------------------------------------------------------
+# Operating System Artifacts
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ------------------------------------------------------------------------------
+# Testing, Coverage & Reports
+# ------------------------------------------------------------------------------
 coverage/
 .nyc_output/
 playwright-report/
 test-results/
+cypress/videos/
+cypress/screenshots/
+
+# ------------------------------------------------------------------------------
+# Docker & Deployment Overrides
+# ------------------------------------------------------------------------------
+docker-compose.override.yml
+*.override.yml

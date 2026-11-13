@@ -1,4 +1,4 @@
-import { pgTable, bigserial, bigint, varchar, text, integer, timestamp, boolean, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, bigint, varchar, text, integer, timestamp, boolean, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { accounts } from './identity.js';
 import { classSessions } from './cohort.js';
 
@@ -16,7 +16,7 @@ export const discussionThreads = pgTable('discussion_threads', {
 export const discussionPosts = pgTable('discussion_posts', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   threadId: bigint('thread_id', { mode: 'number' }).notNull().references(() => discussionThreads.id, { onDelete: 'cascade' }),
-  parentPostId: bigint('parent_post_id', { mode: 'number' }),
+  parentPostId: bigint('parent_post_id', { mode: 'number' }).references((): AnyPgColumn => discussionPosts.id, { onDelete: 'cascade' }),
   authorId: bigint('author_id', { mode: 'number' }).references(() => accounts.id, { onDelete: 'set null' }),
   contentMd: text('content_md').notNull(),
   isAiGenerated: boolean('is_ai_generated').notNull().default(false),
@@ -34,5 +34,7 @@ export const notifications = pgTable('notifications', {
   body: text('body').notNull(),
   metadata: jsonb('metadata').notNull().default({}),
   isRead: boolean('is_read').notNull().default(false),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  actedAt: timestamp('acted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

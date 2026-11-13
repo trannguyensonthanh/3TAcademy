@@ -1,81 +1,31 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark, .dark *));
 
 @layer base {
   :root {
-    /* Light Mode — Fresh Botanical & Mint Surface */
-    --background: 150 33% 98%;          /* #F7FBF9 */
-    --foreground: 222 47% 11%;          /* #0F172A */
-    --card: 0 0% 100%;                  /* #FFFFFF */
-    --card-foreground: 222 47% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-
-    /* Primary Emerald Green (#10B981 -> hover #059669) */
-    --primary: 160 84% 39%;             /* #10B981 */
-    --primary-foreground: 0 0% 100%;
-    --secondary: 152 81% 90%;           /* #D1FAE5 (Soft Mint) */
-    --secondary-foreground: 163 94% 24%;/* #047857 */
-
-    --muted: 150 25% 94%;
-    --muted-foreground: 215 16% 47%;
-    --border: 149 40% 88%;
-    --input: 149 40% 88%;
-    --ring: 160 84% 39%;
-    --radius: 0.75rem;
-
-    /* Semantic Spectrum (Green -> Amber/Yellow -> Red/Coral) */
-    --spectrum-safe: 160 84% 39%;       /* #10B981 Emerald */
-    --spectrum-warn: 38 92% 50%;        /* #F59E0B Amber */
-    --spectrum-danger: 0 84% 60%;       /* #EF4444 Coral Red */
+    --font-sans: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-serif: 'Playfair Display', 'Merriweather', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
-  .dark {
-    /* Dark Mode — Deep Forest Night */
-    --background: 150 25% 5%;           /* #090F0C */
-    --foreground: 152 81% 96%;          /* #ECFDF5 */
-    --card: 147 21% 8%;                 /* #111A15 */
-    --card-foreground: 152 81% 96%;
-    --popover: 147 21% 8%;
-    --popover-foreground: 152 81% 96%;
-
-    /* Primary Mint Emerald (#34D399 -> hover #10B981) */
-    --primary: 158 64% 52%;             /* #34D399 */
-    --primary-foreground: 150 25% 5%;
-    --secondary: 164 86% 16%;           /* #064E3B */
-    --secondary-foreground: 152 76% 80%;
-
-    --muted: 148 20% 13%;
-    --muted-foreground: 150 12% 65%;
-    --border: 148 20% 15%;              /* #1E2D24 */
-    --input: 148 20% 15%;
-    --ring: 158 64% 52%;
-
-    /* Semantic Spectrum in Dark Mode */
-    --spectrum-safe: 158 64% 52%;       /* #34D399 */
-    --spectrum-warn: 43 96% 56%;        /* #FBBF24 */
-    --spectrum-danger: 0 91% 71%;       /* #F87171 */
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border;
-  }
   body {
-    @apply bg-background text-foreground transition-colors duration-200;
+    font-family: var(--font-sans);
+    background-color: #F7FBF9;
+    color: #0F172A;
+    transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), color 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  html.dark body {
+    background-color: #090F0C;
+    color: #ECFDF5;
   }
 }
 
-@layer utilities {
-  /* Green Tonal Gradient (Light Green -> Deep Emerald) */
-  .bg-gradient-emerald {
-    background: linear-gradient(135deg, #6ee7b7 0%, #10b981 55%, #047857 100%);
-  }
+.font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
-  /* Semantic Spectrum Gradient (Green -> Yellow/Amber -> Red/Coral) */
-  .bg-gradient-spectrum {
-    background: linear-gradient(90deg, #10b981 0%, #f59e0b 55%, #ef4444 100%);
-  }
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }

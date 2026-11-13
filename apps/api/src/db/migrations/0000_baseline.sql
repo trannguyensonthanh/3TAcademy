@@ -1,5 +1,5 @@
 -- =============================================================================
--- EduTech AI Platform — Baseline PostgreSQL 16 + pgvector Schema (33 Tables)
+-- EduTech AI Platform — Baseline PostgreSQL 16 + pgvector Schema (32 Tables)
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- UUIDv4 generation (gen_random_uuid)
@@ -13,7 +13,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;  -- Exclusion constraints on time ran
 CREATE TYPE account_role          AS ENUM ('STUDENT', 'INSTRUCTOR', 'ADMIN');
 CREATE TYPE account_status        AS ENUM ('ACTIVE', 'LOCKED');
 CREATE TYPE auth_provider         AS ENUM ('LOCAL', 'GOOGLE');
-CREATE TYPE cohort_staff_role     AS ENUM ('INSTRUCTOR', 'TA');
+
 
 CREATE TYPE course_status         AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
 CREATE TYPE skill_relation_role   AS ENUM ('PREREQUISITE', 'LEARNING_OUTCOME');
@@ -25,17 +25,21 @@ CREATE TYPE order_status          AS ENUM ('PENDING', 'PAID', 'FAILED', 'EXPIRED
 CREATE TYPE enrollment_status     AS ENUM ('ACTIVE', 'COMPLETED', 'REVOKED');
 
 CREATE TYPE assessment_purpose    AS ENUM ('SESSION_ASSIGNMENT', 'FINAL_EXAM');
+CREATE TYPE assessment_status     AS ENUM ('DRAFT', 'PUBLISHED');
 CREATE TYPE grading_mode          AS ENUM ('AUTO', 'MANUAL', 'HYBRID');
 CREATE TYPE assessment_item_type  AS ENUM (
     'SINGLE_CHOICE', 'MULTI_SELECT', 'TRUE_FALSE',
     'SHORT_ANSWER', 'ESSAY', 'FILE_SUBMISSION'
 );
+CREATE TYPE mock_interview_status AS ENUM ('IN_PROGRESS', 'COMPLETED', 'CV_SCREENING');
+
+
 CREATE TYPE answer_grading_status AS ENUM ('AUTO_GRADED', 'PENDING_MANUAL', 'MANUALLY_GRADED');
 CREATE TYPE integrity_verdict     AS ENUM ('CLEAN', 'FLAGGED', 'CONFIRMED_CHEAT', 'CLEARED_BY_INSTRUCTOR');
 CREATE TYPE chunk_visibility      AS ENUM ('PUBLIC', 'ENROLLED_ONLY');
 
 -- -----------------------------------------------------------------------------
--- 2. DOMAIN 1 — Identity, Google OAuth & Instructors (5 Tables)
+-- 2. DOMAIN 1 — Identity, Google OAuth & Instructors (4 Tables)
 -- -----------------------------------------------------------------------------
 CREATE TABLE accounts (
     id                  BIGSERIAL PRIMARY KEY,
@@ -68,9 +72,10 @@ CREATE TABLE user_profiles (
     goal_embedding          vector(1024),
     face_reference_r2_key   TEXT,
     face_embedding          vector(512),
+    cv_parsed_data          JSONB NOT NULL DEFAULT '{}',
+    interview_credits       INT NOT NULL DEFAULT 2 CHECK (interview_credits >= 0),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
 CREATE TABLE instructor_profiles (
     account_id              BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     headline                VARCHAR(200) NOT NULL,
@@ -81,16 +86,9 @@ CREATE TABLE instructor_profiles (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE instructor_availabilities (
-    id              BIGSERIAL PRIMARY KEY,
-    instructor_id   BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    day_of_week     SMALLINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-    start_minute    SMALLINT NOT NULL CHECK (start_minute >= 0 AND start_minute < 1440),
-    end_minute      SMALLINT NOT NULL CHECK (end_minute > start_minute AND end_minute <= 1440)
-);
 
 -- -----------------------------------------------------------------------------
--- 3. DOMAIN 2 — Skill Taxonomy, Courses, Cohorts & Class Sessions (9 Tables)
+-- 3. DOMAIN 2 — Skill Taxonomy, Courses, Cohorts & Class Sessions (8 Tables)
 -- -----------------------------------------------------------------------------
 CREATE TABLE categories (
     id          SERIAL PRIMARY KEY,
@@ -145,32 +143,25 @@ CREATE TABLE cohorts (
     course_id               BIGINT NOT NULL REFERENCES courses(id) ON DELETE RESTRICT,
     code                    VARCHAR(50) NOT NULL UNIQUE,
     name                    VARCHAR(255) NOT NULL,
-    curriculum_version      VARCHAR(30) NOT NULL DEFAULT 'v1.0',
+    instructor_id           BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    curriculum_version      VARCHAR(120) NOT NULL DEFAULT 'v1.0',
     tech_stack_notes        TEXT,
     tuition_vnd             BIGINT NOT NULL CHECK (tuition_vnd >= 0),
     enrolled_count          INT NOT NULL DEFAULT 0 CHECK (enrolled_count >= 0),
     enrollment_open_at      TIMESTAMPTZ NOT NULL,
     start_date              DATE NOT NULL,
     end_date                DATE NOT NULL CHECK (end_date >= start_date),
+    schedule_slots          JSONB NOT NULL DEFAULT '[]',
     replay_expires_at       TIMESTAMPTZ,
     status                  cohort_status NOT NULL DEFAULT 'DRAFT',
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE cohort_instructors (
-    cohort_id       BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
-    instructor_id   BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    role_in_cohort  cohort_staff_role NOT NULL DEFAULT 'INSTRUCTOR',
-    scope_note      VARCHAR(255),
-    assigned_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (cohort_id, instructor_id)
-);
-
 CREATE TABLE class_sessions (
     id                      BIGSERIAL PRIMARY KEY,
     cohort_id               BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
-    host_instructor_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    instructor_id           BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     session_order           SMALLINT NOT NULL CHECK (session_order > 0),
     activity_tags           TEXT[] NOT NULL DEFAULT '{}',
     title                   VARCHAR(255) NOT NULL,
@@ -180,8 +171,7 @@ CREATE TABLE class_sessions (
     status                  session_status NOT NULL DEFAULT 'SCHEDULED',
     livekit_room_name       VARCHAR(120) UNIQUE,
     video_provider          video_source_provider,
-    hls_manifest_r2_key     TEXT,
-    hls_aes_key_hex         CHAR(32),
+    video_r2_key            TEXT,
     duration_seconds        INT CHECK (duration_seconds >= 0),
     ai_summary_md           TEXT,
     last_updated_by         BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
@@ -191,7 +181,7 @@ CREATE TABLE class_sessions (
     UNIQUE (cohort_id, session_order),
     CHECK (scheduled_end IS NULL OR scheduled_start IS NULL OR scheduled_end > scheduled_start),
     EXCLUDE USING gist (
-        host_instructor_id WITH =,
+        instructor_id WITH =,
         tstzrange(scheduled_start, scheduled_end, '[)') WITH &&
     ) WHERE (scheduled_start IS NOT NULL AND scheduled_end IS NOT NULL)
 );
@@ -218,7 +208,7 @@ CREATE TABLE session_subtitles (
 );
 
 -- -----------------------------------------------------------------------------
--- 4. DOMAIN 3 — Direct Orders, VNPay Transactions, Enrollments & Certs (6 Tables)
+-- 4. DOMAIN 3 — Direct Orders, SePay VietQR Transactions, Enrollments & Certs (6 Tables)
 -- -----------------------------------------------------------------------------
 CREATE TABLE orders (
     id                  BIGSERIAL PRIMARY KEY,
@@ -235,12 +225,13 @@ CREATE TABLE orders (
 
 CREATE TABLE payment_transactions (
     id                  BIGSERIAL PRIMARY KEY,
-    order_id            BIGINT NOT NULL REFERENCES orders(id) ON DELETE RESTRICT,
-    gateway             VARCHAR(20) NOT NULL DEFAULT 'VNPAY',
+    order_id            BIGINT NULL REFERENCES orders(id) ON DELETE RESTRICT,
+    gateway             VARCHAR(20) NOT NULL DEFAULT 'SEPAY_VIETQR',
     gateway_txn_id      VARCHAR(100) NOT NULL UNIQUE,
     amount_vnd          BIGINT NOT NULL,
     response_code       VARCHAR(10) NOT NULL,
     raw_payload         JSONB NOT NULL,
+    match_status        VARCHAR(20) NOT NULL DEFAULT 'MATCHED' CHECK (match_status IN ('MATCHED', 'UNMATCHED_ORDER', 'AMOUNT_MISMATCH')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -252,6 +243,8 @@ CREATE TABLE enrollments (
     enrolled_by_admin   BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
     status              enrollment_status NOT NULL DEFAULT 'ACTIVE',
     final_exam_passed   BOOLEAN NOT NULL DEFAULT FALSE,
+    dropout_risk_score  REAL NOT NULL DEFAULT 0.0 CHECK (dropout_risk_score BETWEEN 0.0 AND 1.0),
+    risk_level          VARCHAR(15) NOT NULL DEFAULT 'LOW' CHECK (risk_level IN ('LOW', 'MEDIUM', 'HIGH')),
     enrolled_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at        TIMESTAMPTZ,
     last_reminded_at    TIMESTAMPTZ,
@@ -326,6 +319,8 @@ CREATE TABLE notifications (
     body            TEXT NOT NULL,
     metadata        JSONB NOT NULL DEFAULT '{}',
     is_read         BOOLEAN NOT NULL DEFAULT FALSE,
+    read_at         TIMESTAMPTZ,
+    acted_at        TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -347,6 +342,7 @@ CREATE TABLE assessments (
     max_attempts        SMALLINT,
     due_at              TIMESTAMPTZ,
     proctoring_config   JSONB NOT NULL DEFAULT '{}',
+    status              assessment_status NOT NULL DEFAULT 'DRAFT',
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -423,7 +419,7 @@ CREATE TABLE proctoring_events (
 CREATE INDEX idx_proctoring_events_attempt ON proctoring_events (attempt_id, occurred_at);
 
 -- -----------------------------------------------------------------------------
--- 7. DOMAIN 6 — Hybrid RAG Vector Store, Skill States, Chat & System (5 Tables)
+-- 7. DOMAIN 6 — Hybrid RAG Vector Store, Skill States, Chat, Interviews & System (6 Tables)
 -- -----------------------------------------------------------------------------
 CREATE TABLE knowledge_chunks (
     id              BIGSERIAL PRIMARY KEY,
@@ -451,7 +447,7 @@ CREATE INDEX idx_chunks_search_tsv_gin ON knowledge_chunks USING gin (search_tsv
 CREATE TABLE student_skill_states (
     account_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     skill_id        INT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-    mastery_score   REAL NOT NULL DEFAULT 0.0 CHECK (mastery_score BETWEEN 0.0 AND 1.0),
+    mastery_score   REAL NOT NULL DEFAULT 0.0 CHECK (mastery_score BETWEEN 0.0 AND 100.0),
     evidence_count  INT NOT NULL DEFAULT 0,
     trend           REAL NOT NULL DEFAULT 0.0,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -478,6 +474,7 @@ CREATE TABLE chat_messages (
     chat_session_id     BIGINT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
     role                VARCHAR(15) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content             TEXT NOT NULL,
+    detected_topic      VARCHAR(100),
     citations           JSONB NOT NULL DEFAULT '[]',
     llm_provider        VARCHAR(30),
     llm_model           VARCHAR(80),
@@ -487,6 +484,24 @@ CREATE TABLE chat_messages (
     langfuse_trace_id   VARCHAR(64),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_chat_messages_topic ON chat_messages (detected_topic) WHERE role = 'user' AND detected_topic IS NOT NULL;
+
+CREATE TABLE mock_interviews (
+    id                  BIGSERIAL PRIMARY KEY,
+    account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    target_level        VARCHAR(20) NOT NULL CHECK (target_level IN ('INTERN', 'FRESHER', 'JUNIOR', 'SENIOR')),
+    target_role         VARCHAR(150) NOT NULL,
+    jd_raw_text         TEXT NOT NULL,
+    cv_screening_result JSONB,
+    transcript_log      JSONB NOT NULL DEFAULT '[]',
+    evaluation_report   JSONB,
+    status              mock_interview_status NOT NULL DEFAULT 'IN_PROGRESS',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ
+);
+
+CREATE INDEX idx_mock_interviews_account ON mock_interviews (account_id, created_at DESC);
 
 CREATE INDEX idx_chat_messages_session ON chat_messages (chat_session_id, created_at);
 

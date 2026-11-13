@@ -1,6 +1,7 @@
-import { pgTable, bigserial, bigint, varchar, text, integer, smallint, timestamp, boolean, numeric, real, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, bigint, varchar, text, integer, smallint, timestamp, boolean, numeric, real, jsonb, vector, uniqueIndex } from 'drizzle-orm/pg-core';
 import {
   assessmentPurposeEnum,
+  assessmentStatusEnum,
   gradingModeEnum,
   assessmentItemTypeEnum,
   answerGradingStatusEnum,
@@ -23,6 +24,7 @@ export const assessments = pgTable('assessments', {
   maxAttempts: smallint('max_attempts'),
   dueAt: timestamp('due_at', { withTimezone: true }),
   proctoringConfig: jsonb('proctoring_config').notNull().default({}),
+  status: assessmentStatusEnum('status').notNull().default('DRAFT'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -37,6 +39,7 @@ export const assessmentItems = pgTable('assessment_items', {
   promptConfig: jsonb('prompt_config').notNull(),
   gradingConfig: jsonb('grading_config').notNull(),
   explanationMd: text('explanation_md'),
+  itemEmbedding: vector('item_embedding', { dimensions: 1024 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('idx_assessment_item_order').on(table.assessmentId, table.itemOrder),

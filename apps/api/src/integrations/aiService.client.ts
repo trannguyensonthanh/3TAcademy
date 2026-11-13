@@ -22,6 +22,99 @@ export class AiServiceClient {
     return res.json() as Promise<T>;
   }
 
+  async askAdvisor(question: string, correlationId?: string) {
+    return this.request<{
+      answerMd: string;
+      citations: Array<{ chunkId: number; sourceType: string; snippet: string }>;
+    }>(
+      '/api/v1/ai/advisor/ask',
+      {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+      },
+      correlationId
+    );
+  }
+
+  async askSessionTutor(
+    payload: {
+      cohortId: number;
+      sessionId: number;
+      question: string;
+      currentVideoSec: number;
+    },
+    correlationId?: string
+  ) {
+    return this.request<{
+      answerMd: string;
+      detectedTopic?: string;
+      citations: Array<{
+        chunkId?: number;
+        startSec?: number;
+        endSec?: number;
+        pageNumber?: number;
+        snippet?: string;
+      }>;
+    }>(
+      '/api/v1/ai/tutor/ask',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      correlationId
+    );
+  }
+
+  async parseCvPdf(rawText: string, correlationId?: string) {
+    return this.request<{
+      skills?: string[];
+      projects?: Array<Record<string, unknown>>;
+    }>(
+      '/api/v1/ai/cv/parse',
+      {
+        method: 'POST',
+        body: JSON.stringify({ rawText }),
+      },
+      correlationId
+    );
+  }
+
+  async screenCv(
+    payload: {
+      cvData: Record<string, unknown>;
+      targetLevel: string;
+      targetRole: string;
+      jdRawText: string;
+    },
+    correlationId?: string
+  ) {
+    return this.request<{
+      matchScore?: number;
+      missingSkills?: string[];
+    }>(
+      '/api/v1/ai/interviews/screen-cv',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      correlationId
+    );
+  }
+
+  async generateQuizDraft(sessionId: number, correlationId?: string) {
+    return this.request<{
+      session_id: number;
+      generated_items: Array<Record<string, unknown>>;
+    }>(
+      '/api/v1/ai/assessments/generate-quiz',
+      {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId }),
+      },
+      correlationId
+    );
+  }
+
   async generateSessionQuiz(
     payload: {
       session_id: number;
@@ -75,4 +168,3 @@ export class AiServiceClient {
 }
 
 export const aiServiceClient = new AiServiceClient();
-

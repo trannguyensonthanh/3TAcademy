@@ -1,4 +1,4 @@
-import { pgTable, bigserial, bigint, varchar, text, integer, smallint, timestamp, boolean, jsonb, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, bigint, varchar, text, integer, smallint, real, timestamp, boolean, jsonb, primaryKey, uniqueIndex } from 'drizzle-orm/pg-core';
 import { orderStatusEnum, enrollmentStatusEnum } from './enums.js';
 import { accounts } from './identity.js';
 import { courses } from './catalog.js';
@@ -19,12 +19,13 @@ export const orders = pgTable('orders', {
 
 export const paymentTransactions = pgTable('payment_transactions', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
-  orderId: bigint('order_id', { mode: 'number' }).notNull().references(() => orders.id, { onDelete: 'restrict' }),
-  gateway: varchar('gateway', { length: 20 }).notNull().default('VNPAY'),
+  orderId: bigint('order_id', { mode: 'number' }).references(() => orders.id, { onDelete: 'restrict' }),
+  gateway: varchar('gateway', { length: 20 }).notNull().default('SEPAY_VIETQR'),
   gatewayTxnId: varchar('gateway_txn_id', { length: 100 }).notNull().unique(),
   amountVnd: bigint('amount_vnd', { mode: 'number' }).notNull(),
   responseCode: varchar('response_code', { length: 10 }).notNull(),
   rawPayload: jsonb('raw_payload').notNull(),
+  matchStatus: varchar('match_status', { length: 20 }).notNull().default('MATCHED'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -36,6 +37,8 @@ export const enrollments = pgTable('enrollments', {
   enrolledByAdmin: bigint('enrolled_by_admin', { mode: 'number' }).references(() => accounts.id, { onDelete: 'set null' }),
   status: enrollmentStatusEnum('status').notNull().default('ACTIVE'),
   finalExamPassed: boolean('final_exam_passed').notNull().default(false),
+  dropoutRiskScore: real('dropout_risk_score').notNull().default(0.0),
+  riskLevel: varchar('risk_level', { length: 15 }).notNull().default('LOW'),
   enrolledAt: timestamp('enrolled_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   lastRemindedAt: timestamp('last_reminded_at', { withTimezone: true }),

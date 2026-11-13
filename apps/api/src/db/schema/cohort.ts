@@ -1,40 +1,38 @@
-import { pgTable, bigserial, bigint, varchar, text, integer, smallint, timestamp, date, boolean, primaryKey } from 'drizzle-orm/pg-core';
-import { cohortStatusEnum, cohortStaffRoleEnum, sessionStatusEnum, videoSourceProviderEnum } from './enums.js';
+import { pgTable, bigserial, bigint, varchar, text, integer, smallint, timestamp, date, boolean, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { cohortStatusEnum, sessionStatusEnum, videoSourceProviderEnum } from './enums.js';
 import { courses } from './catalog.js';
 import { accounts } from './identity.js';
+
+export interface CohortScheduleSlot {
+  dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  startTime: string;
+  endTime: string;
+}
 
 export const cohorts = pgTable('cohorts', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   courseId: bigint('course_id', { mode: 'number' }).notNull().references(() => courses.id, { onDelete: 'restrict' }),
   code: varchar('code', { length: 50 }).notNull().unique(),
   name: varchar('name', { length: 255 }).notNull(),
-  curriculumVersion: varchar('curriculum_version', { length: 30 }).notNull().default('v1.0'),
+  instructorId: bigint('instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
+  curriculumVersion: varchar('curriculum_version', { length: 120 }).notNull().default('v1.0'),
   techStackNotes: text('tech_stack_notes'),
   tuitionVnd: bigint('tuition_vnd', { mode: 'number' }).notNull(),
   enrolledCount: integer('enrolled_count').notNull().default(0),
   enrollmentOpenAt: timestamp('enrollment_open_at', { withTimezone: true }).notNull(),
   startDate: date('start_date').notNull(),
   endDate: date('end_date').notNull(),
+  scheduleSlots: jsonb('schedule_slots').$type<CohortScheduleSlot[]>().notNull().default([]),
   replayExpiresAt: timestamp('replay_expires_at', { withTimezone: true }),
   status: cohortStatusEnum('status').notNull().default('DRAFT'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const cohortInstructors = pgTable('cohort_instructors', {
-  cohortId: bigint('cohort_id', { mode: 'number' }).notNull().references(() => cohorts.id, { onDelete: 'cascade' }),
-  instructorId: bigint('instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
-  roleInCohort: cohortStaffRoleEnum('role_in_cohort').notNull().default('INSTRUCTOR'),
-  scopeNote: varchar('scope_note', { length: 255 }),
-  assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  primaryKey({ columns: [table.cohortId, table.instructorId] }),
-]);
-
 export const classSessions = pgTable('class_sessions', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   cohortId: bigint('cohort_id', { mode: 'number' }).notNull().references(() => cohorts.id, { onDelete: 'cascade' }),
-  hostInstructorId: bigint('host_instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
+  instructorId: bigint('instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'restrict' }),
   sessionOrder: smallint('session_order').notNull(),
   activityTags: text('activity_tags').array().notNull().default([]),
   title: varchar('title', { length: 255 }).notNull(),
@@ -44,14 +42,15 @@ export const classSessions = pgTable('class_sessions', {
   status: sessionStatusEnum('status').notNull().default('SCHEDULED'),
   livekitRoomName: varchar('livekit_room_name', { length: 120 }).unique(),
   videoProvider: videoSourceProviderEnum('video_provider'),
-  hlsManifestR2Key: text('hls_manifest_r2_key'),
-  hlsAesKeyHex: varchar('hls_aes_key_hex', { length: 32 }),
+  videoR2Key: text('video_r2_key'),
   durationSeconds: integer('duration_seconds'),
   aiSummaryMd: text('ai_summary_md'),
   lastUpdatedBy: bigint('last_updated_by', { mode: 'number' }).references(() => accounts.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex('idx_cohort_session_order').on(table.cohortId, table.sessionOrder),
+]);
 
 export const sessionAttachments = pgTable('session_attachments', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),

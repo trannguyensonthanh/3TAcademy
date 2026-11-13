@@ -16,6 +16,11 @@ export function errorHandler(
 ): void {
   const statusCode = err.statusCode || 500;
   const requestId = req.correlationId || 'unknown';
+  const code = err.code || 'INTERNAL_SERVER_ERROR';
+  const message =
+    statusCode === 500 && env.NODE_ENV === 'production'
+      ? 'Đã xảy ra lỗi máy chủ nội bộ'
+      : err.message || 'Đã xảy ra lỗi máy chủ nội bộ';
 
   logger.error(
     {
@@ -33,10 +38,16 @@ export function errorHandler(
   );
 
   res.status(statusCode).json({
-    type: `https://api.edutech.vn/errors/${err.code || 'INTERNAL_ERROR'}`,
-    title: statusCode === 500 && env.NODE_ENV === 'production' ? 'Đã xảy ra lỗi máy chủ nội bộ' : err.message,
+    success: false,
+    type: `https://api.edutech.vn/errors/${code}`,
+    title: message,
+    message,
     status: statusCode,
-    code: err.code || 'INTERNAL_SERVER_ERROR',
+    code,
+    error: {
+      code,
+      message,
+    },
     requestId,
     details: env.NODE_ENV !== 'production' ? err.details : undefined,
   });

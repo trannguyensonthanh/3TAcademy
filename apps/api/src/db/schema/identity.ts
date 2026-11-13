@@ -1,4 +1,4 @@
-import { pgTable, bigserial, bigint, varchar, text, timestamp, smallint, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, bigint, varchar, text, timestamp, smallint, jsonb, vector, uniqueIndex, integer } from 'drizzle-orm/pg-core';
 import { accountRoleEnum, accountStatusEnum, authProviderEnum } from './enums.js';
 
 export const accounts = pgTable('accounts', {
@@ -30,7 +30,11 @@ export const userProfiles = pgTable('user_profiles', {
   avatarUrl: text('avatar_url'),
   bio: text('bio'),
   careerGoal: text('career_goal'),
+  goalEmbedding: vector('goal_embedding', { dimensions: 1024 }),
   faceReferenceR2Key: text('face_reference_r2_key'),
+  faceEmbedding: vector('face_embedding', { dimensions: 512 }),
+  cvParsedData: jsonb('cv_parsed_data').notNull().default({}),
+  interviewCredits: integer('interview_credits').notNull().default(2),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -42,12 +46,4 @@ export const instructorProfiles = pgTable('instructor_profiles', {
   expertiseSummaryMd: text('expertise_summary_md'),
   socialLinks: jsonb('social_links').notNull().default({}),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const instructorAvailabilities = pgTable('instructor_availabilities', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
-  instructorId: bigint('instructor_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'cascade' }),
-  dayOfWeek: smallint('day_of_week').notNull(), // 0 = Sun, 1 = Mon ... 6 = Sat
-  startMinute: smallint('start_minute').notNull(), // 0..1439
-  endMinute: smallint('end_minute').notNull(), // 1..1440
 });

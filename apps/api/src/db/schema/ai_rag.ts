@@ -1,5 +1,5 @@
-import { pgTable, bigserial, bigint, varchar, text, integer, timestamp, real, jsonb, primaryKey, uuid } from 'drizzle-orm/pg-core';
-import { chunkVisibilityEnum } from './enums.js';
+import { pgTable, bigserial, bigint, varchar, text, integer, timestamp, real, jsonb, vector, primaryKey, uuid } from 'drizzle-orm/pg-core';
+import { chunkVisibilityEnum, mockInterviewStatusEnum } from './enums.js';
 import { courses, skills } from './catalog.js';
 import { cohorts, classSessions, sessionAttachments } from './cohort.js';
 import { accounts } from './identity.js';
@@ -18,6 +18,7 @@ export const knowledgeChunks = pgTable('knowledge_chunks', {
   startSec: integer('start_sec'),
   endSec: integer('end_sec'),
   pageNumber: integer('page_number'),
+  embedding: vector('embedding', { dimensions: 1024 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -50,6 +51,7 @@ export const chatMessages = pgTable('chat_messages', {
   chatSessionId: bigint('chat_session_id', { mode: 'number' }).notNull().references(() => chatSessions.id, { onDelete: 'cascade' }),
   role: varchar('role', { length: 15 }).notNull(), // 'user', 'assistant', 'system'
   content: text('content').notNull(),
+  detectedTopic: varchar('detected_topic', { length: 100 }),
   citations: jsonb('citations').notNull().default([]),
   llmProvider: varchar('llm_provider', { length: 30 }),
   llmModel: varchar('llm_model', { length: 80 }),
@@ -58,4 +60,18 @@ export const chatMessages = pgTable('chat_messages', {
   latencyMs: integer('latency_ms'),
   langfuseTraceId: varchar('langfuse_trace_id', { length: 64 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const mockInterviews = pgTable('mock_interviews', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  targetLevel: varchar('target_level', { length: 20 }).notNull(), // 'INTERN' | 'FRESHER' | 'JUNIOR' | 'SENIOR'
+  targetRole: varchar('target_role', { length: 150 }).notNull(),
+  jdRawText: text('jd_raw_text').notNull(),
+  cvScreeningResult: jsonb('cv_screening_result'),
+  transcriptLog: jsonb('transcript_log').notNull().default([]),
+  evaluationReport: jsonb('evaluation_report'),
+  status: mockInterviewStatusEnum('status').notNull().default('IN_PROGRESS'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 });

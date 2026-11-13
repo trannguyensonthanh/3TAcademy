@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, bigint, varchar, text, integer, smallint, timestamp, real, jsonb, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, serial, bigserial, bigint, varchar, text, integer, smallint, timestamp, real, jsonb, vector, primaryKey, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { courseStatusEnum, skillRelationRoleEnum } from './enums.js';
 
 export const categories = pgTable('categories', {
@@ -6,7 +6,7 @@ export const categories = pgTable('categories', {
   name: varchar('name', { length: 120 }).notNull(),
   slug: varchar('slug', { length: 140 }).notNull().unique(),
   description: text('description'),
-  parentId: integer('parent_id'),
+  parentId: integer('parent_id').references((): AnyPgColumn => categories.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -30,6 +30,7 @@ export const courses = pgTable('courses', {
   difficultyLevel: smallint('difficulty_level').notNull().default(1),
   syllabusTemplate: jsonb('syllabus_template').notNull().default([]),
   status: courseStatusEnum('status').notNull().default('DRAFT'),
+  embedding: vector('embedding', { dimensions: 1024 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

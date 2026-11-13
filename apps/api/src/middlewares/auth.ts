@@ -16,13 +16,33 @@ declare global {
   }
 }
 
+export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const payload = jwt.verify(token!, env.JWT_ACCESS_SECRET) as AuthUser;
+      req.user = payload;
+    } catch {
+      // Ignore invalid or expired token on optional auth routes
+    }
+  }
+  next();
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const message = 'Vui lòng đăng nhập để tiếp tục';
     res.status(401).json({
+      success: false,
       status: 401,
       code: 'UNAUTHORIZED',
-      message: 'Vui lòng đăng nhập để tiếp tục',
+      message,
+      error: {
+        code: 'UNAUTHORIZED',
+        message,
+      },
       requestId: req.correlationId,
     });
     return;
@@ -34,10 +54,16 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     req.user = payload;
     next();
   } catch {
+    const message = 'Phiên đăng nhập đã hết hạn, vui lòng làm mới token';
     res.status(401).json({
+      success: false,
       status: 401,
       code: 'TOKEN_EXPIRED',
-      message: 'Phiên đăng nhập đã hết hạn, vui lòng làm mới token',
+      message,
+      error: {
+        code: 'TOKEN_EXPIRED',
+        message,
+      },
       requestId: req.correlationId,
     });
   }
@@ -46,20 +72,32 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 export function requireRole(allowedRoles: Array<'STUDENT' | 'INSTRUCTOR' | 'ADMIN'>) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
+      const message = 'Yêu cầu xác thực tài khoản';
       res.status(401).json({
+        success: false,
         status: 401,
         code: 'UNAUTHORIZED',
-        message: 'Yêu cầu xác thực tài khoản',
+        message,
+        error: {
+          code: 'UNAUTHORIZED',
+          message,
+        },
         requestId: req.correlationId,
       });
       return;
     }
 
     if (!allowedRoles.includes(req.user.role)) {
+      const message = 'Bạn không có quyền truy cập vào tài nguyên này';
       res.status(403).json({
+        success: false,
         status: 403,
         code: 'FORBIDDEN',
-        message: 'Bạn không có quyền truy cập vào tài nguyên này',
+        message,
+        error: {
+          code: 'FORBIDDEN',
+          message,
+        },
         requestId: req.correlationId,
       });
       return;
@@ -68,4 +106,3 @@ export function requireRole(allowedRoles: Array<'STUDENT' | 'INSTRUCTOR' | 'ADMI
     next();
   };
 }
-
