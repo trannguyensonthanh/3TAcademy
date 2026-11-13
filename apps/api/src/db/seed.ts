@@ -1,6 +1,8 @@
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
-import { db, pool } from './index.js';
+import { db as defaultDb, pool } from './index.js';
 import {
   categories,
   skills,
@@ -35,52 +37,16 @@ import {
   mockInterviews,
   systemSettings,
 } from './schema/index.js';
+import {
+  makeDeterministicVector,
+  buildSessionQuizItems,
+  buildAttemptDraftAndAnswerBuilders,
+  findSeedConsistencyViolations,
+} from './seedHelpers.js';
 import { logger } from '../config/logger.js';
 
-function makeDeterministicVector(seedNum: number, dims: number): number[] {
-  const vec: number[] = [];
-  let normSq = 0;
-  for (let i = 0; i < dims; i++) {
-    const val = Math.sin(seedNum * 17.31 + i * 0.73) * Math.cos(seedNum * 3.17 - i * 0.29);
-    vec.push(val);
-    normSq += val * val;
-  }
-  const norm = Math.sqrt(normSq) || 1;
-  return vec.map((v) => Number((v / norm).toFixed(6)));
-}
-
-function buildSessionQuizItems(
-  assessmentId: number,
-  sessionOrder: number,
-  topicTitle: string,
-  primarySkillId: number,
-  secondarySkillId: number,
-  baseQuestions: Array<{
-    prompt: string;
-    options: [string, string, string, string];
-    correctIndex: number;
-    explanationMd: string;
-  }>
-) {
-  return baseQuestions.map((q, idx) => ({
-    assessmentId,
-    skillId: idx % 2 === 0 ? primarySkillId : secondarySkillId,
-    itemOrder: idx + 1,
-    itemType: 'SINGLE_CHOICE' as const,
-    points: '10.00',
-    promptConfig: {
-      prompt: `Câu ${idx + 1} (Buổi ${sessionOrder} - ${topicTitle}): ${q.prompt}`,
-      options: q.options,
-    },
-    gradingConfig: {
-      correctIndex: q.correctIndex,
-    },
-    explanationMd: q.explanationMd,
-    itemEmbedding: makeDeterministicVector(assessmentId * 100 + idx, 1024),
-  }));
-}
-
-async function seed() {
+export async function runSeed(targetDb: typeof defaultDb = defaultDb) {
+  const db = targetDb;
   logger.info('Starting full A-to-Z 3T Academy database seed (all 26 schema tables)...');
 
   const defaultPasswordHash = await argon2.hash('123456');
@@ -305,6 +271,8 @@ async function seed() {
         role: 'ADMIN',
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        lastLoginAt: new Date('2026-04-05T08:00:00Z'),
       },
       {
         email: 'khoa.instructor@3t.edu.vn',
@@ -312,6 +280,8 @@ async function seed() {
         role: 'INSTRUCTOR',
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        lastLoginAt: new Date('2026-04-05T08:30:00Z'),
       },
       {
         email: 'ha.instructor@3t.edu.vn',
@@ -319,6 +289,8 @@ async function seed() {
         role: 'INSTRUCTOR',
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        lastLoginAt: new Date('2026-04-05T11:30:00Z'),
       },
       {
         email: 'nam.ta@3t.edu.vn',
@@ -326,62 +298,80 @@ async function seed() {
         role: 'INSTRUCTOR',
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        lastLoginAt: new Date('2026-04-04T10:00:00Z'),
       },
       {
         email: 'an.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-02-15T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-02-15T08:00:00Z'),
+        createdAt: new Date('2026-02-15T08:00:00Z'),
+        lastLoginAt: new Date('2026-04-05T12:00:00Z'),
       },
       {
         email: 'mai.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-01-01T08:00:00Z'),
+        createdAt: new Date('2026-01-01T08:00:00Z'),
+        lastLoginAt: new Date('2026-04-04T09:10:00Z'),
       },
       {
         email: 'ha.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-02-20T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-02-16T08:00:00Z'),
+        createdAt: new Date('2026-02-16T08:00:00Z'),
+        lastLoginAt: new Date('2026-03-29T10:00:00Z'),
       },
       {
         email: 'quan.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-02-25T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-02-17T08:00:00Z'),
+        createdAt: new Date('2026-02-17T08:00:00Z'),
+        lastLoginAt: new Date('2026-04-01T14:25:00Z'),
       },
       {
         email: 'anh.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-03-01T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-02-18T08:00:00Z'),
+        createdAt: new Date('2026-02-18T08:00:00Z'),
+        lastLoginAt: new Date('2026-03-15T09:30:00Z'),
       },
       {
         email: 'khanh.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-03-10T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-03-10T08:00:00Z'),
+        createdAt: new Date('2026-03-10T08:00:00Z'),
+        lastLoginAt: new Date('2026-03-20T15:10:00Z'),
       },
       {
         email: 'bao.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-03-12T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-03-12T08:00:00Z'),
+        createdAt: new Date('2026-03-12T08:00:00Z'),
+        lastLoginAt: new Date('2026-04-05T12:15:00Z'),
       },
       {
         email: 'khoi.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+        emailVerifiedAt: new Date('2026-01-01T08:00:00Z'),
+        createdAt: new Date('2026-01-01T08:00:00Z'),
+        lastLoginAt: new Date('2026-03-20T10:15:00Z'),
       },
     ])
     .returning();
@@ -453,8 +443,8 @@ async function seed() {
 
   const anCvParsedData = {
     fileName: 'NguyenVanAn_Fresher_AIEngineer_CV_2026.pdf',
-    updatedAt: '2026-04-02T09:30:00.000Z',
-    extractedAt: '2026-04-02T09:30:00.000Z',
+    updatedAt: '2026-04-03T13:30:00.000Z',
+    extractedAt: '2026-04-03T13:30:00.000Z',
     fullName: 'Nguyễn Văn An',
     candidateName: 'Nguyễn Văn An',
     headline: 'Fresher AI Engineer · RAG, LangChain & FastAPI Backend',
@@ -701,7 +691,9 @@ async function seed() {
     ],
   };
 
-  await db.insert(userProfiles).values([
+  const insertedProfiles = await db
+    .insert(userProfiles)
+    .values([
     {
       accountId: adminAcc!.id,
       fullName: 'Trần Quản Trị (Admin 3T)',
@@ -769,7 +761,7 @@ async function seed() {
       careerGoal: 'Trở thành Junior AI Engineer tại các công ty sản phẩm công nghệ hàng đầu.',
       goalEmbedding: makeDeterministicVector(401, 1024),
       cvParsedData: anCvParsedData,
-      interviewCredits: 4,
+      interviewCredits: 5,
       faceReferenceR2Key: 'kyc/2026/stu-an-face-ref-v1.jpg',
       faceEmbedding: makeDeterministicVector(101, 512),
     },
@@ -781,7 +773,7 @@ async function seed() {
       careerGoal: 'Trở thành AI Platform Engineer chuyên thiết kế hạ tầng suy luận mô hình lớn.',
       goalEmbedding: makeDeterministicVector(402, 1024),
       cvParsedData: maiCvParsedData,
-      interviewCredits: 4,
+      interviewCredits: 5,
       faceReferenceR2Key: 'kyc/2026/stu-mai-face-ref-v1.jpg',
       faceEmbedding: makeDeterministicVector(102, 512),
     },
@@ -858,7 +850,7 @@ async function seed() {
         education: [],
         awardsAndCerts: [],
       },
-      interviewCredits: 1,
+      interviewCredits: 2,
       faceReferenceR2Key: 'kyc/2026/stu-quan-face-ref-v1.jpg',
       faceEmbedding: makeDeterministicVector(104, 512),
     },
@@ -883,7 +875,7 @@ async function seed() {
         education: [],
         awardsAndCerts: [],
       },
-      interviewCredits: 0,
+      interviewCredits: 2,
       faceReferenceR2Key: 'kyc/2026/stu-anh-face-ref-v1.jpg',
       faceEmbedding: makeDeterministicVector(105, 512),
     },
@@ -908,7 +900,7 @@ async function seed() {
         education: [],
         awardsAndCerts: [],
       },
-      interviewCredits: 1,
+      interviewCredits: 2,
     },
     {
       accountId: stuBaoAcc!.id,
@@ -931,7 +923,7 @@ async function seed() {
         education: [],
         awardsAndCerts: [],
       },
-      interviewCredits: 1,
+      interviewCredits: 2,
     },
     {
       accountId: stuKhoiAcc!.id,
@@ -941,11 +933,11 @@ async function seed() {
       careerGoal: 'Trở thành Senior Data & AI Infrastructure Engineer.',
       goalEmbedding: makeDeterministicVector(408, 1024),
       cvParsedData: khoiCvParsedData,
-      interviewCredits: 4,
+      interviewCredits: 6,
       faceReferenceR2Key: 'kyc/2026/stu-khoi-face-ref-v1.jpg',
       faceEmbedding: makeDeterministicVector(108, 512),
     },
-  ]);
+  ]).returning();
 
   // =========================================================================
   // 5. COURSES (4 Published Courses with complete 6-session Syllabus Templates)
@@ -1229,8 +1221,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         tuitionVnd: 6800000,
         enrolledCount: 5,
         enrollmentOpenAt: new Date('2026-02-01T00:00:00Z'),
-        startDate: '2026-03-10',
-        endDate: '2026-04-28',
+        startDate: '2026-03-03',
+        endDate: '2026-04-14',
         scheduleSlots: [
           { dayOfWeek: 2, startTime: '19:30', endTime: '21:30' },
           { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
@@ -1245,7 +1237,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         curriculumVersion: 'v2.5-2026',
         techStackNotes: 'Python 3.12 · FastAPI · pgvector HNSW · LangGraph · Ragas Evaluation · Docker',
         tuitionVnd: 6800000,
-        enrolledCount: 2,
+        enrolledCount: 1,
         enrollmentOpenAt: new Date('2026-03-15T00:00:00Z'),
         startDate: '2026-05-11',
         endDate: '2026-06-29',
@@ -1259,14 +1251,14 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         instructorId: instHaAcc!.id,
         code: 'SWE-ARCH-2026-K01',
         name: 'Đợt K01 — Kiến trúc Backend Chuyên sâu (Tối Thứ 4 & Chủ Nhật)',
-        status: 'OPENING',
+        status: 'ONGOING',
         curriculumVersion: 'v1.8-2026',
         techStackNotes: 'Node.js 22 · TypeScript 5.8 · Express · Drizzle ORM · PostgreSQL 16 · Redis · Docker',
         tuitionVnd: 5900000,
         enrolledCount: 2,
-        enrollmentOpenAt: new Date('2026-03-10T00:00:00Z'),
-        startDate: '2026-05-06',
-        endDate: '2026-06-24',
+        enrollmentOpenAt: new Date('2026-03-01T00:00:00Z'),
+        startDate: '2026-03-25',
+        endDate: '2026-04-26',
         scheduleSlots: [
           { dayOfWeek: 3, startTime: '19:30', endTime: '21:30' },
           { dayOfWeek: 0, startTime: '19:30', endTime: '21:30' },
@@ -1299,7 +1291,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         curriculumVersion: 'v3.0-2026',
         techStackNotes: 'Python 3.11 · AsyncIO · Pytest · PostgreSQL 16 · CTE & Window Functions',
         tuitionVnd: 4200000,
-        enrolledCount: 3,
+        enrolledCount: 2,
         enrollmentOpenAt: new Date('2025-12-01T00:00:00Z'),
         startDate: '2026-01-05',
         endDate: '2026-02-25',
@@ -1320,57 +1312,57 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       {
         accountId: stuAnAcc!.id,
         cohortId: cohortAiK01!.id,
-        orderCode: 'ORD3T260301',
+        orderCode: 'ORD3T260220',
         amountVnd: 6800000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260301',
-        expiresAt: new Date('2026-03-01T10:15:00Z'),
-        paidAt: new Date('2026-03-01T10:04:12Z'),
-        createdAt: new Date('2026-03-01T10:00:00Z'),
+        idempotencyKey: 'idem-ord-260220',
+        expiresAt: new Date('2026-02-20T10:15:00Z'),
+        paidAt: new Date('2026-02-20T10:04:12Z'),
+        createdAt: new Date('2026-02-20T10:00:00Z'),
       },
       {
         accountId: stuMaiAcc!.id,
         cohortId: cohortAiK01!.id,
-        orderCode: 'ORD3T260302',
+        orderCode: 'ORD3T260221',
         amountVnd: 6800000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260302',
-        expiresAt: new Date('2026-03-02T14:15:00Z'),
-        paidAt: new Date('2026-03-02T14:05:30Z'),
-        createdAt: new Date('2026-03-02T14:00:00Z'),
+        idempotencyKey: 'idem-ord-260221',
+        expiresAt: new Date('2026-02-21T14:15:00Z'),
+        paidAt: new Date('2026-02-21T14:05:30Z'),
+        createdAt: new Date('2026-02-21T14:00:00Z'),
       },
       {
         accountId: stuHaAcc!.id,
         cohortId: cohortAiK01!.id,
-        orderCode: 'ORD3T260303',
+        orderCode: 'ORD3T260222',
         amountVnd: 6800000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260303',
-        expiresAt: new Date('2026-03-03T09:15:00Z'),
-        paidAt: new Date('2026-03-03T09:06:45Z'),
-        createdAt: new Date('2026-03-03T09:00:00Z'),
+        idempotencyKey: 'idem-ord-260222',
+        expiresAt: new Date('2026-02-22T09:15:00Z'),
+        paidAt: new Date('2026-02-22T09:06:45Z'),
+        createdAt: new Date('2026-02-22T09:00:00Z'),
       },
       {
         accountId: stuQuanAcc!.id,
         cohortId: cohortAiK01!.id,
-        orderCode: 'ORD3T260304',
+        orderCode: 'ORD3T260223',
         amountVnd: 6800000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260304',
-        expiresAt: new Date('2026-03-04T16:15:00Z'),
-        paidAt: new Date('2026-03-04T16:08:10Z'),
-        createdAt: new Date('2026-03-04T16:00:00Z'),
+        idempotencyKey: 'idem-ord-260223',
+        expiresAt: new Date('2026-02-23T16:15:00Z'),
+        paidAt: new Date('2026-02-23T16:08:10Z'),
+        createdAt: new Date('2026-02-23T16:00:00Z'),
       },
       {
         accountId: stuAnhAcc!.id,
         cohortId: cohortAiK01!.id,
-        orderCode: 'ORD3T260305',
+        orderCode: 'ORD3T260224',
         amountVnd: 6800000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260305',
-        expiresAt: new Date('2026-03-05T11:15:00Z'),
-        paidAt: new Date('2026-03-05T11:03:22Z'),
-        createdAt: new Date('2026-03-05T11:00:00Z'),
+        idempotencyKey: 'idem-ord-260224',
+        expiresAt: new Date('2026-02-24T11:15:00Z'),
+        paidAt: new Date('2026-02-24T11:03:22Z'),
+        createdAt: new Date('2026-02-24T11:00:00Z'),
       },
       {
         accountId: stuKhanhAcc!.id,
@@ -1397,13 +1389,13 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       {
         accountId: stuAnAcc!.id,
         cohortId: cohortSweK01!.id,
-        orderCode: 'ORD3T260325',
+        orderCode: 'ORD3T260324',
         amountVnd: 5900000,
         status: 'PAID',
-        idempotencyKey: 'idem-ord-260325',
-        expiresAt: new Date('2026-03-25T10:15:00Z'),
-        paidAt: new Date('2026-03-25T10:04:00Z'),
-        createdAt: new Date('2026-03-25T10:00:00Z'),
+        idempotencyKey: 'idem-ord-260324',
+        expiresAt: new Date('2026-03-24T10:15:00Z'),
+        paidAt: new Date('2026-03-24T10:04:00Z'),
+        createdAt: new Date('2026-03-24T10:00:00Z'),
       },
       {
         accountId: stuMaiAcc!.id,
@@ -1470,10 +1462,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 6800000,
-        content: 'MBVCB.990101.NGUYEN VAN AN chuyen khoan ORD3T260301',
-        referenceCode: 'FT26060990101',
+        content: 'MBVCB.990101.NGUYEN VAN AN chuyen khoan ORD3T260220',
+        referenceCode: 'FT26051990101',
       },
-      createdAt: new Date('2026-03-01T10:04:12Z'),
+      createdAt: new Date('2026-02-20T10:04:12Z'),
     },
     {
       orderId: ordMaiAi!.id,
@@ -1486,10 +1478,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 6800000,
-        content: 'LE HOANG MAI thanh toan hoc phi ORD3T260302',
-        referenceCode: 'FT26061990102',
+        content: 'LE HOANG MAI thanh toan hoc phi ORD3T260221',
+        referenceCode: 'FT26052990102',
       },
-      createdAt: new Date('2026-03-02T14:05:30Z'),
+      createdAt: new Date('2026-02-21T14:05:30Z'),
     },
     {
       orderId: ordHaAi!.id,
@@ -1502,10 +1494,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 6800000,
-        content: 'TRAN THU HA CK ORD3T260303',
-        referenceCode: 'FT26062990103',
+        content: 'TRAN THU HA CK ORD3T260222',
+        referenceCode: 'FT26053990103',
       },
-      createdAt: new Date('2026-03-03T09:06:45Z'),
+      createdAt: new Date('2026-02-22T09:06:45Z'),
     },
     {
       orderId: ordQuanAi!.id,
@@ -1518,10 +1510,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 6800000,
-        content: 'PHAM MINH QUAN TT ORD3T260304',
-        referenceCode: 'FT26063990104',
+        content: 'PHAM MINH QUAN TT ORD3T260223',
+        referenceCode: 'FT26054990104',
       },
-      createdAt: new Date('2026-03-04T16:08:10Z'),
+      createdAt: new Date('2026-02-23T16:08:10Z'),
     },
     {
       orderId: ordAnhAi!.id,
@@ -1534,10 +1526,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 6800000,
-        content: 'DO TUAN ANH CK ORD3T260305',
-        referenceCode: 'FT26064990105',
+        content: 'DO TUAN ANH CK ORD3T260224',
+        referenceCode: 'FT26055990105',
       },
-      createdAt: new Date('2026-03-05T11:03:22Z'),
+      createdAt: new Date('2026-02-24T11:03:22Z'),
     },
     {
       orderId: ordKhanhAi2!.id,
@@ -1574,7 +1566,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     {
       orderId: ordAnSwe!.id,
       gateway: 'SEPAY_VIETQR',
-      gatewayTxnId: 'SEPAY-MB-990125',
+      gatewayTxnId: 'SEPAY-MB-990124',
       amountVnd: 5900000,
       responseCode: '00',
       matchStatus: 'MATCHED',
@@ -1582,10 +1574,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         gateway: 'MBBank',
         accountNumber: '0389998888',
         transferAmount: 5900000,
-        content: 'NGUYEN VAN AN CK ORD3T260325',
-        referenceCode: 'FT26084990125',
+        content: 'NGUYEN VAN AN CK ORD3T260324',
+        referenceCode: 'FT26083990124',
       },
-      createdAt: new Date('2026-03-25T10:04:00Z'),
+      createdAt: new Date('2026-03-24T10:04:00Z'),
     },
     {
       orderId: ordMaiPy!.id,
@@ -1664,11 +1656,11 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         accountId: stuAnAcc!.id,
         cohortId: cohortAiK01!.id,
         orderId: ordAnAi!.id,
-        status: 'ACTIVE',
+        status: 'COMPLETED',
         finalExamPassed: true,
-        dropoutRiskScore: 0.08,
+        dropoutRiskScore: 0.04,
         riskLevel: 'LOW',
-        enrolledAt: new Date('2026-03-01T10:04:15Z'),
+        enrolledAt: new Date('2026-02-20T10:04:15Z'),
         completedAt: new Date('2026-04-03T12:00:00Z'),
       },
       {
@@ -1679,7 +1671,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         finalExamPassed: false,
         dropoutRiskScore: 0.14,
         riskLevel: 'LOW',
-        enrolledAt: new Date('2026-03-02T14:05:35Z'),
+        enrolledAt: new Date('2026-02-21T14:05:35Z'),
       },
       {
         accountId: stuHaAcc!.id,
@@ -1689,7 +1681,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         finalExamPassed: false,
         dropoutRiskScore: 0.42,
         riskLevel: 'MEDIUM',
-        enrolledAt: new Date('2026-03-03T09:06:50Z'),
+        enrolledAt: new Date('2026-02-22T09:06:50Z'),
       },
       {
         accountId: stuQuanAcc!.id,
@@ -1699,7 +1691,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         finalExamPassed: false,
         dropoutRiskScore: 0.78,
         riskLevel: 'HIGH',
-        enrolledAt: new Date('2026-03-04T16:08:15Z'),
+        enrolledAt: new Date('2026-02-23T16:08:15Z'),
       },
       {
         accountId: stuAnhAcc!.id,
@@ -1709,7 +1701,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         finalExamPassed: false,
         dropoutRiskScore: 0.86,
         riskLevel: 'HIGH',
-        enrolledAt: new Date('2026-03-05T11:03:25Z'),
+        enrolledAt: new Date('2026-02-24T11:03:25Z'),
       },
       {
         accountId: stuKhanhAcc!.id,
@@ -1739,7 +1731,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         finalExamPassed: false,
         dropoutRiskScore: 0.1,
         riskLevel: 'LOW',
-        enrolledAt: new Date('2026-03-25T10:04:05Z'),
+        enrolledAt: new Date('2026-03-24T10:04:05Z'),
       },
       {
         accountId: stuMaiAcc!.id,
@@ -1769,11 +1761,12 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
   const [enrAnAi, , , , , , , , enrMaiPy, enrKhoiPy] = insertedEnrollments;
 
   // =========================================================================
-  // 11. CLASS SESSIONS (10 Sessions across Cohorts)
+  // 11. CLASS SESSIONS (24 Sessions: Complete 6-session schedules for 4 cohorts)
   // =========================================================================
   const insertedSessions = await db
     .insert(classSessions)
     .values([
+      // --- AI-ENG-2026-K01 (All 6 sessions finished & REPLAY_READY) ---
       {
         cohortId: cohortAiK01!.id,
         instructorId: instKhoaAcc!.id,
@@ -1782,8 +1775,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Xây dựng nền tảng dịch vụ AI Gateway bằng FastAPI + AsyncIO, quản lý Connection Pool, cơ chế Exponential Backoff khi gọi LLM API và truyền phát câu trả lời theo thời gian thực qua Server-Sent Events (SSE).',
         activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-10T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-10T14:30:00Z'),
+        scheduledStart: new Date('2026-03-03T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-03T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-ai-k01-s01',
         videoProvider: 'R2_HLS_AES128',
@@ -1802,8 +1795,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Thiết kế quy trình bóc tách tài liệu PDF/Markdown theo cấu trúc ngữ nghĩa, lựa chọn mô hình Embedding 1024 chiều và cấu hình chỉ mục HNSW trên PostgreSQL pgvector.',
         activityTags: ['THEORY', 'LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-03-12T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-12T14:30:00Z'),
+        scheduledStart: new Date('2026-03-05T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-05T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-ai-k01-s02',
         videoProvider: 'R2_HLS_AES128',
@@ -1821,8 +1814,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Kết hợp tìm kiếm ngữ nghĩa pgvector với tìm kiếm từ khóa PostgreSQL Full-Text Search (tsvector/GIN), hợp nhất bảng xếp hạng bằng RRF (k=60) và tinh chỉnh kết quả với Cross-Encoder Reranker.',
         activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-17T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-17T14:30:00Z'),
+        scheduledStart: new Date('2026-03-10T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-10T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-ai-k01-s03',
         videoProvider: 'R2_HLS_AES128',
@@ -1841,8 +1834,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Xây dựng các công cụ (Tools) có kiểm tra kiểu dữ liệu nghiêm ngặt bằng Pydantic v2, xử lý vòng lặp suy luận ReAct và kết nối Agent với hệ thống cơ sở dữ liệu nghiệp vụ.',
         activityTags: ['THEORY', 'LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-03-24T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-24T14:30:00Z'),
+        scheduledStart: new Date('2026-03-12T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-12T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-ai-k01-s04',
         videoProvider: 'R2_HLS_AES128',
@@ -1860,10 +1853,10 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Thực hành đo lường định lượng chất lượng hệ thống RAG (Faithfulness, Answer Relevancy, Context Precision), thiết lập Semantic Cache trên Redis và bảo vệ hệ thống trước Prompt Injection.',
         activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-04-02T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-02T14:30:00Z'),
-        status: 'LIVE',
-        livekitRoomName: 'room-ai-k01-s05-live',
+        scheduledStart: new Date('2026-03-17T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-17T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-ai-k01-s05',
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s05/master.m3u8',
         durationSeconds: 5400,
@@ -1879,50 +1872,227 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         descriptionMd:
           'Tổng duyệt kiến trúc dự án cuối khóa, kiểm tra hiệu năng truy xuất thực tế và hướng dẫn quy chế phòng thi sát hạch chứng chỉ có giám sát AI Proctoring.',
         activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-04-09T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-09T14:30:00Z'),
-        status: 'SCHEDULED',
+        scheduledStart: new Date('2026-03-19T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-19T14:30:00Z'),
+        status: 'REPLAY_READY',
         livekitRoomName: 'room-ai-k01-s06',
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s06/master.m3u8',
         durationSeconds: 5400,
         aiSummaryMd: `### Tóm tắt trọng tâm Buổi 6
-1. **Danh mục nghiệm thu đồ án Production AI**: Đảm bảo đầy đủ Docker Compose, migration pgvector, kiểm thử Ragas đạt Faithfulness >= 0.85 và xử lý lỗi an toàn.`,
+1. **Danh mục nghiệm thu đồ án Production AI**: Đảm bảo đầy đủ Docker Compose, migration pgvector, kiểm thử Ragas đạt Faithfulness >= 0.85 và xử lý lỗi an toàn.
+2. **Quy chế phòng thi sát hạch**: Mở khóa sau khi hoàn tất 6/6 buổi học và bài kiểm tra củng cố.`,
       },
+
+      // --- PY-SQL-2026-K04 (All 6 sessions finished & REPLAY_READY) ---
       {
         cohortId: cohortPyK04!.id,
         instructorId: instHaAcc!.id,
         sessionOrder: 1,
-        title: 'Tư duy Python Hiện đại: Cấu trúc Dữ liệu, Type Hints & AsyncIO',
+        title: 'Tư duy Python Hiện đại: Cấu trúc Dữ liệu, Type Hints & Quản lý Bộ nhớ',
         descriptionMd:
-          'Làm chủ Python 3.11, Type Annotations, Pydantic cơ bản và lập trình bất đồng bộ phục vụ xử lý dữ liệu.',
+          'Làm chủ Python 3.11, List/Dict Comprehension, Generator, Decorator và chuẩn kiểm tra kiểu tĩnh.',
         activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-01-08T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-08T14:30:00Z'),
+        scheduledStart: new Date('2026-01-05T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-05T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-py-k04-s01',
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k04/s01/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt cấu trúc dữ liệu Python, Generator và AsyncIO cơ bản.',
+        aiSummaryMd: 'Tóm tắt cấu trúc dữ liệu Python, Generator (yield) và Type Hints chuẩn 3.11.',
       },
       {
         cohortId: cohortPyK04!.id,
         instructorId: instHaAcc!.id,
         sessionOrder: 2,
-        title: 'SQL Phân tích Nâng cao: CTE, Window Functions & Tối ưu Chỉ mục PostgreSQL',
+        title: 'Lập trình Hướng đối tượng (OOP), Xử lý Ngoại lệ & Kiểm thử với Pytest',
         descriptionMd:
-          'Thực hành viết truy vấn phân tích doanh thu, tỷ lệ giữ chân người dùng (Cohort Retention) bằng CTE và Window Functions.',
-        activityTags: ['LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-01-15T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-15T14:30:00Z'),
+          'Thiết kế module tái sử dụng, kiểm tra dữ liệu với Pydantic cơ bản và viết Unit Test bằng pytest.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-01-08T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-08T14:30:00Z'),
         status: 'REPLAY_READY',
         livekitRoomName: 'room-py-k04-s02',
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k04/s02/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt cách sử dụng ROW_NUMBER, RANK, LAG/LEAD và chỉ mục B-Tree trên PostgreSQL.',
+        aiSummaryMd: 'Tóm tắt OOP, `@pytest.mark.parametrize` và kiểm thử trường hợp biên.',
       },
+      {
+        cohortId: cohortPyK04!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 3,
+        title: 'Lập trình Bất đồng bộ (AsyncIO) & Thu thập Dữ liệu qua HTTP API',
+        descriptionMd:
+          'Hiểu rõ Event Loop, `async with` quản lý Connection Pool và httpx bất đồng bộ.',
+        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-01-12T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-12T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-py-k04-s03',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/py-k04/s03/master.m3u8',
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tóm tắt `asyncio.gather`, `async with` và kiểm soát đồng thời.',
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 4,
+        title: 'Thiết kế Cơ sở Dữ liệu Quan hệ & Truy vấn SQL Cốt lõi trên PostgreSQL',
+        descriptionMd:
+          'Chuẩn hóa bảng dữ liệu, ràng buộc khóa ngoại, JOIN và tối ưu chỉ mục B-Tree.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-01-15T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-15T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-py-k04-s04',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/py-k04/s04/master.m3u8',
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tóm tắt thiết kế 3NF, phân tích `EXPLAIN ANALYZE` và chỉ mục B-Tree.',
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 5,
+        title: 'SQL Phân tích Nâng cao: CTE, Window Functions & Truy vấn JSONB',
+        descriptionMd:
+          'Giải quyết các bài toán xếp hạng, tính tổng lũy kế, phân tích cohort và toán tử `@>` trên JSONB + GIN.',
+        activityTags: ['LIVE_CODING', 'WORKSHOP'],
+        scheduledStart: new Date('2026-01-19T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-19T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-py-k04-s05',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/py-k04/s05/master.m3u8',
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tóm tắt CTE, `RANK()`, `DENSE_RANK()`, `LAG()` và truy vấn JSONB.',
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 6,
+        title: 'Xây dựng Ứng dụng Tổng hợp Python + PostgreSQL & Chuẩn bị Thi Cuối khóa',
+        descriptionMd:
+          'Kết nối Python AsyncPG với PostgreSQL qua Keyset Pagination, tổng kết kiến thức trước kỳ thi tốt nghiệp.',
+        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-01-22T12:30:00Z'),
+        scheduledEnd: new Date('2026-01-22T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-py-k04-s06',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/py-k04/s06/master.m3u8',
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tóm tắt Keyset Pagination và tổng duyệt dự án Python + PostgreSQL.',
+      },
+
+      // --- SWE-ARCH-2026-K01 (ONGOING: s01-s03 REPLAY_READY, s04 LIVE, s05-s06 SCHEDULED) ---
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 1,
+        title: 'Kiến trúc Phân tầng (Clean Layered Architecture) & Kiểm soát Kiểu với TypeScript/Zod',
+        descriptionMd:
+          'Tổ chức mã nguồn module hóa, chuẩn hóa hợp đồng dữ liệu DTO, xử lý lỗi tập trung và theo dõi truy vết với Correlation ID.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-03-25T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-25T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-swe-k01-s01',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/swe-k01/s01/master.m3u8',
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tóm tắt kiến trúc 3 tầng Routes -> Services -> Repositories, Zod validation và Correlation ID.',
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 2,
+        title: 'Thiết kế Cơ sở dữ liệu Quan hệ Nâng cao & Tối ưu Truy vấn PostgreSQL',
+        descriptionMd:
+          'Phân tích Execution Plan với EXPLAIN ANALYZE, lựa chọn chỉ mục B-Tree/GIN/Partial Index và phòng chống lỗi N+1 Query.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-03-29T12:30:00Z'),
+        scheduledEnd: new Date('2026-03-29T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-swe-k01-s02',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/swe-k01/s02/master.m3u8',
+        durationSeconds: 5550,
+        aiSummaryMd: 'Tóm tắt đọc `EXPLAIN ANALYZE`, composite index và loại bỏ N+1 Query với Drizzle ORM.',
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 3,
+        title: 'Giao dịch ACID, Khóa Đồng thời (Concurrency Control) & Tích hợp Cổng Thanh toán',
+        descriptionMd:
+          'Xử lý đối soát biên lai ngân hàng tự động qua Webhook, thiết kế bảng giao dịch bất biến và ngăn chặn lỗi cộng tiền kép.',
+        activityTags: ['LIVE_CODING', 'WORKSHOP'],
+        scheduledStart: new Date('2026-04-01T12:30:00Z'),
+        scheduledEnd: new Date('2026-04-01T14:30:00Z'),
+        status: 'REPLAY_READY',
+        livekitRoomName: 'room-swe-k01-s03',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: 'recordings/swe-k01/s03/master.m3u8',
+        durationSeconds: 5700,
+        aiSummaryMd: 'Tóm tắt Pessimistic Locking (`FOR UPDATE`), Unique Idempotency Key và xử lý SePay Webhook.',
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 4,
+        title: 'Chiến lược Caching Đa tầng với Redis & Hàng đợi Bất đồng bộ',
+        descriptionMd:
+          'Triển khai mẫu Cache-Aside, Write-Through, xử lý bài toán Cache Stampede và điều phối tác vụ nặng qua Worker.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-04-05T12:30:00Z'),
+        scheduledEnd: new Date('2026-04-05T14:30:00Z'),
+        status: 'LIVE',
+        livekitRoomName: 'room-swe-k01-s04-live',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Buổi học đang phát trực tiếp cùng ThS. Nguyễn Thu Hà về Redis Cache-Aside và BullMQ Worker.',
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 5,
+        title: 'Bảo mật API (JWT, RBAC, Rate Limiting) & Đóng gói Docker Production',
+        descriptionMd:
+          'Thiết kế cơ chế phân quyền theo vai trò, bảo vệ hệ thống trước tấn công brute-force và thiết lập quy trình CI/CD tự động.',
+        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-04-08T12:30:00Z'),
+        scheduledEnd: new Date('2026-04-08T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-swe-k01-s05',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tài liệu chuẩn bị cho Buổi 5: JWT Rotation, Rate Limit Redis và Multi-stage Dockerfile.',
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        instructorId: instHaAcc!.id,
+        sessionOrder: 6,
+        title: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Hệ thống',
+        descriptionMd:
+          'Đo kiểm hiệu năng thực tế với k6, phân tích điểm nghẽn cổ chai và hoàn thiện đồ án tốt nghiệp.',
+        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-04-12T12:30:00Z'),
+        scheduledEnd: new Date('2026-04-12T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-swe-k01-s06',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Tài liệu chuẩn bị cho Buổi 6: Kịch bản k6 Load Testing và tổng duyệt đồ án cuối khóa.',
+      },
+
+      // --- AI-ENG-2026-K02 (OPENING: All 6 sessions SCHEDULED, no recordings yet) ---
       {
         cohortId: cohortAiK02!.id,
         instructorId: instKhoaAcc!.id,
@@ -1941,122 +2111,249 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         aiSummaryMd: 'Tài liệu chuẩn bị cho buổi khai giảng đợt K02.',
       },
       {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 1,
-        title: 'Buổi 1 (Đợt K01): Kiến trúc Phân tầng Backend TypeScript & Drizzle ORM',
-        descriptionMd:
-          'Thiết kế kiến trúc Clean Layered Architecture, xác thực Zod và kết nối cơ sở dữ liệu PostgreSQL.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-05-06T12:30:00Z'),
-        scheduledEnd: new Date('2026-05-06T14:30:00Z'),
+        cohortId: cohortAiK02!.id,
+        instructorId: instKhoaAcc!.id,
+        sessionOrder: 2,
+        title: 'Buổi 2 (Đợt K02): Chiến lược Chunking Đa tầng & Vector pgvector',
+        descriptionMd: 'Chuẩn bị kiến thức Chunking theo Markdown Header và chỉ mục HNSW.',
+        activityTags: ['THEORY', 'LIVE_CODING', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-05-15T12:30:00Z'),
+        scheduledEnd: new Date('2026-05-15T14:30:00Z'),
         status: 'SCHEDULED',
-        livekitRoomName: 'room-swe-k01-s01',
+        livekitRoomName: 'room-ai-k02-s02',
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: null,
         durationSeconds: 5400,
-        aiSummaryMd: 'Tài liệu chuẩn bị cho buổi khai giảng lớp Kiến trúc Backend Chuyên sâu.',
+        aiSummaryMd: 'Nội dung dự kiến cho Buổi 2 đợt K02.',
+      },
+      {
+        cohortId: cohortAiK02!.id,
+        instructorId: instKhoaAcc!.id,
+        sessionOrder: 3,
+        title: 'Buổi 3 (Đợt K02): Hybrid Search (Dense + BM25) & RRF',
+        descriptionMd: 'Kết hợp pgvector với PostgreSQL Full-Text Search và Cross-Encoder Reranker.',
+        activityTags: ['THEORY', 'LIVE_CODING'],
+        scheduledStart: new Date('2026-05-18T12:30:00Z'),
+        scheduledEnd: new Date('2026-05-18T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-ai-k02-s03',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Nội dung dự kiến cho Buổi 3 đợt K02.',
+      },
+      {
+        cohortId: cohortAiK02!.id,
+        instructorId: instKhoaAcc!.id,
+        sessionOrder: 4,
+        title: 'Buổi 4 (Đợt K02): Function Calling & Multi-Agent LangGraph',
+        descriptionMd: 'Thiết kế Tool Calling với Pydantic v2 và điều phối đồ thị trạng thái LangGraph.',
+        activityTags: ['THEORY', 'LIVE_CODING', 'WORKSHOP'],
+        scheduledStart: new Date('2026-05-22T12:30:00Z'),
+        scheduledEnd: new Date('2026-05-22T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-ai-k02-s04',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Nội dung dự kiến cho Buổi 4 đợt K02.',
+      },
+      {
+        cohortId: cohortAiK02!.id,
+        instructorId: instKhoaAcc!.id,
+        sessionOrder: 5,
+        title: 'Buổi 5 (Đợt K02): LLMOps, Đánh giá Ragas & Guardrails',
+        descriptionMd: 'Đo lường Faithfulness, Context Recall và triển khai Semantic Cache Redis.',
+        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-05-25T12:30:00Z'),
+        scheduledEnd: new Date('2026-05-25T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-ai-k02-s05',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Nội dung dự kiến cho Buổi 5 đợt K02.',
+      },
+      {
+        cohortId: cohortAiK02!.id,
+        instructorId: instKhoaAcc!.id,
+        sessionOrder: 6,
+        title: 'Buổi 6 (Đợt K02): Bảo vệ Đồ án Tốt nghiệp & Sát hạch',
+        descriptionMd: 'Nghiệm thu dự án Production AI và phổ biến quy chế thi trực tuyến.',
+        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
+        scheduledStart: new Date('2026-05-29T12:30:00Z'),
+        scheduledEnd: new Date('2026-05-29T14:30:00Z'),
+        status: 'SCHEDULED',
+        livekitRoomName: 'room-ai-k02-s06',
+        videoProvider: 'R2_HLS_AES128',
+        videoR2Key: null,
+        durationSeconds: 5400,
+        aiSummaryMd: 'Nội dung dự kiến cho Buổi 6 đợt K02.',
       },
     ])
     .returning();
 
-  const [sess1, sess2, sess3, sess4, sess5, sess6, sessPy1, sessPy2] = insertedSessions;
+  const [
+    sess1,
+    sess2,
+    sess3,
+    sess4,
+    sess5,
+    sess6,
+    sessPy1,
+    sessPy2,
+    sessPy3,
+    sessPy4,
+    sessPy5,
+    sessPy6,
+    sessSwe1,
+    sessSwe2,
+    sessSwe3,
+    sessSwe4,
+  ] = insertedSessions;
 
   // =========================================================================
-  // 12. SESSION PROGRESS
+  // 12. SESSION PROGRESS (Strictly on REPLAY_READY sessions)
   // =========================================================================
   await db.insert(sessionProgress).values([
+    // --- Nguyễn Văn An: AI-ENG-2026-K01 (6/6 completed before 2026-04-03 final exam) ---
     {
       accountId: stuAnAcc!.id,
       sessionId: sess1!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-03-10T15:00:00Z'),
-      lastActivityAt: new Date('2026-03-10T15:00:00Z'),
+      completedAt: new Date('2026-03-03T15:00:00Z'),
+      lastActivityAt: new Date('2026-03-03T15:00:00Z'),
     },
     {
       accountId: stuAnAcc!.id,
       sessionId: sess2!.id,
       lastPositionSec: 5700,
       isCompleted: true,
-      completedAt: new Date('2026-03-12T15:10:00Z'),
-      lastActivityAt: new Date('2026-03-12T15:10:00Z'),
+      completedAt: new Date('2026-03-05T15:10:00Z'),
+      lastActivityAt: new Date('2026-03-05T15:10:00Z'),
     },
     {
       accountId: stuAnAcc!.id,
       sessionId: sess3!.id,
       lastPositionSec: 6000,
       isCompleted: true,
-      completedAt: new Date('2026-03-17T15:20:00Z'),
-      lastActivityAt: new Date('2026-03-17T15:20:00Z'),
+      completedAt: new Date('2026-03-10T15:20:00Z'),
+      lastActivityAt: new Date('2026-03-10T15:20:00Z'),
     },
     {
       accountId: stuAnAcc!.id,
       sessionId: sess4!.id,
       lastPositionSec: 5850,
       isCompleted: true,
-      completedAt: new Date('2026-03-24T15:15:00Z'),
-      lastActivityAt: new Date('2026-03-24T15:15:00Z'),
+      completedAt: new Date('2026-03-12T15:15:00Z'),
+      lastActivityAt: new Date('2026-03-12T15:15:00Z'),
     },
     {
       accountId: stuAnAcc!.id,
       sessionId: sess5!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-04-02T14:50:00Z'),
-      lastActivityAt: new Date('2026-04-02T14:50:00Z'),
+      completedAt: new Date('2026-03-17T14:50:00Z'),
+      lastActivityAt: new Date('2026-03-17T14:50:00Z'),
     },
     {
       accountId: stuAnAcc!.id,
       sessionId: sess6!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-04-03T10:00:00Z'),
-      lastActivityAt: new Date('2026-04-03T10:00:00Z'),
+      completedAt: new Date('2026-03-19T15:00:00Z'),
+      lastActivityAt: new Date('2026-03-19T15:00:00Z'),
     },
+
+    // --- Nguyễn Văn An: SWE-ARCH-2026-K01 (Buổi 1-2 completed, Buổi 3 in progress) ---
+    {
+      accountId: stuAnAcc!.id,
+      sessionId: sessSwe1!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-03-25T15:05:00Z'),
+      lastActivityAt: new Date('2026-03-25T15:05:00Z'),
+    },
+    {
+      accountId: stuAnAcc!.id,
+      sessionId: sessSwe2!.id,
+      lastPositionSec: 5550,
+      isCompleted: true,
+      completedAt: new Date('2026-03-29T15:15:00Z'),
+      lastActivityAt: new Date('2026-03-29T15:15:00Z'),
+    },
+    {
+      accountId: stuAnAcc!.id,
+      sessionId: sessSwe3!.id,
+      lastPositionSec: 2400,
+      isCompleted: false,
+      completedAt: null,
+      lastActivityAt: new Date('2026-04-04T19:00:00Z'),
+    },
+
+    // --- Lê Hoàng Mai: AI-ENG-2026-K01 (Buổi 1-5 completed, Buổi 6 in progress) ---
     {
       accountId: stuMaiAcc!.id,
       sessionId: sess1!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-03-10T15:30:00Z'),
-      lastActivityAt: new Date('2026-03-10T15:30:00Z'),
+      completedAt: new Date('2026-03-03T15:30:00Z'),
+      lastActivityAt: new Date('2026-03-03T15:30:00Z'),
     },
     {
       accountId: stuMaiAcc!.id,
       sessionId: sess2!.id,
       lastPositionSec: 5700,
       isCompleted: true,
-      completedAt: new Date('2026-03-12T16:00:00Z'),
-      lastActivityAt: new Date('2026-03-12T16:00:00Z'),
+      completedAt: new Date('2026-03-05T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-05T16:00:00Z'),
     },
     {
       accountId: stuMaiAcc!.id,
       sessionId: sess3!.id,
       lastPositionSec: 6000,
       isCompleted: true,
-      completedAt: new Date('2026-03-17T16:00:00Z'),
-      lastActivityAt: new Date('2026-03-17T16:00:00Z'),
+      completedAt: new Date('2026-03-10T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-10T16:00:00Z'),
     },
     {
       accountId: stuMaiAcc!.id,
       sessionId: sess4!.id,
       lastPositionSec: 5850,
       isCompleted: true,
-      completedAt: new Date('2026-03-24T16:00:00Z'),
-      lastActivityAt: new Date('2026-03-24T16:00:00Z'),
+      completedAt: new Date('2026-03-12T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-12T16:00:00Z'),
     },
     {
       accountId: stuMaiAcc!.id,
       sessionId: sess5!.id,
-      lastPositionSec: 3600,
-      isCompleted: false,
-      completedAt: null,
-      lastActivityAt: new Date('2026-04-02T15:10:00Z'),
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-03-17T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-17T16:00:00Z'),
     },
     {
       accountId: stuMaiAcc!.id,
+      sessionId: sess6!.id,
+      lastPositionSec: 3600,
+      isCompleted: false,
+      completedAt: null,
+      lastActivityAt: new Date('2026-03-21T15:10:00Z'),
+    },
+
+    // --- Lê Hoàng Mai: PY-SQL-2026-K04 (6/6 completed) ---
+    {
+      accountId: stuMaiAcc!.id,
       sessionId: sessPy1!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-05T15:00:00Z'),
+      lastActivityAt: new Date('2026-01-05T15:00:00Z'),
+    },
+    {
+      accountId: stuMaiAcc!.id,
+      sessionId: sessPy2!.id,
       lastPositionSec: 5400,
       isCompleted: true,
       completedAt: new Date('2026-01-08T15:00:00Z'),
@@ -2064,35 +2361,61 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     },
     {
       accountId: stuMaiAcc!.id,
-      sessionId: sessPy2!.id,
+      sessionId: sessPy3!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-12T15:00:00Z'),
+      lastActivityAt: new Date('2026-01-12T15:00:00Z'),
+    },
+    {
+      accountId: stuMaiAcc!.id,
+      sessionId: sessPy4!.id,
       lastPositionSec: 5400,
       isCompleted: true,
       completedAt: new Date('2026-01-15T15:00:00Z'),
       lastActivityAt: new Date('2026-01-15T15:00:00Z'),
     },
     {
+      accountId: stuMaiAcc!.id,
+      sessionId: sessPy5!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-19T15:00:00Z'),
+      lastActivityAt: new Date('2026-01-19T15:00:00Z'),
+    },
+    {
+      accountId: stuMaiAcc!.id,
+      sessionId: sessPy6!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-22T15:00:00Z'),
+      lastActivityAt: new Date('2026-01-22T15:00:00Z'),
+    },
+
+    // --- Trần Thu Hà: AI-ENG-2026-K01 (Buổi 1-3 completed, Buổi 4 in progress) ---
+    {
       accountId: stuHaAcc!.id,
       sessionId: sess1!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-03-11T09:00:00Z'),
-      lastActivityAt: new Date('2026-03-11T09:00:00Z'),
+      completedAt: new Date('2026-03-04T09:00:00Z'),
+      lastActivityAt: new Date('2026-03-04T09:00:00Z'),
     },
     {
       accountId: stuHaAcc!.id,
       sessionId: sess2!.id,
       lastPositionSec: 5700,
       isCompleted: true,
-      completedAt: new Date('2026-03-13T10:00:00Z'),
-      lastActivityAt: new Date('2026-03-13T10:00:00Z'),
+      completedAt: new Date('2026-03-06T10:00:00Z'),
+      lastActivityAt: new Date('2026-03-06T10:00:00Z'),
     },
     {
       accountId: stuHaAcc!.id,
       sessionId: sess3!.id,
       lastPositionSec: 6000,
       isCompleted: true,
-      completedAt: new Date('2026-03-18T11:00:00Z'),
-      lastActivityAt: new Date('2026-03-18T11:00:00Z'),
+      completedAt: new Date('2026-03-11T11:00:00Z'),
+      lastActivityAt: new Date('2026-03-11T11:00:00Z'),
     },
     {
       accountId: stuHaAcc!.id,
@@ -2102,25 +2425,69 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       completedAt: null,
       lastActivityAt: new Date('2026-03-26T14:00:00Z'),
     },
+
+    // --- Phạm Minh Quân: AI-ENG-2026-K01 (6/6 completed before 2026-04-01 final exam) ---
     {
       accountId: stuQuanAcc!.id,
       sessionId: sess1!.id,
       lastPositionSec: 5400,
       isCompleted: true,
-      completedAt: new Date('2026-03-11T14:00:00Z'),
-      lastActivityAt: new Date('2026-03-11T14:00:00Z'),
+      completedAt: new Date('2026-03-04T14:00:00Z'),
+      lastActivityAt: new Date('2026-03-04T14:00:00Z'),
     },
     {
       accountId: stuQuanAcc!.id,
       sessionId: sess2!.id,
-      lastPositionSec: 1250,
-      isCompleted: false,
-      completedAt: null,
-      lastActivityAt: new Date('2026-03-19T08:30:00Z'),
+      lastPositionSec: 5700,
+      isCompleted: true,
+      completedAt: new Date('2026-03-07T08:30:00Z'),
+      lastActivityAt: new Date('2026-03-07T08:30:00Z'),
     },
+    {
+      accountId: stuQuanAcc!.id,
+      sessionId: sess3!.id,
+      lastPositionSec: 6000,
+      isCompleted: true,
+      completedAt: new Date('2026-03-12T09:00:00Z'),
+      lastActivityAt: new Date('2026-03-12T09:00:00Z'),
+    },
+    {
+      accountId: stuQuanAcc!.id,
+      sessionId: sess4!.id,
+      lastPositionSec: 5850,
+      isCompleted: true,
+      completedAt: new Date('2026-03-15T11:00:00Z'),
+      lastActivityAt: new Date('2026-03-15T11:00:00Z'),
+    },
+    {
+      accountId: stuQuanAcc!.id,
+      sessionId: sess5!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-03-20T14:00:00Z'),
+      lastActivityAt: new Date('2026-03-20T14:00:00Z'),
+    },
+    {
+      accountId: stuQuanAcc!.id,
+      sessionId: sess6!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-03-26T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-26T16:00:00Z'),
+    },
+
+    // --- Vũ Đình Khôi: PY-SQL-2026-K04 (6/6 completed) ---
     {
       accountId: stuKhoiAcc!.id,
       sessionId: sessPy1!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-05T16:00:00Z'),
+      lastActivityAt: new Date('2026-01-05T16:00:00Z'),
+    },
+    {
+      accountId: stuKhoiAcc!.id,
+      sessionId: sessPy2!.id,
       lastPositionSec: 5400,
       isCompleted: true,
       completedAt: new Date('2026-01-08T16:00:00Z'),
@@ -2128,11 +2495,61 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     },
     {
       accountId: stuKhoiAcc!.id,
-      sessionId: sessPy2!.id,
+      sessionId: sessPy3!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-12T16:00:00Z'),
+      lastActivityAt: new Date('2026-01-12T16:00:00Z'),
+    },
+    {
+      accountId: stuKhoiAcc!.id,
+      sessionId: sessPy4!.id,
       lastPositionSec: 5400,
       isCompleted: true,
       completedAt: new Date('2026-01-15T16:00:00Z'),
       lastActivityAt: new Date('2026-01-15T16:00:00Z'),
+    },
+    {
+      accountId: stuKhoiAcc!.id,
+      sessionId: sessPy5!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-19T16:00:00Z'),
+      lastActivityAt: new Date('2026-01-19T16:00:00Z'),
+    },
+    {
+      accountId: stuKhoiAcc!.id,
+      sessionId: sessPy6!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-01-22T16:00:00Z'),
+      lastActivityAt: new Date('2026-01-22T16:00:00Z'),
+    },
+
+    // --- Hoàng Gia Bảo: SWE-ARCH-2026-K01 (Buổi 1-3 completed) ---
+    {
+      accountId: stuBaoAcc!.id,
+      sessionId: sessSwe1!.id,
+      lastPositionSec: 5400,
+      isCompleted: true,
+      completedAt: new Date('2026-03-25T15:30:00Z'),
+      lastActivityAt: new Date('2026-03-25T15:30:00Z'),
+    },
+    {
+      accountId: stuBaoAcc!.id,
+      sessionId: sessSwe2!.id,
+      lastPositionSec: 5550,
+      isCompleted: true,
+      completedAt: new Date('2026-03-29T16:00:00Z'),
+      lastActivityAt: new Date('2026-03-29T16:00:00Z'),
+    },
+    {
+      accountId: stuBaoAcc!.id,
+      sessionId: sessSwe3!.id,
+      lastPositionSec: 5700,
+      isCompleted: true,
+      completedAt: new Date('2026-04-01T15:40:00Z'),
+      lastActivityAt: new Date('2026-04-01T15:40:00Z'),
     },
   ]);
 
@@ -2232,56 +2649,83 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       },
       {
         sessionId: sessPy1!.id,
-        fileName: 'Slide_Python_AsyncIO_TypeHints_Chuyen_Sau.pdf',
-        r2ObjectKey: 'materials/py-k04/s01/Slide_Python_AsyncIO_TypeHints_Chuyen_Sau.pdf',
+        fileName: 'Slide_Py01_Python_Data_Structures_Type_Hints.pdf',
+        r2ObjectKey: 'materials/py-k04/s01/Slide_Py01_Python_Data_Structures_Type_Hints.pdf',
         mimeType: 'application/pdf',
-        fileSizeBytes: 3800000,
+        fileSizeBytes: 3500000,
         uploadedBy: instHaAcc!.id,
       },
       {
-        sessionId: sessPy2!.id,
-        fileName: 'Slide_PostgreSQL_CTE_Window_Functions_Thuc_Chien.pdf',
-        r2ObjectKey: 'materials/py-k04/s02/Slide_PostgreSQL_CTE_Window_Functions_Thuc_Chien.pdf',
+        sessionId: sessPy4!.id,
+        fileName: 'Slide_Py04_PostgreSQL_Schema_Indexing.pdf',
+        r2ObjectKey: 'materials/py-k04/s04/Slide_Py04_PostgreSQL_Schema_Indexing.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: 4100000,
+        uploadedBy: instHaAcc!.id,
+      },
+      {
+        sessionId: sessPy5!.id,
+        fileName: 'Slide_Py05_PostgreSQL_CTE_Window_Functions.pdf',
+        r2ObjectKey: 'materials/py-k04/s05/Slide_Py05_PostgreSQL_CTE_Window_Functions.pdf',
         mimeType: 'application/pdf',
         fileSizeBytes: 4400000,
+        uploadedBy: instHaAcc!.id,
+      },
+      {
+        sessionId: sessSwe1!.id,
+        fileName: 'Slide_SWE01_Clean_Layered_Architecture_Zod.pdf',
+        r2ObjectKey: 'materials/swe-k01/s01/Slide_SWE01_Clean_Layered_Architecture_Zod.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: 3900000,
+        uploadedBy: instHaAcc!.id,
+      },
+      {
+        sessionId: sessSwe2!.id,
+        fileName: 'Slide_SWE02_PostgreSQL_EXPLAIN_ANALYZE_Indexing.pdf',
+        r2ObjectKey: 'materials/swe-k01/s02/Slide_SWE02_PostgreSQL_EXPLAIN_ANALYZE_Indexing.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: 4500000,
+        uploadedBy: instHaAcc!.id,
+      },
+      {
+        sessionId: sessSwe3!.id,
+        fileName: 'Slide_SWE03_ACID_Locking_Idempotent_Webhook.pdf',
+        r2ObjectKey: 'materials/swe-k01/s03/Slide_SWE03_ACID_Locking_Idempotent_Webhook.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: 4700000,
+        uploadedBy: instHaAcc!.id,
+      },
+      {
+        sessionId: sessSwe4!.id,
+        fileName: 'Slide_SWE04_Redis_Caching_BullMQ_PreClass.pdf',
+        r2ObjectKey: 'materials/swe-k01/s04/Slide_SWE04_Redis_Caching_BullMQ_PreClass.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: 3750000,
         uploadedBy: instHaAcc!.id,
       },
     ])
     .returning();
 
-  const [attS1Slide, , attS2Slide, , attS3Slide, , attS4Slide, , attS5Slide] = insertedAttachments;
+  const [attS1Slide, , attS2Slide, , attS3Slide, , attS4Slide, , attS5Slide, , attS6Slide] =
+    insertedAttachments;
 
+  // Subtitles strictly for REPLAY_READY sessions
   await db.insert(sessionSubtitles).values([
-    {
-      sessionId: sess1!.id,
-      languageCode: 'vi',
-      vttR2Key: 'subtitles/ai-k01/s01/vi.vtt',
-      isAutoGenerated: true,
-    },
-    {
-      sessionId: sess2!.id,
-      languageCode: 'vi',
-      vttR2Key: 'subtitles/ai-k01/s02/vi.vtt',
-      isAutoGenerated: true,
-    },
-    {
-      sessionId: sess3!.id,
-      languageCode: 'vi',
-      vttR2Key: 'subtitles/ai-k01/s03/vi.vtt',
-      isAutoGenerated: true,
-    },
-    {
-      sessionId: sess4!.id,
-      languageCode: 'vi',
-      vttR2Key: 'subtitles/ai-k01/s04/vi.vtt',
-      isAutoGenerated: true,
-    },
-    {
-      sessionId: sess5!.id,
-      languageCode: 'vi',
-      vttR2Key: 'subtitles/ai-k01/s05/vi.vtt',
-      isAutoGenerated: true,
-    },
+    { sessionId: sess1!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s01/vi.vtt', isAutoGenerated: true },
+    { sessionId: sess2!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s02/vi.vtt', isAutoGenerated: true },
+    { sessionId: sess3!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s03/vi.vtt', isAutoGenerated: true },
+    { sessionId: sess4!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s04/vi.vtt', isAutoGenerated: true },
+    { sessionId: sess5!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s05/vi.vtt', isAutoGenerated: true },
+    { sessionId: sess6!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s06/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy1!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s01/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy2!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s02/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy3!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s03/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy4!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s04/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy5!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s05/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessPy6!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k04/s06/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessSwe1!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s01/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessSwe2!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s02/vi.vtt', isAutoGenerated: true },
+    { sessionId: sessSwe3!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s03/vi.vtt', isAutoGenerated: true },
   ]);
 
   // =========================================================================
@@ -2296,7 +2740,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       comment:
         'Kiến thức về Hybrid Search (pgvector + BM25 RRF) và cách tổ chức FastAPI bất đồng bộ thực sự sát với bài toán thực tế tại doanh nghiệp. Nhờ đồ án trong khóa học mà mình đã tự tin bảo vệ thành công vòng phỏng vấn kỹ thuật.',
       isPublic: true,
-      createdAt: new Date('2026-04-03T11:30:00Z'),
+      createdAt: new Date('2026-04-03T12:15:00Z'),
     },
     {
       courseId: courseAi!.id,
@@ -2344,7 +2788,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       accountId: stuBaoAcc!.id,
       rating: 5,
       comment:
-        'Đề cương khóa Kiến trúc Backend phân tích rất sâu về giao dịch ACID, chống cộng tiền kép khi xử lý Webhook ngân hàng và thiết kế hệ thống phân tán.',
+        'Hai buổi đầu về Clean Layered Architecture và tối ưu EXPLAIN ANALYZE rất sắc bén, giải thích cực rõ về giao dịch ACID và chống cộng tiền kép khi xử lý Webhook ngân hàng.',
       isPublic: true,
       createdAt: new Date('2026-03-30T20:00:00Z'),
     },
@@ -2375,7 +2819,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
   ]);
 
   // =========================================================================
-  // 15. ASSESSMENTS & ASSESSMENT ITEMS (6 Session Quizzes + 2 Final Exams)
+  // 15. ASSESSMENTS & ASSESSMENT ITEMS (All Session Quizzes + 3 Final Exams)
   // =========================================================================
   const [
     quizSess1,
@@ -2385,10 +2829,24 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     quizSess5,
     quizSess6,
     finalExamAiK01,
+    quizPy1,
+    quizPy2,
+    quizPy3,
+    quizPy4,
+    quizPy5,
+    quizPy6,
     finalExamPyK04,
+    quizSwe1,
+    quizSwe2,
+    quizSwe3,
+    quizSwe4,
+    quizSwe5,
+    quizSwe6,
+    finalExamSweK01,
   ] = await db
     .insert(assessments)
     .values([
+      // --- AI-ENG-2026-K01 ---
       {
         cohortId: cohortAiK01!.id,
         sessionId: sess1!.id,
@@ -2400,7 +2858,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-03-15T16:59:59Z'),
+        dueAt: new Date('2026-03-08T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2413,7 +2871,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-03-19T16:59:59Z'),
+        dueAt: new Date('2026-03-10T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2426,7 +2884,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-03-24T16:59:59Z'),
+        dueAt: new Date('2026-03-15T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2439,7 +2897,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-03-31T16:59:59Z'),
+        dueAt: new Date('2026-03-17T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2452,7 +2910,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-04-08T16:59:59Z'),
+        dueAt: new Date('2026-03-22T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2465,7 +2923,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 5,
         passScorePct: 70,
         proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-04-12T16:59:59Z'),
+        dueAt: new Date('2026-03-24T16:59:59Z'),
       },
       {
         cohortId: cohortAiK01!.id,
@@ -2478,7 +2936,87 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         maxAttempts: 3,
         passScorePct: 70,
         proctoringConfig: { enabled: true, maxViolations: 3, snapshotIntervalSec: 30 },
-        dueAt: new Date('2026-04-28T16:59:59Z'),
+        dueAt: new Date('2026-04-14T16:59:59Z'),
+      },
+
+      // --- PY-SQL-2026-K04 ---
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy1!.id,
+        title: 'Trắc nghiệm Python Buổi 1: Cấu trúc Dữ liệu & Type Hints',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-10T16:59:59Z'),
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy2!.id,
+        title: 'Trắc nghiệm Python Buổi 2: OOP, Pydantic & Kiểm thử Pytest',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-13T16:59:59Z'),
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy3!.id,
+        title: 'Trắc nghiệm Python Buổi 3: AsyncIO & HTTP Connection Pool',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-17T16:59:59Z'),
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy4!.id,
+        title: 'Trắc nghiệm Python Buổi 4: Thiết kế Quan hệ & Chỉ mục B-Tree',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-20T16:59:59Z'),
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy5!.id,
+        title: 'Trắc nghiệm Python Buổi 5: CTE, Window Functions & JSONB',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-24T16:59:59Z'),
+      },
+      {
+        cohortId: cohortPyK04!.id,
+        sessionId: sessPy6!.id,
+        title: 'Trắc nghiệm Python Buổi 6: Keyset Pagination & Tích hợp Hệ thống',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 10,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-01-27T16:59:59Z'),
       },
       {
         cohortId: cohortPyK04!.id,
@@ -2492,6 +3030,99 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         passScorePct: 70,
         proctoringConfig: { enabled: true, maxViolations: 3 },
         dueAt: new Date('2026-02-25T16:59:59Z'),
+      },
+
+      // --- SWE-ARCH-2026-K01 ---
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: sessSwe1!.id,
+        title: 'Trắc nghiệm Backend Buổi 1: Clean Layered Architecture & Zod',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-03-30T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: sessSwe2!.id,
+        title: 'Trắc nghiệm Backend Buổi 2: EXPLAIN ANALYZE & Tối ưu PostgreSQL',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-04-03T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: sessSwe3!.id,
+        title: 'Trắc nghiệm Backend Buổi 3: Giao dịch ACID & Idempotent Webhook',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-04-06T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: sessSwe4!.id,
+        title: 'Trắc nghiệm Backend Buổi 4: Redis Cache-Aside & Hàng đợi BullMQ',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'DRAFT',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-04-10T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: insertedSessions[16]!.id,
+        title: 'Trắc nghiệm Backend Buổi 5: Bảo mật JWT RBAC & Docker Production',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'DRAFT',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-04-13T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: insertedSessions[17]!.id,
+        title: 'Trắc nghiệm Backend Buổi 6: Kiểm thử Chịu tải k6 & Kiến trúc Phân tán',
+        purpose: 'SESSION_ASSIGNMENT',
+        gradingMode: 'AUTO',
+        status: 'DRAFT',
+        durationMinutes: 12,
+        maxAttempts: 5,
+        passScorePct: 70,
+        proctoringConfig: { enabled: false },
+        dueAt: new Date('2026-04-17T16:59:59Z'),
+      },
+      {
+        cohortId: cohortSweK01!.id,
+        sessionId: null,
+        title: 'Kỳ thi Sát hạch Tốt nghiệp: Kiến trúc Backend Chuyên sâu',
+        purpose: 'FINAL_EXAM',
+        gradingMode: 'AUTO',
+        status: 'PUBLISHED',
+        durationMinutes: 30,
+        maxAttempts: 3,
+        passScorePct: 70,
+        proctoringConfig: { enabled: true, maxViolations: 3 },
+        dueAt: new Date('2026-04-26T16:59:59Z'),
       },
     ])
     .returning();
@@ -3341,8 +3972,9 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     itemType: 'SINGLE_CHOICE' as const,
     points: '4.00',
     promptConfig: {
+      ...item.promptConfig,
+      number: idx + 1,
       prompt: `Câu ${idx + 1}/25 (Sát hạch Kỹ sư AI): ${item.promptConfig.prompt.replace(/^Câu \d+ \([^)]+\): /, '')}`,
-      options: item.promptConfig.options,
     },
     gradingConfig: item.gradingConfig,
     explanationMd: item.explanationMd,
@@ -3482,6 +4114,377 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     ]
   );
 
+  // --- PY-SQL-2026-K04 Session Quizzes (4 items each) ---
+  const py1Items = buildSessionQuizItems(quizPy1!.id, 1, 'Python Hiện đại & Type Hints', skPython!.id, skPython!.id, [
+    {
+      prompt: 'Ưu điểm bộ nhớ khi dùng Generator (`yield`) so với `list` thông thường khi duyệt tệp log hàng triệu dòng là gì?',
+      options: ['Sinh từng phần tử theo nhu cầu (Lazy Evaluation) nên chỉ tốn bộ nhớ O(1)', 'Tự động lưu toàn bộ dữ liệu lên Redis', 'Biên dịch Python sang Assembly', 'Không thể dùng trong vòng lặp for'],
+      correctIndex: 0,
+      explanationMd: 'Generator không nạp toàn bộ tập dữ liệu vào RAM cùng lúc.',
+    },
+    {
+      prompt: 'Type Hint `dict[str, int]` trong Python 3.11 biểu thị kiểu dữ liệu nào?',
+      options: ['Từ điển có khóa chuỗi và giá trị số nguyên', 'Danh sách các số thực', 'Hàm bất đồng bộ không trả về giá trị', 'Bảng cơ sở dữ liệu PostgreSQL'],
+      correctIndex: 0,
+      explanationMd: 'Built-in generic `dict[K, V]` giúp kiểm tra kiểu tĩnh với mypy/pyright.',
+    },
+    {
+      prompt: 'Vì sao Dictionary trong Python có độ phức tạp tra cứu khóa trung bình $O(1)$?',
+      options: ['Nhờ cấu trúc Bảng băm (Hash Table)', 'Vì luôn sắp xếp mảng theo bảng chữ cái', 'Vì lưu dữ liệu trên ổ đĩa cứng SSD', 'Vì tự động chạy đa luồng'],
+      correctIndex: 0,
+      explanationMd: 'Python dict sử dụng hàm băm để tính trực tiếp vị trí bucket trong bộ nhớ.',
+    },
+    {
+      prompt: 'Cấu trúc `collections.Counter` dùng để giải quyết bài toán nào nhanh nhất?',
+      options: ['Đếm tần suất xuất hiện của các phần tử trong một chuỗi hoặc danh sách', 'Mã hóa mật khẩu bằng Argon2', 'Kết nối tới cổng PostgreSQL', 'Vẽ biểu đồ trên trình duyệt'],
+      correctIndex: 0,
+      explanationMd: '`Counter` tối ưu cho việc thống kê tần suất và tìm Top-K phần tử phổ biến.',
+    },
+  ]);
+
+  const py2Items = buildSessionQuizItems(quizPy2!.id, 2, 'OOP, Pydantic & Pytest', skPython!.id, skFastApi!.id, [
+    {
+      prompt: 'Decorator `@pytest.mark.parametrize` mang lại lợi ích gì trong kiểm thử tự động?',
+      options: ['Chạy một hàm kiểm thử với nhiều bộ input/expected output khác nhau mà không lặp mã', 'Bỏ qua toàn bộ các test bị lỗi', 'Tự động đẩy code lên GitHub', 'Xóa bảng trong PostgreSQL'],
+      correctIndex: 0,
+      explanationMd: 'Parametrize giúp kiểm thử các trường hợp biên gọn gàng và đầy đủ.',
+    },
+    {
+      prompt: 'Khi dùng Pydantic `BaseModel`, điều gì xảy ra nếu dữ liệu đầu vào thiếu một trường bắt buộc?',
+      options: ['Ném ngoại lệ `ValidationError` kèm mô tả rõ trường và lỗi kiểu dữ liệu', 'Tự động gán giá trị rỗng im lặng', 'Tắt toàn bộ tiến trình Python', 'Bỏ qua không kiểm tra'],
+      correctIndex: 0,
+      explanationMd: 'Pydantic xác thực nghiêm ngặt cấu trúc dữ liệu ở ranh giới hệ thống.',
+    },
+    {
+      prompt: 'Phương thức `fixture` trong `pytest` thường dùng để làm gì?',
+      options: ['Chuẩn bị tài nguyên dùng chung (ví dụ DB session test, mock client) và dọn dẹp sau khi test xong', 'Tăng tốc độ card đồ họa GPU', 'Tạo mật khẩu người dùng', 'Thay thế hoàn toàn vòng lặp while'],
+      correctIndex: 0,
+      explanationMd: 'Fixture giúp tái sử dụng setup/teardown nhất quán giữa nhiều test case.',
+    },
+    {
+      prompt: 'Nguyên lý Single Responsibility trong OOP khuyến nghị điều gì?',
+      options: ['Mỗi lớp chỉ nên đảm nhận một trách nhiệm nghiệp vụ rõ ràng và tách biệt', 'Nhồi nhét toàn bộ logic API, SQL và UI vào một class duy nhất', 'Cấm sử dụng kế thừa hoặc composition', 'Không bao giờ viết hàm khởi tạo'],
+      correctIndex: 0,
+      explanationMd: 'Tách biệt trách nhiệm giúp mã nguồn dễ đọc, dễ viết unit test và bảo trì.',
+    },
+  ]);
+
+  const py3Items = buildSessionQuizItems(quizPy3!.id, 3, 'AsyncIO & Connection Pool', skPython!.id, skFastApi!.id, [
+    {
+      prompt: 'Lợi ích chính của `async with pool.acquire() as conn:` là gì?',
+      options: ['Đảm bảo kết nối DB luôn được trả lại Connection Pool ngay cả khi có exception', 'Khóa bảng dữ liệu vĩnh viễn', 'Chuyển đổi toàn bộ dữ liệu sang XML', 'Chạy tuần tự chậm hơn'],
+      correctIndex: 0,
+      explanationMd: 'Context manager bất đồng bộ tự động giải phóng tài nguyên an toàn.',
+    },
+    {
+      prompt: 'Khi cần gửi 10 HTTP request độc lập cùng lúc bằng `httpx.AsyncClient`, ta dùng hàm nào?',
+      options: ['`await asyncio.gather(*tasks)`', '`time.sleep(10)`', '`requests.get()` trong vòng lặp đồng bộ', '`sys.exit(0)`'],
+      correctIndex: 0,
+      explanationMd: '`asyncio.gather` chạy song song các tác vụ I/O-bound trên Event Loop.',
+    },
+    {
+      prompt: 'Tại sao I/O-bound workloads (gọi API, truy vấn DB) hưởng lợi lớn từ `asyncio`?',
+      options: ['Event Loop tận dụng thời gian chờ mạng để xử lý các coroutine khác thay vì đứng đợi', 'AsyncIO tăng xung nhịp phần cứng CPU lên gấp đôi', 'AsyncIO bỏ qua giao thức TCP', 'AsyncIO không cần RAM'],
+      correctIndex: 0,
+      explanationMd: 'Chuyển ngữ cảnh hợp tác (cooperative multitasking) tối ưu thông lượng tác vụ I/O.',
+    },
+    {
+      prompt: 'Nếu gặp tác vụ CPU-bound nặng (như nén ảnh lớn) bên trong `async def`, cần xử lý ra sao?',
+      options: ['Đẩy sang ProcessPoolExecutor / Worker nền thay vì chạy trực tiếp trên Event Loop', 'Dùng `time.sleep(0)`', 'Tắt kiểm tra TLS', 'Lưu vào localStorage trình duyệt'],
+      correctIndex: 0,
+      explanationMd: 'Tác vụ CPU-bound nặng trên Event Loop sẽ chặn toàn bộ request đồng thời khác.',
+    },
+  ]);
+
+  const py4Items = buildSessionQuizItems(quizPy4!.id, 4, 'SQL Quan hệ & Chỉ mục B-Tree', skSqlVec!.id, skPython!.id, [
+    {
+      prompt: 'Lệnh `EXPLAIN ANALYZE` khác gì so với `EXPLAIN` thông thường trên PostgreSQL?',
+      options: ['`EXPLAIN ANALYZE` thực sự thực thi truy vấn để đo thời gian và số dòng thực tế', '`EXPLAIN ANALYZE` tự động xóa chỉ mục cũ', '`EXPLAIN` luôn chạy lâu hơn', 'Không có sự khác biệt'],
+      correctIndex: 0,
+      explanationMd: 'So sánh ước lượng của planner với `actual time` và `rows` thực tế.',
+    },
+    {
+      prompt: 'Khi tạo Composite B-Tree Index trên `(cohort_id, status)`, điều kiện lọc nào tận dụng chỉ mục tốt nhất?',
+      options: ['`WHERE cohort_id = 1 AND status = \'ACTIVE\'` (khớp tiền tố cột đầu)', '`WHERE status LIKE \'%TIVE\'`', '`ORDER BY random()`', '`WHERE notes IS NOT NULL`'],
+      correctIndex: 0,
+      explanationMd: 'B-Tree composite index tuân theo quy tắc tiền tố ngoài cùng bên trái (leftmost prefix).',
+    },
+    {
+      prompt: 'Ràng buộc `FOREIGN KEY` đảm bảo tính chất nào của cơ sở dữ liệu quan hệ?',
+      options: ['Tính toàn vẹn tham chiếu (Referential Integrity) giữa bảng con và bảng cha', 'Mã hóa dữ liệu dạng vector', 'Tăng kích thước file ảnh', 'Tự động sao lưu sang Amazon S3'],
+      correctIndex: 0,
+      explanationMd: 'Không cho phép tồn tại bản ghi con trỏ tới khóa chính không tồn tại.',
+    },
+    {
+      prompt: 'Khi bảng đã đạt chuẩn 3NF, lợi ích chính là gì?',
+      options: ['Giảm trùng lặp dữ liệu và tránh dị thường khi cập nhật (update anomaly)', 'Không cần dùng câu lệnh JOIN nữa', 'Tăng tốc độ gõ phím', 'Loại bỏ khóa chính'],
+      correctIndex: 0,
+      explanationMd: 'Chuẩn hóa 3NF loại bỏ phụ thuộc bắc cầu giữa các thuộc tính không khóa.',
+    },
+  ]);
+
+  const py5Items = buildSessionQuizItems(quizPy5!.id, 5, 'CTE, Window Functions & JSONB', skSqlVec!.id, skSqlVec!.id, [
+    {
+      prompt: 'Hàm cửa sổ `DENSE_RANK()` khác `RANK()` ở điểm nào khi có giá trị đồng hạng?',
+      options: ['`DENSE_RANK()` không nhảy bậc (1, 1, 2) còn `RANK()` nhảy bậc (1, 1, 3)', '`DENSE_RANK()` chỉ chạy trên bảng tạm', '`RANK()` luôn trả về chuỗi văn bản', 'Cả hai giống hệt nhau'],
+      correctIndex: 0,
+      explanationMd: 'Dùng `DENSE_RANK()` khi cần thứ hạng liên tục không có khoảng trống.',
+    },
+    {
+      prompt: 'Để lấy giá trị doanh thu tháng trước trên cùng một dòng mà không dùng Self-Join, ta dùng hàm nào?',
+      options: ['`LAG(revenue, 1) OVER (ORDER BY month)`', '`COUNT(*) OVER ()`', '`COALESCE(revenue, 0)`', '`MAX(revenue)`'],
+      correctIndex: 0,
+      explanationMd: '`LAG()` truy cập trực tiếp dòng liền trước trong phân vùng cửa sổ.',
+    },
+    {
+      prompt: 'Kiểu `JSONB` với chỉ mục `GIN` dùng toán tử nào để kiểm tra chứa cặp khóa-giá trị con?',
+      options: ['`@>`', '`LIKE`', '`+`', '`%`'],
+      correctIndex: 0,
+      explanationMd: 'Toán tử `@>` khai thác trực tiếp chỉ mục GIN trên cột `JSONB`.',
+    },
+    {
+      prompt: 'Common Table Expression (`WITH cte AS (...)`) mang lại lợi ích gì?',
+      options: ['Chia nhỏ logic truy vấn phức tạp thành từng bước dễ đọc và bảo trì', 'Xóa dữ liệu cũ tự động', 'Tắt toàn bộ transaction', 'Thay thế kiểu số nguyên'],
+      correctIndex: 0,
+      explanationMd: 'CTE giúp tổ chức truy vấn phân tích nhiều bước rõ ràng.',
+    },
+  ]);
+
+  const py6Items = buildSessionQuizItems(quizPy6!.id, 6, 'Keyset Pagination & Tích hợp', skSqlVec!.id, skPython!.id, [
+    {
+      prompt: 'Vì sao Keyset Pagination (`WHERE id < cursor ORDER BY id DESC LIMIT 20`) nhanh hơn `OFFSET 1000000`?',
+      options: ['Nhảy trực tiếp qua chỉ mục B-Tree mà không phải quét bỏ 1 triệu dòng đầu', 'Vì `OFFSET` không hỗ trợ câu lệnh SELECT', 'Vì Keyset bỏ qua điều kiện WHERE', 'Vì nó không dùng mạng'],
+      correctIndex: 0,
+      explanationMd: 'Độ phức tạp của Keyset Pagination giữ ổn định $O(\\log N)$ ở mọi trang sâu.',
+    },
+    {
+      prompt: 'Tại sao nên dùng Parameterized Queries (`$1, $2`) thay vì nối chuỗi f-string khi gọi SQL từ Python?',
+      options: ['Ngăn chặn triệt để lỗ hổng SQL Injection và tận dụng query plan cache', 'Để câu lệnh SQL dài hơn', 'Để không cần đặt tên bảng', 'Để tắt log hệ thống'],
+      correctIndex: 0,
+      explanationMd: 'Tham số hóa tách biệt mã lệnh SQL và dữ liệu người dùng nhập vào.',
+    },
+    {
+      prompt: 'Trong một giao dịch chuyển tiền gồm 2 bước trừ và cộng số dư, đặc tính ACID đảm bảo điều gì?',
+      options: ['Hoặc cả 2 bước cùng thành công, hoặc cùng rollback khi có lỗi (Atomicity)', 'Luôn bỏ qua bước kiểm tra số dư', 'Chỉ lưu bước thứ nhất', 'Tự động xóa tài khoản'],
+      correctIndex: 0,
+      explanationMd: 'Tính nguyên tử đảm bảo không bao giờ xảy ra trạng thái dở dang mất cân đối.',
+    },
+    {
+      prompt: 'Lệnh nào trong PostgreSQL giúp cập nhật thống kê phân phối dữ liệu cho Query Planner?',
+      options: ['`ANALYZE table_name;`', '`DROP INDEX;`', '`TRUNCATE;`', '`SLEEP 5;`'],
+      correctIndex: 0,
+      explanationMd: '`ANALYZE` giúp trình tối ưu ước lượng chính xác số dòng và chọn đúng index.',
+    },
+  ]);
+
+  // --- SWE-ARCH-2026-K01 Quizzes (4 items each) ---
+  const swe1Items = buildSessionQuizItems(quizSwe1!.id, 1, 'Clean Layered Architecture & Zod', skNode!.id, skSysDesign!.id, [
+    {
+      prompt: 'Trong kiến trúc phân tầng `Routes -> Services -> Repositories`, tầng nào chịu trách nhiệm validate DTO đầu vào bằng Zod?',
+      options: ['Tầng Middleware / Route Boundary trước khi truyền vào Service', 'Tầng Database Driver', 'Tầng Docker Container', 'Tầng Trình duyệt CSS'],
+      correctIndex: 0,
+      explanationMd: 'Validate ở ranh giới HTTP giúp Service luôn nhận được dữ liệu đúng kiểu và an toàn.',
+    },
+    {
+      prompt: 'Tại sao nên tránh viết câu lệnh SQL trực tiếp bên trong React Component hoặc Route Handler phình to?',
+      options: ['Để tách biệt nghiệp vụ và truy cập dữ liệu, giúp tái sử dụng logic và dễ kiểm thử đơn vị', 'Vì Express không hỗ trợ gọi hàm bất đồng bộ', 'Vì TypeScript cấm gọi hàm trong Route', 'Để làm ứng dụng chậm hơn'],
+      correctIndex: 0,
+      explanationMd: 'Phân tách rõ ranh giới tầng giúp bảo trì và kiểm thử độc lập từng thành phần.',
+    },
+    {
+      prompt: 'Middleware gắn `X-Correlation-ID` vào mọi request nhằm phục vụ mục đích gì?',
+      options: ['Truy vết xuyên suốt nhật ký của cùng một yêu cầu qua API, Redis và AI Service', 'Tăng giá trị học phí', 'Mã hóa token JWT', 'Nén tệp hình ảnh'],
+      correctIndex: 0,
+      explanationMd: 'Correlation ID là xương sống của khả năng quan sát (Observability) trong hệ thống phân tán.',
+    },
+    {
+      prompt: 'Lớp lỗi tùy chỉnh `AppError(statusCode, code, message)` kết hợp Error Handler tập trung giúp gì?',
+      options: ['Chuẩn hóa cấu trúc JSON lỗi trả về Client và tránh rò rỉ stack trace nội bộ ở Production', 'Tắt toàn bộ thông báo lỗi thành HTTP 200', 'Xóa dữ liệu khi gặp lỗi 404', 'Bỏ qua xác thực JWT'],
+      correctIndex: 0,
+      explanationMd: 'Error Handler tập trung đảm bảo hợp đồng API đồng nhất cho Frontend.',
+    },
+  ]);
+
+  const swe2Items = buildSessionQuizItems(quizSwe2!.id, 2, 'EXPLAIN ANALYZE & Tối ưu PostgreSQL', skSqlVec!.id, skNode!.id, [
+    {
+      prompt: 'Lỗi `N+1 Query` trong ORM thường xảy ra khi nào và cách khắc phục chuẩn là gì?',
+      options: ['Khi lặp qua N bản ghi cha và gọi 1 truy vấn con cho mỗi bản ghi; khắc phục bằng JOIN hoặc `inArray` batching', 'Khi bảng có quá 1 cột khóa chính', 'Khi sử dụng Connection Pool', 'Khi bật HTTPS'],
+      correctIndex: 0,
+      explanationMd: 'Gom truy vấn bằng `inArray` hoặc `LEFT JOIN` giảm từ N+1 round-trip xuống còn 1-2 truy vấn.',
+    },
+    {
+      prompt: 'Partial Index (`CREATE INDEX ... ON orders(account_id) WHERE status = \'PENDING\'`) mang lại ưu điểm gì?',
+      options: ['Giảm đáng kể kích thước chỉ mục và tăng tốc truy vấn trên tập bản ghi trạng thái nóng', 'Tự động xóa các đơn hàng đã thanh toán', 'Không cần lưu trong bộ nhớ', 'Thay thế khóa chính'],
+      correctIndex: 0,
+      explanationMd: 'Partial Index chỉ đánh chỉ mục những dòng thỏa điều kiện WHERE thường xuyên truy vấn.',
+    },
+    {
+      prompt: 'Khi xem kế hoạch thực thi `EXPLAIN ANALYZE`, dấu hiệu nào cảnh báo truy vấn bảng lớn đang thiếu chỉ mục?',
+      options: ['Xuất hiện `Seq Scan` với chi phí và số dòng `rows removed by filter` rất lớn', 'Xuất hiện `Index Only Scan` dưới 1ms', 'Xuất hiện `Bitmap Index Scan` rất nhanh', 'Có từ khóa `Hash` nhỏ'],
+      correctIndex: 0,
+      explanationMd: '`Seq Scan` quét toàn bộ bảng khi lọc điều kiện chọn lọc cao là dấu hiệu cần bổ sung index.',
+    },
+    {
+      prompt: 'Drizzle ORM `eq()` và parameterized query bảo vệ hệ thống khỏi rủi ro bảo mật nào?',
+      options: ['SQL Injection', 'Cross-Site Scripting trên CSS', 'Hết dung lượng pin laptop', 'Mất kết nối Wi-Fi'],
+      correctIndex: 0,
+      explanationMd: 'Mọi giá trị biến đều được bind tách biệt khỏi cú pháp câu lệnh SQL.',
+    },
+  ]);
+
+  const swe3Items = buildSessionQuizItems(quizSwe3!.id, 3, 'ACID & Idempotent Webhook', skSysDesign!.id, skSqlVec!.id, [
+    {
+      prompt: 'Để đảm bảo Webhook SePay không kích hoạt ghi danh 2 lần khi nhận thông báo trùng lặp, cột nào cần ràng buộc `UNIQUE`?',
+      options: ['`gateway_txn_id` (mã giao dịch duy nhất từ phía ngân hàng/cổng thanh toán)', '`amount_vnd`', '`created_at`', '`status`'],
+      correctIndex: 0,
+      explanationMd: 'UNIQUE constraint trên `gateway_txn_id` chặn trùng lặp ở tầng cơ sở dữ liệu kể cả khi có race condition.',
+    },
+    {
+      prompt: 'Mệnh đề `SELECT ... FOR UPDATE` trong transaction PostgreSQL có tác dụng gì?',
+      options: ['Khóa bi quan (Pessimistic Lock) các dòng được chọn tới khi transaction COMMIT/ROLLBACK để tránh cập nhật đè', 'Xóa bảng ngay lập tức', 'Tắt cơ chế kiểm tra khóa ngoại', 'Tăng gấp đôi số lượng bản ghi'],
+      correctIndex: 0,
+      explanationMd: 'Pessimistic Lock đảm bảo hai request đồng thời không thể cùng xử lý một đơn hàng ở trạng thái PENDING.',
+    },
+    {
+      prompt: 'Tại sao bảng `payment_transactions` nên thiết kế theo mô hình chỉ ghi thêm (append-only / immutable ledger)?',
+      options: ['Để lưu giữ trọn vẹn dấu vết kiểm toán (audit trail) đối soát mọi giao dịch hợp lệ lẫn sai lệch', 'Để tiết kiệm không cần dùng khóa chính', 'Để cho phép người dùng tự sửa số tiền', 'Để xóa lịch sử sau 5 phút'],
+      correctIndex: 0,
+      explanationMd: 'Nhật ký giao dịch bất biến giúp dễ dàng truy vết và đối soát tài chính.',
+    },
+    {
+      prompt: 'Khi nhận Webhook có số tiền chuyển khoản nhỏ hơn số tiền đơn hàng (`AMOUNT_MISMATCH`), hệ thống nên xử lý thế nào?',
+      options: ['Ghi nhận transaction `AMOUNT_MISMATCH`, giữ đơn hàng ở trạng thái chờ và gửi cảnh báo cho Admin đối soát', 'Tự động cấp chứng chỉ cho học viên', 'Xóa đơn hàng ngay lập tức', 'Trả về HTTP 500 để ngân hàng gọi lại vô hạn'],
+      correctIndex: 0,
+      explanationMd: 'Trả về HTTP 200/202 đã ghi nhận log đối soát nhưng không kích hoạt `enrollments` sai quy chuẩn.',
+    },
+  ]);
+
+  const swe4Items = buildSessionQuizItems(quizSwe4!.id, 4, 'Redis Cache-Aside & BullMQ', skSysDesign!.id, skDocker!.id, [
+    {
+      prompt: 'Trong mẫu Cache-Aside, luồng đọc dữ liệu diễn ra theo thứ tự nào?',
+      options: ['Kiểm tra Redis trước -> Nếu Cache Miss thì đọc PostgreSQL -> Ghi vào Redis kèm TTL -> Trả về Client', 'Ghi vào PostgreSQL rồi xóa Redis ngay', 'Chỉ đọc từ Redis và không bao giờ dùng DB', 'Xóa bộ nhớ mỗi giây'],
+      correctIndex: 0,
+      explanationMd: 'Cache-Aside giúp ứng dụng chủ động kiểm soát TTL và fallback an toàn khi Redis miss.',
+    },
+    {
+      prompt: 'Hiện tượng Cache Stampede (Thundering Herd) xảy ra khi nào?',
+      options: ['Khi một khóa cache nóng hết hạn và hàng nghìn request đồng thời cùng đâm thẳng xuống Database', 'Khi Redis có quá ít khóa', 'Khi người dùng đổi mật khẩu', 'Khi PostgreSQL bật WAL'],
+      correctIndex: 0,
+      explanationMd: 'Có thể phòng tránh bằng distributed lock (singleflight) hoặc làm mới sớm trước khi hết TTL.',
+    },
+    {
+      prompt: 'Vì sao các tác vụ gửi email hoặc bóc tách PDF nên đẩy sang hàng đợi BullMQ thay vì chạy đồng bộ trong API?',
+      options: ['Giữ độ trễ phản hồi API dưới vài chục mili-giây và có cơ chế tự retry có backoff khi tác vụ lỗi', 'Để tiêu tốn nhiều RAM hơn', 'Vì Node.js không có giao thức HTTP', 'Để mất dữ liệu khi restart'],
+      correctIndex: 0,
+      explanationMd: 'Tách biệt I/O chậm sang Worker giúp API chính luôn ổn định dưới tải cao.',
+    },
+    {
+      prompt: 'Khi cập nhật dữ liệu khóa học ở Admin, làm sao tránh để Redis trả về dữ liệu cũ quá lâu?',
+      options: ['Chủ động vô hiệu hóa (invalidate/delete) các key cache liên quan trong luồng cập nhật và luôn đặt TTL hợp lý', 'Khởi động lại máy chủ vật lý', 'Cấm Admin sửa nội dung', 'Đặt TTL bằng vô cực'],
+      correctIndex: 0,
+      explanationMd: 'Explicit invalidation kết hợp TTL hữu hạn cân bằng giữa hiệu năng và độ tươi mới dữ liệu.',
+    },
+  ]);
+
+  const swe5Items = buildSessionQuizItems(quizSwe5!.id, 5, 'JWT RBAC & Docker Production', skNode!.id, skDocker!.id, [
+    {
+      prompt: 'Kiểm soát truy cập dựa trên vai trò (RBAC) ở Backend cần kiểm tra điều gì ngoài chữ ký JWT hợp lệ?',
+      options: ['Kiểm tra đúng vai trò (`ADMIN`/`INSTRUCTOR`/`STUDENT`) và quyền sở hữu tài nguyên cụ thể (Ownership/Enrollment)', 'Chỉ kiểm tra tên trình duyệt', 'Chỉ kiểm tra màu nền giao diện', 'Tin tưởng mọi tham số `userId` từ query string'],
+      correctIndex: 0,
+      explanationMd: 'Xác thực (Authentication) chỉ biết bạn là ai; phân quyền (Authorization) mới quyết định bạn được làm gì.',
+    },
+    {
+      prompt: 'Lợi ích của Multi-stage Dockerfile cho ứng dụng Node.js/TypeScript là gì?',
+      options: ['Loại bỏ devDependencies và công cụ biên dịch khỏi image cuối, giảm kích thước image và bề mặt tấn công', 'Làm kích thước Docker image lớn hơn gấp 10 lần', 'Chạy thêm trình duyệt Chrome bên trong API container', 'Không cần file package.json'],
+      correctIndex: 0,
+      explanationMd: 'Image gọn nhẹ giúp deploy nhanh hơn và an toàn hơn trong Production.',
+    },
+    {
+      prompt: 'Rate Limiting theo IP/Account trên Redis bảo vệ API đăng nhập khỏi hình thức tấn công nào?',
+      options: ['Tấn công dò mật khẩu tự động (Brute-force / Credential Stuffing)', 'Lỗi chính tả HTML', 'Tấn công rút dây mạng vật lý', 'Lỗi tràn bộ nhớ CSS'],
+      correctIndex: 0,
+      explanationMd: 'Giới hạn tần suất gọi API ngăn chặn lạm dụng tài nguyên và dò quét thông tin đăng nhập.',
+    },
+    {
+      prompt: 'Nguyên tắc Least Privilege khi chạy container Docker trong Production là gì?',
+      options: ['Chạy tiến trình ứng dụng bằng user không có quyền root (`USER node`)', 'Luôn chạy mọi container với quyền `root` và `--privileged`', 'Lưu mật khẩu database trực tiếp trong Dockerfile', 'Mở toàn bộ port 1-65535 ra Internet'],
+      correctIndex: 0,
+      explanationMd: 'Giảm thiểu thiệt hại nếu tiến trình ứng dụng bị khai thác lỗ hổng.',
+    },
+  ]);
+
+  const swe6Items = buildSessionQuizItems(quizSwe6!.id, 6, 'Load Testing & Kiến trúc Phân tán', skDocker!.id, skSysDesign!.id, [
+    {
+      prompt: 'Trong kiểm thử chịu tải bằng k6, chỉ số `p95 latency = 180ms` có ý nghĩa gì?',
+      options: ['95% tổng số request được phục vụ hoàn tất trong thời gian <= 180ms', 'Chỉ có 95 người dùng được truy cập', '5% request bị lỗi HTTP 500', 'Độ trễ trung bình là 180 giây'],
+      correctIndex: 0,
+      explanationMd: 'Percentile (p95, p99) phản ánh chính xác trải nghiệm ở đuôi phân phối mà giá trị trung bình hay che khuất.',
+    },
+    {
+      prompt: 'Graceful Shutdown khi nhận tín hiệu `SIGTERM` giúp Backend tránh vấn đề gì khi rolling deploy?',
+      options: ['Ngừng nhận kết nối mới và chờ các request đang chạy hoàn tất rồi mới đóng DB pool, tránh lỗi rớt giao dịch giữa chừng', 'Xóa sạch toàn bộ dữ liệu trước khi tắt', 'Tăng tốc độ quạt tản nhiệt', 'Tự động đổi tên miền'],
+      correctIndex: 0,
+      explanationMd: 'Zero-downtime deployment đòi hỏi ứng dụng xử lý dứt điểm các giao dịch in-flight.',
+    },
+    {
+      prompt: 'Circuit Breaker bảo vệ hệ thống thế nào khi một microservice phụ thuộc (ví dụ AI Service) bị treo kéo dài?',
+      options: ['Ngắt mạch nhanh (fail-fast) sang cơ chế dự phòng thay vì giữ kết nối chờ timeout gây sập dây chuyền toàn hệ thống', 'Tự động gửi thêm 1000 request mỗi giây tới dịch vụ đang lỗi', 'Xóa cơ sở dữ liệu chính', 'Tắt tường lửa'],
+      correctIndex: 0,
+      explanationMd: 'Circuit Breaker cô lập lỗi cục bộ để bảo vệ tính sẵn sàng chung.',
+    },
+    {
+      prompt: 'Healthcheck endpoint `/health` trả về trạng thái `200 OK` khi kiểm tra kết nối DB thành công dùng để làm gì?',
+      options: ['Cho Load Balancer / Docker / Kubernetes biết container đã sẵn sàng nhận lưu lượng thật', 'Để hiển thị quảng cáo', 'Để reset mật khẩu Admin', 'Để tải video bài giảng'],
+      correctIndex: 0,
+      explanationMd: 'Readiness/Liveness probe đảm bảo traffic chỉ điều hướng tới các instance khỏe mạnh.',
+    },
+  ]);
+
+  const finalExamSweItems = buildSessionQuizItems(
+    finalExamSweK01!.id,
+    6,
+    'Sát hạch Kiến trúc Backend',
+    skSysDesign!.id,
+    skNode!.id,
+    [
+      {
+        skillId: skNode!.id,
+        prompt: 'Trong kiến trúc Clean Layered, tầng Service nên giao tiếp với tầng Repository thông qua điều gì để dễ kiểm thử?',
+        options: ['Hợp đồng kiểu dữ liệu rõ ràng và tiêm phụ thuộc (Dependency Injection)', 'Biến toàn cục `window`', 'Đọc trực tiếp biến môi trường trong React', 'Lệnh `eval()`'],
+        correctIndex: 0,
+        explanationMd: 'Tách biệt giao diện tầng giúp thay thế hoặc mock Repository sạch sẽ khi viết test.',
+      },
+      {
+        skillId: skSqlVec!.id,
+        prompt: 'Kết hợp `SELECT ... FOR UPDATE` cùng `UNIQUE(gateway_txn_id)` giải quyết vấn đề gì khi 2 webhook đến cùng một mili-giây?',
+        options: ['Đảm bảo chỉ có duy nhất 1 giao dịch kích hoạt ghi danh, giao dịch còn lại bị từ chối an toàn (Idempotency)', 'Làm tăng gấp đôi số học viên', 'Gây treo toàn bộ cơ sở dữ liệu vĩnh viễn', 'Bỏ qua bước kiểm tra chữ ký'],
+        correctIndex: 0,
+        explanationMd: 'Phòng chống Race Condition và Double-Spend ở mức ACID tuyệt đối.',
+      },
+      {
+        skillId: skSysDesign!.id,
+        prompt: 'Khi Redis gặp sự cố tạm thời không thể kết nối trong luồng đọc danh mục công khai (Cache-Aside), hệ thống nên hành xử thế nào?',
+        options: ['Ghi log cảnh báo và fallback đọc trực tiếp từ PostgreSQL (Graceful Degradation)', 'Sập toàn bộ trang chủ với HTTP 500', 'Xóa toàn bộ bảng courses', 'Đăng xuất tất cả người dùng'],
+        correctIndex: 0,
+        explanationMd: 'Cache là lớp tăng tốc chứ không phải nguồn chân lý duy nhất của dữ liệu.',
+      },
+      {
+        skillId: skDocker!.id,
+        prompt: 'Tại sao cần tách `healthcheck` cho PostgreSQL và Redis với `condition: service_healthy` trong Docker Compose?',
+        options: ['Ngăn API container khởi chạy và crash khi DB chưa mở cổng hoặc chưa khởi tạo xong', 'Để làm file docker-compose.yml dài hơn', 'Để tắt log JSON', 'Để bỏ qua biến môi trường'],
+        correctIndex: 0,
+        explanationMd: 'Kiểm soát đúng thứ tự sẵn sàng dịch vụ khi khởi động cụm container.',
+      },
+      {
+        skillId: skNode!.id,
+        prompt: 'Tại sao Refresh Token hoặc Access Token không nên lộ trong URL query string ở các API REST thông thường?',
+        options: ['Vì URL dễ bị lưu lại trong lịch sử trình duyệt, log proxy và header Referer', 'Vì URL không chứa được chữ cái Latinh', 'Vì Express cấm đọc `req.query`', 'Vì trình duyệt tự động mã hóa query string thành PDF'],
+        correctIndex: 0,
+        explanationMd: 'Luôn truyền token qua `Authorization: Bearer` header hoặc cookie `HttpOnly`.',
+      },
+    ]
+  );
+
   const allInsertedItems = await db
     .insert(assessmentItems)
     .values([
@@ -3492,118 +4495,124 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       ...sess5Items,
       ...sess6Items,
       ...finalExamAiItems,
+      ...py1Items,
+      ...py2Items,
+      ...py3Items,
+      ...py4Items,
+      ...py5Items,
+      ...py6Items,
       ...finalExamPyItems,
+      ...swe1Items,
+      ...swe2Items,
+      ...swe3Items,
+      ...swe4Items,
+      ...swe5Items,
+      ...swe6Items,
+      ...finalExamSweItems,
     ])
     .returning();
 
-  const s1ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess1!.id);
-  const s2ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess2!.id);
-  const s3ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess3!.id);
-  const s4ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess4!.id);
-  const s5ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess5!.id);
-  const s6ItemRows = allInsertedItems.filter((i) => i.assessmentId === quizSess6!.id);
-  const finalAiItemRows = allInsertedItems.filter((i) => i.assessmentId === finalExamAiK01!.id);
-  const finalPyItemRows = allInsertedItems.filter((i) => i.assessmentId === finalExamPyK04!.id);
+  const itemsByAssessmentId = new Map<number, typeof allInsertedItems>();
+  for (const item of allInsertedItems) {
+    const bucket = itemsByAssessmentId.get(item.assessmentId) ?? [];
+    bucket.push(item);
+    itemsByAssessmentId.set(item.assessmentId, bucket);
+  }
+  const getItems = (assessmentId: number) => itemsByAssessmentId.get(assessmentId) ?? [];
+
+  const skillNamesById = new Map<number, string>(insertedSkills.map((s) => [s.id, s.name]));
 
   // =========================================================================
-  // 16. ASSESSMENT ATTEMPTS & SUBMISSION ANSWERS & PROCTORING EVENTS
+  // 16. ASSESSMENT ATTEMPTS & SUBMISSION ANSWERS (100% Complete!) & PROCTORING
   // =========================================================================
-  const insertedAttempts = await db
-    .insert(assessmentAttempts)
-    .values([
-      {
+  const attemptSpecs = [
+    // --- Nguyễn Văn An: AI-ENG-2026-K01 (6/6 Quizzes + Final Exam) ---
+    {
+      key: 'attAnS1',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess1!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-10T15:05:00Z'),
-        submittedAt: new Date('2026-03-10T15:16:00Z'),
-        gradingCompletedAt: new Date('2026-03-10T15:16:01Z'),
-      },
-      {
+        items: getItems(quizSess1!.id),
+        wrongIndices: [7],
+        startedAt: new Date('2026-03-03T15:05:00Z'),
+        submittedAt: new Date('2026-03-03T15:16:00Z'),
+        gradingCompletedAt: new Date('2026-03-03T15:16:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnS2',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess2!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '80.00',
-        maxPossibleScore: '100.00',
-        scorePct: '80.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-12T15:15:00Z'),
-        submittedAt: new Date('2026-03-12T15:27:00Z'),
-        gradingCompletedAt: new Date('2026-03-12T15:27:01Z'),
-      },
-      {
+        items: getItems(quizSess2!.id),
+        wrongIndices: [3, 8],
+        startedAt: new Date('2026-03-05T15:15:00Z'),
+        submittedAt: new Date('2026-03-05T15:27:00Z'),
+        gradingCompletedAt: new Date('2026-03-05T15:27:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnS3',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess3!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-17T15:25:00Z'),
-        submittedAt: new Date('2026-03-17T15:36:00Z'),
-        gradingCompletedAt: new Date('2026-03-17T15:36:01Z'),
-      },
-      {
+        items: getItems(quizSess3!.id),
+        wrongIndices: [9],
+        startedAt: new Date('2026-03-10T15:25:00Z'),
+        submittedAt: new Date('2026-03-10T15:36:00Z'),
+        gradingCompletedAt: new Date('2026-03-10T15:36:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnS4',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess4!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-24T15:20:00Z'),
-        submittedAt: new Date('2026-03-24T15:32:00Z'),
-        gradingCompletedAt: new Date('2026-03-24T15:32:01Z'),
-      },
-      {
+        items: getItems(quizSess4!.id),
+        wrongIndices: [5],
+        startedAt: new Date('2026-03-12T15:20:00Z'),
+        submittedAt: new Date('2026-03-12T15:32:00Z'),
+        gradingCompletedAt: new Date('2026-03-12T15:32:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnS5',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess5!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '100.00',
-        maxPossibleScore: '100.00',
-        scorePct: '100.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-04-02T14:55:00Z'),
-        submittedAt: new Date('2026-04-02T15:06:00Z'),
-        gradingCompletedAt: new Date('2026-04-02T15:06:01Z'),
-      },
-      {
+        items: getItems(quizSess5!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-03-17T14:55:00Z'),
+        submittedAt: new Date('2026-03-17T15:06:00Z'),
+        gradingCompletedAt: new Date('2026-03-17T15:06:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnS6',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess6!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-04-03T10:05:00Z'),
-        submittedAt: new Date('2026-04-03T10:15:00Z'),
-        gradingCompletedAt: new Date('2026-04-03T10:15:01Z'),
-      },
-      {
+        items: getItems(quizSess6!.id),
+        wrongIndices: [8],
+        startedAt: new Date('2026-03-19T15:05:00Z'),
+        submittedAt: new Date('2026-03-19T15:15:00Z'),
+        gradingCompletedAt: new Date('2026-03-19T15:15:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnFinalAi',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: finalExamAiK01!.id,
         accountId: stuAnAcc!.id,
-        attemptNumber: 1,
-        totalScore: '92.00',
-        maxPossibleScore: '100.00',
-        scorePct: '92.00',
-        isPassed: true,
-        totalRiskScore: '10.00',
+        items: getItems(finalExamAiK01!.id),
+        wrongIndices: [11, 21],
+        totalRiskScore: '20.00',
         integrityStatus: 'CLEARED_BY_INSTRUCTOR',
         verdictNote: 'Chỉ chuyển tab thoáng qua 1 giây do thông báo hệ điều hành, xác nhận hợp lệ.',
         verdictBy: instKhoaAcc!.id,
@@ -3611,250 +4620,560 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         startedAt: new Date('2026-04-03T11:00:00Z'),
         submittedAt: new Date('2026-04-03T11:38:00Z'),
         gradingCompletedAt: new Date('2026-04-03T11:38:02Z'),
-      },
-      {
-        assessmentId: quizSess1!.id,
+        skillNamesById,
+      }),
+    },
+
+    // --- Nguyễn Văn An: SWE-ARCH-2026-K01 (Buổi 1-2 passed) ---
+    {
+      key: 'attAnSwe1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSwe1!.id,
+        accountId: stuAnAcc!.id,
+        items: getItems(quizSwe1!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-03-25T15:10:00Z'),
+        submittedAt: new Date('2026-03-25T15:20:00Z'),
+        gradingCompletedAt: new Date('2026-03-25T15:20:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attAnSwe2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSwe2!.id,
+        accountId: stuAnAcc!.id,
+        items: getItems(quizSwe2!.id),
+        wrongIndices: [2],
+        startedAt: new Date('2026-03-29T15:20:00Z'),
+        submittedAt: new Date('2026-03-29T15:30:00Z'),
+        gradingCompletedAt: new Date('2026-03-29T15:30:01Z'),
+        skillNamesById,
+      }),
+    },
+
+    // --- Lê Hoàng Mai: PY-SQL-2026-K04 (6/6 Quizzes + Final Exam) + AI-K01 (Buổi 1-5) ---
+    {
+      key: 'attMaiPy1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy1!.id,
         accountId: stuMaiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-10T16:00:00Z'),
-        submittedAt: new Date('2026-03-10T16:12:00Z'),
-        gradingCompletedAt: new Date('2026-03-10T16:12:01Z'),
-      },
-      {
-        assessmentId: quizSess2!.id,
+        items: getItems(quizPy1!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-05T15:05:00Z'),
+        submittedAt: new Date('2026-01-05T15:13:00Z'),
+        gradingCompletedAt: new Date('2026-01-05T15:13:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiPy2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy2!.id,
         accountId: stuMaiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-12T16:15:00Z'),
-        submittedAt: new Date('2026-03-12T16:28:00Z'),
-        gradingCompletedAt: new Date('2026-03-12T16:28:01Z'),
-      },
-      {
-        assessmentId: quizSess3!.id,
+        items: getItems(quizPy2!.id),
+        wrongIndices: [3],
+        startedAt: new Date('2026-01-08T15:05:00Z'),
+        submittedAt: new Date('2026-01-08T15:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-08T15:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiPy3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy3!.id,
         accountId: stuMaiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '80.00',
-        maxPossibleScore: '100.00',
-        scorePct: '80.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-17T16:10:00Z'),
-        submittedAt: new Date('2026-03-17T16:22:00Z'),
-        gradingCompletedAt: new Date('2026-03-17T16:22:01Z'),
-      },
-      {
-        assessmentId: quizSess4!.id,
+        items: getItems(quizPy3!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-12T15:05:00Z'),
+        submittedAt: new Date('2026-01-12T15:13:00Z'),
+        gradingCompletedAt: new Date('2026-01-12T15:13:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiPy4',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy4!.id,
         accountId: stuMaiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '80.00',
-        maxPossibleScore: '100.00',
-        scorePct: '80.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-24T16:10:00Z'),
-        submittedAt: new Date('2026-03-24T16:23:00Z'),
-        gradingCompletedAt: new Date('2026-03-24T16:23:01Z'),
-      },
-      {
+        items: getItems(quizPy4!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-15T15:05:00Z'),
+        submittedAt: new Date('2026-01-15T15:13:00Z'),
+        gradingCompletedAt: new Date('2026-01-15T15:13:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiPy5',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy5!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizPy5!.id),
+        wrongIndices: [2],
+        startedAt: new Date('2026-01-19T15:05:00Z'),
+        submittedAt: new Date('2026-01-19T15:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-19T15:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiPy6',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy6!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizPy6!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-22T15:05:00Z'),
+        submittedAt: new Date('2026-01-22T15:13:00Z'),
+        gradingCompletedAt: new Date('2026-01-22T15:13:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiFinalPy',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: finalExamPyK04!.id,
         accountId: stuMaiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '90.00',
-        maxPossibleScore: '100.00',
-        scorePct: '90.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
+        items: getItems(finalExamPyK04!.id),
+        wrongIndices: [4],
         startedAt: new Date('2026-02-25T13:00:00Z'),
         submittedAt: new Date('2026-02-25T13:24:00Z'),
         gradingCompletedAt: new Date('2026-02-25T13:24:01Z'),
-      },
-      {
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiAi1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess1!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizSess1!.id),
+        wrongIndices: [2],
+        startedAt: new Date('2026-03-03T16:00:00Z'),
+        submittedAt: new Date('2026-03-03T16:12:00Z'),
+        gradingCompletedAt: new Date('2026-03-03T16:12:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiAi2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess2!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizSess2!.id),
+        wrongIndices: [6],
+        startedAt: new Date('2026-03-05T16:15:00Z'),
+        submittedAt: new Date('2026-03-05T16:28:00Z'),
+        gradingCompletedAt: new Date('2026-03-05T16:28:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiAi3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess3!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizSess3!.id),
+        wrongIndices: [1, 4],
+        startedAt: new Date('2026-03-10T16:10:00Z'),
+        submittedAt: new Date('2026-03-10T16:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-10T16:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiAi4',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess4!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizSess4!.id),
+        wrongIndices: [3, 7],
+        startedAt: new Date('2026-03-12T16:10:00Z'),
+        submittedAt: new Date('2026-03-12T16:23:00Z'),
+        gradingCompletedAt: new Date('2026-03-12T16:23:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attMaiAi5',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess5!.id,
+        accountId: stuMaiAcc!.id,
+        items: getItems(quizSess5!.id),
+        wrongIndices: [0],
+        startedAt: new Date('2026-03-17T16:10:00Z'),
+        submittedAt: new Date('2026-03-17T16:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-17T16:22:01Z'),
+        skillNamesById,
+      }),
+    },
+
+    // --- Trần Thu Hà: AI-ENG-2026-K01 (Buổi 1-3 passed, Buổi 4 failed 60%) ---
+    {
+      key: 'attHaAi1',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess1!.id,
         accountId: stuHaAcc!.id,
-        attemptNumber: 1,
-        totalScore: '80.00',
-        maxPossibleScore: '100.00',
-        scorePct: '80.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
-        startedAt: new Date('2026-03-11T09:10:00Z'),
-        submittedAt: new Date('2026-03-11T09:22:00Z'),
-        gradingCompletedAt: new Date('2026-03-11T09:22:01Z'),
-      },
-      {
+        items: getItems(quizSess1!.id),
+        wrongIndices: [1, 8],
+        startedAt: new Date('2026-03-04T09:10:00Z'),
+        submittedAt: new Date('2026-03-04T09:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-04T09:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attHaAi2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess2!.id,
+        accountId: stuHaAcc!.id,
+        items: getItems(quizSess2!.id),
+        wrongIndices: [0, 5],
+        startedAt: new Date('2026-03-06T10:10:00Z'),
+        submittedAt: new Date('2026-03-06T10:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-06T10:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attHaAi3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess3!.id,
+        accountId: stuHaAcc!.id,
+        items: getItems(quizSess3!.id),
+        wrongIndices: [4, 9],
+        startedAt: new Date('2026-03-11T11:10:00Z'),
+        submittedAt: new Date('2026-03-11T11:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-11T11:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attHaAi4',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: quizSess4!.id,
         accountId: stuHaAcc!.id,
-        attemptNumber: 1,
-        totalScore: '60.00',
-        maxPossibleScore: '100.00',
-        scorePct: '60.00',
-        isPassed: false,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
+        items: getItems(quizSess4!.id),
+        wrongIndices: [1, 3, 5, 7],
         startedAt: new Date('2026-03-26T14:20:00Z'),
         submittedAt: new Date('2026-03-26T14:33:00Z'),
         gradingCompletedAt: new Date('2026-03-26T14:33:01Z'),
-      },
-      {
+        skillNamesById,
+      }),
+    },
+
+    // --- Phạm Minh Quân: AI-ENG-2026-K01 (6/6 Quizzes passed before 2026-04-01 Final Exam FLAGGED) ---
+    {
+      key: 'attQuanAi1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess1!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess1!.id),
+        wrongIndices: [2, 6],
+        startedAt: new Date('2026-03-04T14:10:00Z'),
+        submittedAt: new Date('2026-03-04T14:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-04T14:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanAi2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess2!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess2!.id),
+        wrongIndices: [1, 7],
+        startedAt: new Date('2026-03-07T08:40:00Z'),
+        submittedAt: new Date('2026-03-07T08:52:00Z'),
+        gradingCompletedAt: new Date('2026-03-07T08:52:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanAi3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess3!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess3!.id),
+        wrongIndices: [3, 8],
+        startedAt: new Date('2026-03-12T09:10:00Z'),
+        submittedAt: new Date('2026-03-12T09:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-12T09:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanAi4',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess4!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess4!.id),
+        wrongIndices: [0, 5],
+        startedAt: new Date('2026-03-15T11:10:00Z'),
+        submittedAt: new Date('2026-03-15T11:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-15T11:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanAi5',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess5!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess5!.id),
+        wrongIndices: [4, 9],
+        startedAt: new Date('2026-03-20T14:10:00Z'),
+        submittedAt: new Date('2026-03-20T14:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-20T14:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanAi6',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSess6!.id,
+        accountId: stuQuanAcc!.id,
+        items: getItems(quizSess6!.id),
+        wrongIndices: [2, 5],
+        startedAt: new Date('2026-03-26T16:10:00Z'),
+        submittedAt: new Date('2026-03-26T16:22:00Z'),
+        gradingCompletedAt: new Date('2026-03-26T16:22:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attQuanSuspended',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: finalExamAiK01!.id,
         accountId: stuQuanAcc!.id,
-        attemptNumber: 1,
-        totalScore: '0.00',
-        maxPossibleScore: '100.00',
-        scorePct: '0.00',
-        isPassed: false,
-        totalRiskScore: '95.00',
+        items: getItems(finalExamAiK01!.id),
+        wrongIndices: [],
+        forceZeroScore: true,
+        totalRiskScore: '105.00',
         integrityStatus: 'FLAGGED',
-        verdictNote: 'Hệ thống phát hiện 3 lần vi phạm liên tiếp (không có mặt, nhiều người, sai khuôn mặt).',
+        verdictNote:
+          'Hệ thống phát hiện 3 lần vi phạm liên tiếp (vắng mặt, nhiều người trong khung hình, sai khuôn mặt).',
         startedAt: new Date('2026-04-01T14:00:00Z'),
         submittedAt: new Date('2026-04-01T14:18:00Z'),
         gradingCompletedAt: new Date('2026-04-01T14:18:01Z'),
-      },
-      {
+        skillNamesById,
+      }),
+    },
+
+    // --- Vũ Đình Khôi: PY-SQL-2026-K04 (6/6 Quizzes + Final Exam) ---
+    {
+      key: 'attKhoiPy1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy1!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy1!.id),
+        wrongIndices: [1],
+        startedAt: new Date('2026-01-05T16:05:00Z'),
+        submittedAt: new Date('2026-01-05T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-05T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiPy2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy2!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy2!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-08T16:05:00Z'),
+        submittedAt: new Date('2026-01-08T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-08T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiPy3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy3!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy3!.id),
+        wrongIndices: [2],
+        startedAt: new Date('2026-01-12T16:05:00Z'),
+        submittedAt: new Date('2026-01-12T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-12T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiPy4',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy4!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy4!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-15T16:05:00Z'),
+        submittedAt: new Date('2026-01-15T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-15T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiPy5',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy5!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy5!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-01-19T16:05:00Z'),
+        submittedAt: new Date('2026-01-19T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-19T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiPy6',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizPy6!.id,
+        accountId: stuKhoiAcc!.id,
+        items: getItems(quizPy6!.id),
+        wrongIndices: [3],
+        startedAt: new Date('2026-01-22T16:05:00Z'),
+        submittedAt: new Date('2026-01-22T16:14:00Z'),
+        gradingCompletedAt: new Date('2026-01-22T16:14:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attKhoiFinalPy',
+      builder: buildAttemptDraftAndAnswerBuilders({
         assessmentId: finalExamPyK04!.id,
         accountId: stuKhoiAcc!.id,
-        attemptNumber: 1,
-        totalScore: '86.00',
-        maxPossibleScore: '100.00',
-        scorePct: '86.00',
-        isPassed: true,
-        totalRiskScore: '0.00',
-        integrityStatus: 'CLEAN',
+        items: getItems(finalExamPyK04!.id),
+        wrongIndices: [2, 7],
         startedAt: new Date('2026-02-25T14:00:00Z'),
         submittedAt: new Date('2026-02-25T14:26:00Z'),
         gradingCompletedAt: new Date('2026-02-25T14:26:01Z'),
+        skillNamesById,
+      }),
+    },
+
+    // --- Hoàng Gia Bảo: SWE-ARCH-2026-K01 (Buổi 1-3 passed) ---
+    {
+      key: 'attBaoSwe1',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSwe1!.id,
+        accountId: stuBaoAcc!.id,
+        items: getItems(quizSwe1!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-03-25T15:35:00Z'),
+        submittedAt: new Date('2026-03-25T15:45:00Z'),
+        gradingCompletedAt: new Date('2026-03-25T15:45:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attBaoSwe2',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSwe2!.id,
+        accountId: stuBaoAcc!.id,
+        items: getItems(quizSwe2!.id),
+        wrongIndices: [1],
+        startedAt: new Date('2026-03-29T16:05:00Z'),
+        submittedAt: new Date('2026-03-29T16:15:00Z'),
+        gradingCompletedAt: new Date('2026-03-29T16:15:01Z'),
+        skillNamesById,
+      }),
+    },
+    {
+      key: 'attBaoSwe3',
+      builder: buildAttemptDraftAndAnswerBuilders({
+        assessmentId: quizSwe3!.id,
+        accountId: stuBaoAcc!.id,
+        items: getItems(quizSwe3!.id),
+        wrongIndices: [],
+        startedAt: new Date('2026-04-01T15:45:00Z'),
+        submittedAt: new Date('2026-04-01T15:55:00Z'),
+        gradingCompletedAt: new Date('2026-04-01T15:55:01Z'),
+        skillNamesById,
+      }),
+    },
+  ];
+
+  const insertedAttempts = await db
+    .insert(assessmentAttempts)
+    .values(attemptSpecs.map((spec) => spec.builder.attemptRow))
+    .returning();
+
+  const attemptByKey = new Map(attemptSpecs.map((spec, idx) => [spec.key, insertedAttempts[idx]!]));
+  const attAnFinalAi = attemptByKey.get('attAnFinalAi')!;
+  const attQuanSuspended = attemptByKey.get('attQuanSuspended')!;
+
+  const allSubmissionAnswers = insertedAttempts.flatMap((att, idx) =>
+    attemptSpecs[idx]!.builder.buildAnswersForAttemptId(att.id)
+  );
+  await db.insert(submissionAnswers).values(allSubmissionAnswers);
+
+  const insertedProctoringEvents = await db
+    .insert(proctoringEvents)
+    .values([
+      {
+        attemptId: attAnFinalAi.id,
+        occurredAt: new Date('2026-04-03T11:14:20Z'),
+        videoOffsetSec: 860,
+        tier: 'EDGE',
+        eventType: 'TAB_HIDDEN',
+        confidence: 0.92,
+        riskDelta: '20.00',
+        snapshotR2Key: 'proctoring/2026/att-an-final-tab-hidden-01.jpg',
+        details: {
+          cosineDistance: 0.14,
+          reviewStatus: 'DISMISSED_FALSE_POSITIVE',
+          reviewedBy: instKhoaAcc!.id,
+        },
+      },
+      {
+        attemptId: attQuanSuspended.id,
+        occurredAt: new Date('2026-04-01T14:05:10Z'),
+        videoOffsetSec: 310,
+        tier: 'EDGE',
+        eventType: 'NO_FACE',
+        confidence: 0.96,
+        riskDelta: '15.00',
+        snapshotR2Key: 'proctoring/2026/att-quan-final-no-face-01.jpg',
+        details: {
+          reviewStatus: 'CONFIRMED_CHEATING',
+          reviewedBy: instKhoaAcc!.id,
+        },
+      },
+      {
+        attemptId: attQuanSuspended.id,
+        occurredAt: new Date('2026-04-01T14:11:45Z'),
+        videoOffsetSec: 705,
+        tier: 'SERVER',
+        eventType: 'MULTI_FACE',
+        confidence: 0.94,
+        riskDelta: '40.00',
+        snapshotR2Key: 'proctoring/2026/att-quan-final-multi-face-02.jpg',
+        details: {
+          cosineDistance: 0.48,
+          reviewStatus: 'CONFIRMED_CHEATING',
+          reviewedBy: instKhoaAcc!.id,
+        },
+      },
+      {
+        attemptId: attQuanSuspended.id,
+        occurredAt: new Date('2026-04-01T14:17:55Z'),
+        videoOffsetSec: 1075,
+        tier: 'SERVER',
+        eventType: 'FACE_MISMATCH',
+        confidence: 0.91,
+        riskDelta: '50.00',
+        snapshotR2Key: 'proctoring/2026/att-quan-final-mismatch-03.jpg',
+        details: {
+          cosineDistance: 0.67,
+          reviewStatus: 'FLAGGED_PENDING_REVIEW',
+        },
       },
     ])
     .returning();
-
-  const [
-    attAnS1,
-    attAnS2,
-    attAnS3,
-    attAnS4,
-    attAnS5,
-    attAnS6,
-    attAnFinalAi,
-    ,
-    ,
-    ,
-    ,
-    attMaiFinalPy,
-    ,
-    ,
-    attQuanSuspended,
-  ] = insertedAttempts;
-
-  const buildSubmissionRows = (
-    attemptId: number,
-    items: typeof allInsertedItems,
-    wrongIndices: number[] = []
-  ) =>
-    items.map((item, idx) => {
-      const gCfg = item.gradingConfig as { correctIndex?: number };
-      const correctIdx = gCfg.correctIndex ?? 0;
-      const isWrong = wrongIndices.includes(idx);
-      const selectedIndex = isWrong ? (correctIdx + 1) % 4 : correctIdx;
-      const pts = isWrong ? '0.00' : String(item.points);
-      return {
-        attemptId,
-        itemId: item.id,
-        responseData: { selectedIndex },
-        gradingStatus: 'AUTO_GRADED' as const,
-        autoScore: pts,
-        finalScore: pts,
-        isCorrect: !isWrong,
-        feedbackMd: item.explanationMd,
-        gradedAt: new Date('2026-04-03T11:38:02Z'),
-      };
-    });
-
-  await db.insert(submissionAnswers).values([
-    ...buildSubmissionRows(attAnS1!.id, s1ItemRows, [7]),
-    ...buildSubmissionRows(attAnS2!.id, s2ItemRows, [3, 8]),
-    ...buildSubmissionRows(attAnS3!.id, s3ItemRows, [9]),
-    ...buildSubmissionRows(attAnS4!.id, s4ItemRows, [5]),
-    ...buildSubmissionRows(attAnS5!.id, s5ItemRows, []),
-    ...buildSubmissionRows(attAnS6!.id, s6ItemRows, [8]),
-    ...buildSubmissionRows(attAnFinalAi!.id, finalAiItemRows, [11, 21]),
-    ...buildSubmissionRows(attMaiFinalPy!.id, finalPyItemRows, [4]),
-  ]);
-
-  await db.insert(proctoringEvents).values([
-    {
-      attemptId: attAnFinalAi!.id,
-      occurredAt: new Date('2026-04-03T11:14:20Z'),
-      videoOffsetSec: 860,
-      tier: 'EDGE',
-      eventType: 'TAB_SWITCH',
-      confidence: 0.92,
-      riskDelta: '10.00',
-      snapshotR2Key: 'proctoring/2026/att-an-final-tab-switch-01.jpg',
-      details: {
-        cosineDistance: 0.14,
-        reviewStatus: 'DISMISSED_FALSE_POSITIVE',
-        reviewedBy: instKhoaAcc!.id,
-      },
-    },
-    {
-      attemptId: attQuanSuspended!.id,
-      occurredAt: new Date('2026-04-01T14:05:10Z'),
-      videoOffsetSec: 310,
-      tier: 'EDGE',
-      eventType: 'NO_FACE',
-      confidence: 0.96,
-      riskDelta: '30.00',
-      snapshotR2Key: 'proctoring/2026/att-quan-final-no-face-01.jpg',
-      details: {
-        reviewStatus: 'CONFIRMED_CHEATING',
-        reviewedBy: instKhoaAcc!.id,
-      },
-    },
-    {
-      attemptId: attQuanSuspended!.id,
-      occurredAt: new Date('2026-04-01T14:11:45Z'),
-      videoOffsetSec: 705,
-      tier: 'SERVER',
-      eventType: 'MULTIPLE_FACES',
-      confidence: 0.94,
-      riskDelta: '35.00',
-      snapshotR2Key: 'proctoring/2026/att-quan-final-multi-face-02.jpg',
-      details: {
-        cosineDistance: 0.48,
-        reviewStatus: 'CONFIRMED_CHEATING',
-        reviewedBy: instKhoaAcc!.id,
-      },
-    },
-    {
-      attemptId: attQuanSuspended!.id,
-      occurredAt: new Date('2026-04-01T14:17:55Z'),
-      videoOffsetSec: 1075,
-      tier: 'SERVER',
-      eventType: 'FACE_MISMATCH',
-      confidence: 0.91,
-      riskDelta: '30.00',
-      snapshotR2Key: 'proctoring/2026/att-quan-final-mismatch-03.jpg',
-      details: {
-        cosineDistance: 0.67,
-        reviewStatus: 'FLAGGED_PENDING_REVIEW',
-      },
-    },
-  ]);
 
   // =========================================================================
   // 17. DISCUSSION THREADS, POSTS & NOTIFICATIONS
@@ -3868,7 +5187,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         title: 'Cách chọn hằng số làm mượt k trong công thức Reciprocal Rank Fusion (RRF)?',
         videoTimestampSec: 1420,
         isResolved: true,
-        createdAt: new Date('2026-03-17T15:40:00Z'),
+        createdAt: new Date('2026-03-10T15:40:00Z'),
       },
       {
         sessionId: sess3!.id,
@@ -3877,7 +5196,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
           'Làm sao kết hợp bộ lọc quyền truy cập (Pre-filtering RBAC) với chỉ mục HNSW mà không bị giảm Recall?',
         videoTimestampSec: 2680,
         isResolved: true,
-        createdAt: new Date('2026-03-18T09:15:00Z'),
+        createdAt: new Date('2026-03-11T09:15:00Z'),
       },
       {
         sessionId: sess4!.id,
@@ -3885,7 +5204,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         title: 'Xử lý ngoại lệ ValidationError khi LLM truyền sai kiểu dữ liệu vào Pydantic Tool?',
         videoTimestampSec: 1890,
         isResolved: true,
-        createdAt: new Date('2026-03-25T10:20:00Z'),
+        createdAt: new Date('2026-03-13T10:20:00Z'),
       },
       {
         sessionId: sess5!.id,
@@ -3893,7 +5212,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         title: 'Ngưỡng Cosine Similarity bao nhiêu là an toàn cho Semantic Cache trên Redis?',
         videoTimestampSec: 2150,
         isResolved: false,
-        createdAt: new Date('2026-04-02T15:30:00Z'),
+        createdAt: new Date('2026-03-17T15:30:00Z'),
       },
     ])
     .returning();
@@ -3906,7 +5225,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         'Thầy Khoa và anh Nam cho em hỏi: Trong bài giảng ở phút `23:40`, mình đặt hằng số `k = 60` trong công thức RRF. Nếu kho tài liệu của doanh nghiệp có rất nhiều mã lỗi kỹ thuật ngắn thì mình giảm `k` xuống `20` hay giữ nguyên `60` sẽ tốt hơn ạ?',
       isAiGenerated: false,
       isInstructorVerified: false,
-      createdAt: new Date('2026-03-17T15:40:00Z'),
+      createdAt: new Date('2026-03-10T15:40:00Z'),
     },
     {
       threadId: thread1!.id,
@@ -3916,7 +5235,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       isAiGenerated: true,
       isInstructorVerified: true,
       verifiedBy: instKhoaAcc!.id,
-      createdAt: new Date('2026-03-17T15:40:08Z'),
+      createdAt: new Date('2026-03-10T15:40:08Z'),
     },
     {
       threadId: thread1!.id,
@@ -3926,7 +5245,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       isAiGenerated: false,
       isInstructorVerified: true,
       verifiedBy: instKhoaAcc!.id,
-      createdAt: new Date('2026-03-17T16:05:00Z'),
+      createdAt: new Date('2026-03-10T16:05:00Z'),
     },
     {
       threadId: thread2!.id,
@@ -3935,7 +5254,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         'Khi em thêm điều kiện `WHERE cohort_id = 1 AND visibility = \'ENROLLED_ONLY\'` vào truy vấn `ORDER BY embedding <=> $1 LIMIT 5`, có trường hợp pgvector quét đồ thị HNSW bị thiếu ứng viên không ạ?',
       isAiGenerated: false,
       isInstructorVerified: false,
-      createdAt: new Date('2026-03-18T09:15:00Z'),
+      createdAt: new Date('2026-03-11T09:15:00Z'),
     },
     {
       threadId: thread2!.id,
@@ -3945,7 +5264,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       isAiGenerated: false,
       isInstructorVerified: true,
       verifiedBy: taNamAcc!.id,
-      createdAt: new Date('2026-03-18T09:42:00Z'),
+      createdAt: new Date('2026-03-11T09:42:00Z'),
     },
     {
       threadId: thread3!.id,
@@ -3954,7 +5273,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         'Em thử truyền ngày tháng dạng `"25/03/2026"` vào công cụ yêu cầu chuẩn ISO `"2026-03-25"` thì Pydantic báo lỗi `ValidationError`. Làm sao để Agent tự sửa lại mà không làm gián đoạn cuộc hội thoại của người dùng ạ?',
       isAiGenerated: false,
       isInstructorVerified: false,
-      createdAt: new Date('2026-03-25T10:20:00Z'),
+      createdAt: new Date('2026-03-13T10:20:00Z'),
     },
     {
       threadId: thread3!.id,
@@ -3964,7 +5283,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       isAiGenerated: true,
       isInstructorVerified: true,
       verifiedBy: instKhoaAcc!.id,
-      createdAt: new Date('2026-03-25T10:20:06Z'),
+      createdAt: new Date('2026-03-13T10:20:06Z'),
     },
     {
       threadId: thread4!.id,
@@ -3973,7 +5292,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         'Ở Buổi 5 mình dùng Redis làm Semantic Cache cho các câu hỏi thường gặp của học viên. Nếu hai câu hỏi chỉ khác nhau ở tên buổi học (ví dụ *"Tóm tắt Buổi 2"* và *"Tóm tắt Buổi 3"*) thì vector của chúng rất gần nhau (`~0.93`). Làm sao tránh trả nhầm cache của Buổi 2 cho người hỏi Buổi 3 ạ?',
       isAiGenerated: false,
       isInstructorVerified: false,
-      createdAt: new Date('2026-04-02T15:30:00Z'),
+      createdAt: new Date('2026-03-17T15:30:00Z'),
     },
     {
       threadId: thread4!.id,
@@ -3982,7 +5301,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         'Dựa trên **Buổi 5 (mốc 35:50 · Slide Trang 20)**: Khi lưu Semantic Cache cho Trợ giảng Buổi học (`SESSION_TUTOR`), bạn luôn phải ghép khóa phân vùng ngữ cảnh (`namespace = f"session:{session_id}"`) làm bộ lọc bắt buộc trước khi so khớp độ tương đồng vector `>= 0.94`. Nhờ đó câu hỏi ở Buổi 3 sẽ chỉ tìm trong không gian cache của Buổi 3.',
       isAiGenerated: true,
       isInstructorVerified: false,
-      createdAt: new Date('2026-04-02T15:30:05Z'),
+      createdAt: new Date('2026-03-17T15:30:05Z'),
     },
   ]);
 
@@ -4003,17 +5322,26 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       body: 'Câu hỏi "Cách chọn hằng số làm mượt k trong công thức RRF" tại Buổi 3 đã được giảng viên giải đáp chi tiết.',
       metadata: { sessionId: sess3!.id, threadId: thread1!.id },
       isRead: true,
-      readAt: new Date('2026-03-17T18:00:00Z'),
-      createdAt: new Date('2026-03-17T16:06:00Z'),
+      readAt: new Date('2026-03-10T18:00:00Z'),
+      createdAt: new Date('2026-03-10T16:06:00Z'),
     },
     {
-      recipientId: stuMaiAcc!.id,
+      recipientId: stuAnAcc!.id,
       type: 'LIVE_SESSION_REMINDER',
-      title: 'Buổi 5 đang diễn ra trực tiếp (LIVE): Đánh giá RAG với Ragas & Guardrails',
-      body: 'Phòng học trực tuyến Buổi 5 của lớp AI-ENG-2026-K01 đã mở. Hãy tham gia để thực hành trực tiếp cùng TS. Lê Minh Khoa.',
-      metadata: { sessionId: sess5!.id, cohortCode: 'AI-ENG-2026-K01' },
+      title: 'Buổi 4 đang diễn ra trực tiếp (LIVE): Redis Cache-Aside & Hàng đợi BullMQ',
+      body: 'Phòng học trực tuyến Buổi 4 của lớp SWE-ARCH-2026-K01 đã mở. Hãy tham gia cùng ThS. Nguyễn Thu Hà.',
+      metadata: { sessionId: sessSwe4!.id, cohortCode: 'SWE-ARCH-2026-K01' },
       isRead: false,
-      createdAt: new Date('2026-04-02T12:25:00Z'),
+      createdAt: new Date('2026-04-05T12:25:00Z'),
+    },
+    {
+      recipientId: stuBaoAcc!.id,
+      type: 'LIVE_SESSION_REMINDER',
+      title: 'Buổi 4 đang diễn ra trực tiếp (LIVE): Redis Cache-Aside & Hàng đợi BullMQ',
+      body: 'Phòng học trực tuyến Buổi 4 của lớp SWE-ARCH-2026-K01 đã mở. Hãy tham gia thực hành trực tiếp cùng ThS. Nguyễn Thu Hà.',
+      metadata: { sessionId: sessSwe4!.id, cohortCode: 'SWE-ARCH-2026-K01' },
+      isRead: false,
+      createdAt: new Date('2026-04-05T12:25:00Z'),
     },
     {
       recipientId: stuHaAcc!.id,
@@ -4029,7 +5357,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       type: 'PROCTORING_ALERT',
       title: 'Cảnh báo: Bài thi sát hạch của bạn bị tạm đình chỉ do vi phạm quy chế webcam',
       body: 'Hệ thống giám sát AI ghi nhận 3 lần vi phạm liên tiếp trong lượt thi ngày 01/04/2026. Hội đồng học vụ đang tiến hành hậu kiểm ảnh chụp bằng chứng.',
-      metadata: { attemptId: attQuanSuspended!.id },
+      metadata: { attemptId: attQuanSuspended.id },
       isRead: false,
       createdAt: new Date('2026-04-01T14:19:00Z'),
     },
@@ -4038,7 +5366,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       type: 'PROCTORING_REVIEW_NEEDED',
       title: 'Cần hậu kiểm 1 biên bản vi phạm quy chế thi cuối khóa (AI-ENG-2026-K01)',
       body: 'Học viên Phạm Minh Quân có 1 sự kiện FACE_MISMATCH đang chờ giảng viên xác nhận tại bảng điều khiển Giám sát Thi cử.',
-      metadata: { attemptId: attQuanSuspended!.id },
+      metadata: { attemptId: attQuanSuspended.id },
       isRead: false,
       createdAt: new Date('2026-04-01T14:20:00Z'),
     },
@@ -4056,372 +5384,597 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
   // =========================================================================
   // 18. KNOWLEDGE CHUNKS, STUDENT SKILL STATES, CHAT & MOCK INTERVIEWS
   // =========================================================================
-  await db.insert(knowledgeChunks).values([
-    {
-      visibility: 'PUBLIC',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK02!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-ai-overview-01',
-      content:
-        'Khóa học "Kỹ sư AI Thực chiến: RAG, Agents & LLMOps" (mã đợt đang mở: AI-ENG-2026-K02, học phí 6.800.000 VNĐ) kéo dài 6 buổi chuyên sâu (tương đương 18 giờ thực hành Live Coding). Lịch học tối Thứ 2 và Thứ 6 (19:30 - 21:30), do TS. Lê Minh Khoa trực tiếp giảng dạy cùng trợ giảng KS. Hoàng Nam.',
-      embedding: makeDeterministicVector(201, 1024),
-    },
-    {
-      visibility: 'PUBLIC',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK02!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 2,
-      contentHash: 'hash-pub-ai-syllabus-02',
-      content:
-        'Điều kiện đầu vào của khóa Kỹ sư AI Thực chiến: Học viên cần nắm vững lập trình Python cơ bản và câu lệnh SQL căn bản. Đầu ra khóa học cam kết học viên tự tay xây dựng được hệ thống Hybrid RAG (pgvector HNSW + BM25 Reciprocal Rank Fusion), Function Calling với Pydantic v2, đánh giá chất lượng bằng Ragas và nhận chứng chỉ số xác thực kèm +4 lượt phỏng vấn thử AI.',
-      embedding: makeDeterministicVector(202, 1024),
-    },
-    {
-      visibility: 'PUBLIC',
-      courseId: courseSwe!.id,
-      cohortId: cohortSweK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-swe-overview-01',
-      content:
-        'Khóa học "Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems" (mã đợt đang mở: SWE-ARCH-2026-K01, học phí 5.900.000 VNĐ) do ThS. Nguyễn Thu Hà giảng dạy vào tối Thứ 4 và Chủ Nhật (19:30 - 21:30). Trọng tâm: Clean Layered Architecture, Drizzle ORM, tối ưu chỉ mục PostgreSQL, xử lý Webhook thanh toán Idempotent và Redis Caching.',
-      embedding: makeDeterministicVector(203, 1024),
-    },
-    {
-      visibility: 'PUBLIC',
-      courseId: courseData!.id,
-      cohortId: cohortDataK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-data-overview-01',
-      content:
-        'Khóa học "Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse" (mã đợt sắp khai giảng: DATA-PIPE-2026-K01, học phí 7.200.000 VNĐ) dành cho kỹ sư muốn làm chủ xử lý dữ liệu lớn thời gian thực với Apache Spark, Kafka, chuẩn hóa kho dữ liệu với dbt và đồng bộ Vector Store.',
-      embedding: makeDeterministicVector(204, 1024),
-    },
-    {
-      visibility: 'PUBLIC',
-      courseId: coursePython!.id,
-      cohortId: cohortPyK04!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-py-overview-01',
-      content:
-        'Khóa học nền tảng "Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI" (học phí 4.200.000 VNĐ) phù hợp cho người mới bắt đầu hoặc lập trình viên trái ngành. Chương trình trang bị Python 3.11, Type Hints, OOP, Pytest, lập trình bất đồng bộ AsyncIO và truy vấn SQL phân tích nâng cao (CTE, Window Functions) trên PostgreSQL.',
-      embedding: makeDeterministicVector(205, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess1!.id,
-      attachmentId: attS1Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s1-chunk-01',
-      startSec: 120,
-      endSec: 480,
-      pageNumber: 6,
-      content:
-        'Trong môi trường Production, cổng AI Gateway viết bằng FastAPI bắt buộc phải sử dụng cơ chế bất đồng bộ hoàn toàn với httpx.AsyncClient. Nếu bạn gọi hàm đồng bộ bên trong async def, toàn bộ Event Loop của tiến trình worker sẽ bị nghẽn, làm tăng độ trễ p95 lên hàng chục giây.',
-      embedding: makeDeterministicVector(301, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess1!.id,
-      attachmentId: attS1Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 2,
-      contentHash: 'hash-s1-chunk-02',
-      startSec: 960,
-      endSec: 1450,
-      pageNumber: 14,
-      content:
-        'Để truyền phát câu trả lời theo thời gian thực về trình duyệt, chúng ta sử dụng StreamingResponse với media_type="text/event-stream". Kỹ thuật Server-Sent Events (SSE) giúp giảm chỉ số Time To First Token (TTFT) xuống dưới 400ms, đồng thời kết hợp Exponential Backoff khi gặp lỗi HTTP 429.',
-      embedding: makeDeterministicVector(302, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess2!.id,
-      attachmentId: attS2Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s2-chunk-01',
-      startSec: 300,
-      endSec: 840,
-      pageNumber: 9,
-      content:
-        'Chiến lược băm tài liệu hai tầng kết hợp MarkdownHeaderTextSplitter và RecursiveCharacterTextSplitter với độ chồng lấp chunk_overlap từ 10% đến 15% giúp bảo toàn trọn vẹn ngữ cảnh tiêu đề chương mục và ngăn chặn việc cắt đứt mệnh đề quan trọng ở ranh giới giữa hai đoạn văn.',
-      embedding: makeDeterministicVector(303, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess2!.id,
-      attachmentId: attS2Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 2,
-      contentHash: 'hash-s2-chunk-02',
-      startSec: 1620,
-      endSec: 2340,
-      pageNumber: 18,
-      content:
-        'Trên PostgreSQL pgvector, chỉ mục HNSW được tạo bằng câu lệnh CREATE INDEX USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64). Toán tử khoảng cách Cosine (<=>) cho phép tìm kiếm láng giềng gần đúng (ANN) chỉ trong vài mili-giây mà không cần bước huấn luyện tâm cụm như IVFFlat.',
-      embedding: makeDeterministicVector(304, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess3!.id,
-      attachmentId: attS3Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s3-chunk-01',
-      startSec: 420,
-      endSec: 1120,
-      pageNumber: 10,
-      content:
-        'Tìm kiếm thuần Dense Vector thường gặp điểm mù khi người dùng tra cứu các mã định danh chính xác như mã đơn hàng ORD3T260301, mã lỗi kỹ thuật hoặc tên hàm lập trình. Vì vậy hệ thống RAG thực chiến phải kết hợp thêm nhánh tìm kiếm từ khóa BM25 thông qua kiểu tsvector và chỉ mục đảo GIN trên PostgreSQL.',
-      embedding: makeDeterministicVector(305, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess3!.id,
-      attachmentId: attS3Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 2,
-      contentHash: 'hash-s3-chunk-02',
-      startSec: 1420,
-      endSec: 2100,
-      pageNumber: 14,
-      content:
-        'Thuật toán Reciprocal Rank Fusion (RRF) hợp nhất bảng xếp hạng từ nhánh Dense Vector và nhánh BM25 theo công thức: RRF_Score(d) = 1 / (k + rank_dense(d)) + 1 / (k + rank_bm25(d)) với hằng số làm mượt k = 60. Sau khi lấy Top 30 ứng viên từ RRF, mô hình Cross-Encoder Reranker sẽ chấm điểm cặp (câu hỏi, đoạn văn) để chọn ra Top 5 chính xác nhất.',
-      embedding: makeDeterministicVector(306, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess3!.id,
-      attachmentId: attS3Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 3,
-      contentHash: 'hash-s3-chunk-03',
-      startSec: 2680,
-      endSec: 3400,
-      pageNumber: 22,
-      content:
-        'Nguyên tắc bảo mật cốt lõi trong RAG doanh nghiệp là Pre-filtering RBAC: Bộ lọc kiểm soát quyền truy cập (visibility = PUBLIC hoặc kiểm tra quyền ghi danh khóa học) bắt buộc phải thực thi trực tiếp trong mệnh đề WHERE của câu lệnh SQL trước khi đưa văn bản vào ngữ cảnh của mô hình ngôn ngữ lớn.',
-      embedding: makeDeterministicVector(307, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess4!.id,
-      attachmentId: attS4Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s4-chunk-01',
-      startSec: 540,
-      endSec: 1260,
-      pageNumber: 11,
-      content:
-        'Trong cơ chế Function Calling, mô hình LLM không trực tiếp chạy câu lệnh SQL mà chỉ sinh ra cấu trúc JSON chứa tên hàm và các đối số tuân theo lược đồ Pydantic v2. Mã nguồn Backend của bạn chịu trách nhiệm xác thực quyền hạn từ JWT (req.user.id), thực thi hàm và gửi kết quả quan sát (Observation) trở lại cho mô hình.',
-      embedding: makeDeterministicVector(308, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess4!.id,
-      attachmentId: attS4Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 2,
-      contentHash: 'hash-s4-chunk-02',
-      startSec: 1890,
-      endSec: 2520,
-      pageNumber: 18,
-      content:
-        'Khi điều phối vòng lặp ReAct Agent, luôn phải đặt giới hạn số bước lặp tối đa (max_iterations = 4) để chống lặp vô tận. Nếu đối số do LLM sinh ra vi phạm kiểu dữ liệu Pydantic (ValidationError), hãy đóng gói chi tiết lỗi gửi trả lại vào bản tin tool message để mô hình tự sửa tham số (Self-Correction).',
-      embedding: makeDeterministicVector(309, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess5!.id,
-      attachmentId: attS5Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s5-chunk-01',
-      startSec: 480,
-      endSec: 1320,
-      pageNumber: 12,
-      content:
-        'Bộ khung đánh giá Ragas đo lường chất lượng hệ thống RAG qua 4 chỉ số định lượng: Context Precision và Context Recall đánh giá chất lượng tầng truy xuất (Retrieval), trong khi Faithfulness (độ trung thực chống ảo giác) và Answer Relevancy đánh giá chất lượng tầng sinh câu trả lời (Generation).',
-      embedding: makeDeterministicVector(310, 1024),
-    },
-    {
-      visibility: 'ENROLLED_ONLY',
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess5!.id,
-      attachmentId: attS5Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 2,
-      contentHash: 'hash-s5-chunk-02',
-      startSec: 2150,
-      endSec: 2940,
-      pageNumber: 20,
-      content:
-        'Khi triển khai Semantic Cache trên Redis, cần kết hợp khóa phân vùng ngữ cảnh (ví dụ namespace theo session_id hoặc course_id) cùng ngưỡng tương đồng Cosine chặt chẽ (>= 0.94) để tiết kiệm 40% chi phí token mà không gặp hiện tượng dương tính giả (False Cache Hit).',
-      embedding: makeDeterministicVector(311, 1024),
-    },
-  ]);
+  const insertedKnowledgeChunks = await db
+    .insert(knowledgeChunks)
+    .values([
+      {
+        visibility: 'PUBLIC',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK02!.id,
+        sessionId: null,
+        attachmentId: null,
+        sourceType: 'FAQ',
+        chunkIndex: 1,
+        contentHash: 'hash-pub-ai-overview-01',
+        content:
+          'Khóa học "Kỹ sư AI Thực chiến: RAG, Agents & LLMOps" (mã đợt đang mở: AI-ENG-2026-K02, học phí 6.800.000 VNĐ) kéo dài 6 buổi chuyên sâu (tương đương 18 giờ thực hành Live Coding). Lịch học tối Thứ 2 và Thứ 6 (19:30 - 21:30), do TS. Lê Minh Khoa trực tiếp giảng dạy cùng trợ giảng KS. Hoàng Nam.',
+        embedding: makeDeterministicVector(201, 1024),
+      },
+      {
+        visibility: 'PUBLIC',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK02!.id,
+        sessionId: null,
+        attachmentId: null,
+        sourceType: 'FAQ',
+        chunkIndex: 2,
+        contentHash: 'hash-pub-ai-syllabus-02',
+        content:
+          'Điều kiện đầu vào của khóa Kỹ sư AI Thực chiến: Học viên cần nắm vững lập trình Python cơ bản và câu lệnh SQL căn bản. Đầu ra khóa học cam kết học viên tự tay xây dựng được hệ thống Hybrid RAG (pgvector HNSW + BM25 Reciprocal Rank Fusion), Function Calling với Pydantic v2, đánh giá chất lượng bằng Ragas và nhận chứng chỉ số xác thực kèm +4 lượt phỏng vấn thử AI.',
+        embedding: makeDeterministicVector(202, 1024),
+      },
+      {
+        visibility: 'PUBLIC',
+        courseId: courseSwe!.id,
+        cohortId: cohortSweK01!.id,
+        sessionId: null,
+        attachmentId: null,
+        sourceType: 'FAQ',
+        chunkIndex: 1,
+        contentHash: 'hash-pub-swe-overview-01',
+        content:
+          'Khóa học "Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems" (mã đợt đang mở: SWE-ARCH-2026-K01, học phí 5.900.000 VNĐ) do ThS. Nguyễn Thu Hà giảng dạy vào tối Thứ 4 và Chủ Nhật (19:30 - 21:30). Trọng tâm: Clean Layered Architecture, Drizzle ORM, tối ưu chỉ mục PostgreSQL, xử lý Webhook thanh toán Idempotent và Redis Caching.',
+        embedding: makeDeterministicVector(203, 1024),
+      },
+      {
+        visibility: 'PUBLIC',
+        courseId: courseData!.id,
+        cohortId: cohortDataK01!.id,
+        sessionId: null,
+        attachmentId: null,
+        sourceType: 'FAQ',
+        chunkIndex: 1,
+        contentHash: 'hash-pub-data-overview-01',
+        content:
+          'Khóa học "Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse" (mã đợt sắp khai giảng: DATA-PIPE-2026-K01, học phí 7.200.000 VNĐ) dành cho kỹ sư muốn làm chủ xử lý dữ liệu lớn thời gian thực với Apache Spark, Kafka, chuẩn hóa kho dữ liệu với dbt và đồng bộ Vector Store.',
+        embedding: makeDeterministicVector(204, 1024),
+      },
+      {
+        visibility: 'PUBLIC',
+        courseId: coursePython!.id,
+        cohortId: cohortPyK04!.id,
+        sessionId: null,
+        attachmentId: null,
+        sourceType: 'FAQ',
+        chunkIndex: 1,
+        contentHash: 'hash-pub-py-overview-01',
+        content:
+          'Khóa học nền tảng "Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI" (học phí 4.200.000 VNĐ) phù hợp cho người mới bắt đầu hoặc lập trình viên trái ngành. Chương trình trang bị Python 3.11, Type Hints, OOP, Pytest, lập trình bất đồng bộ AsyncIO và truy vấn SQL phân tích nâng cao (CTE, Window Functions) trên PostgreSQL.',
+        embedding: makeDeterministicVector(205, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess1!.id,
+        attachmentId: attS1Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s1-chunk-01',
+        startSec: 120,
+        endSec: 480,
+        pageNumber: 6,
+        content:
+          'Trong môi trường Production, cổng AI Gateway viết bằng FastAPI bắt buộc phải sử dụng cơ chế bất đồng bộ hoàn toàn với httpx.AsyncClient. Nếu bạn gọi hàm đồng bộ bên trong async def, toàn bộ Event Loop của tiến trình worker sẽ bị nghẽn, làm tăng độ trễ p95 lên hàng chục giây.',
+        embedding: makeDeterministicVector(301, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess1!.id,
+        attachmentId: attS1Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s1-chunk-02',
+        startSec: 960,
+        endSec: 1450,
+        pageNumber: 14,
+        content:
+          'Để truyền phát câu trả lời theo thời gian thực về trình duyệt, chúng ta sử dụng StreamingResponse với media_type="text/event-stream". Kỹ thuật Server-Sent Events (SSE) giúp giảm chỉ số Time To First Token (TTFT) xuống dưới 400ms, đồng thời kết hợp Exponential Backoff khi gặp lỗi HTTP 429.',
+        embedding: makeDeterministicVector(302, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess2!.id,
+        attachmentId: attS2Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s2-chunk-01',
+        startSec: 300,
+        endSec: 840,
+        pageNumber: 9,
+        content:
+          'Chiến lược băm tài liệu hai tầng kết hợp MarkdownHeaderTextSplitter và RecursiveCharacterTextSplitter với độ chồng lấp chunk_overlap từ 10% đến 15% giúp bảo toàn trọn vẹn ngữ cảnh tiêu đề chương mục và ngăn chặn việc cắt đứt mệnh đề quan trọng ở ranh giới giữa hai đoạn văn.',
+        embedding: makeDeterministicVector(303, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess2!.id,
+        attachmentId: attS2Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s2-chunk-02',
+        startSec: 1620,
+        endSec: 2340,
+        pageNumber: 18,
+        content:
+          'Trên PostgreSQL pgvector, chỉ mục HNSW được tạo bằng câu lệnh CREATE INDEX USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64). Toán tử khoảng cách Cosine (<=>) cho phép tìm kiếm láng giềng gần đúng (ANN) chỉ trong vài mili-giây mà không cần bước huấn luyện tâm cụm như IVFFlat.',
+        embedding: makeDeterministicVector(304, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess3!.id,
+        attachmentId: attS3Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s3-chunk-01',
+        startSec: 420,
+        endSec: 1120,
+        pageNumber: 10,
+        content:
+          'Tìm kiếm thuần Dense Vector thường gặp điểm mù khi người dùng tra cứu các mã định danh chính xác như mã đơn hàng ORD3T260301, mã lỗi kỹ thuật hoặc tên hàm lập trình. Vì vậy hệ thống RAG thực chiến phải kết hợp thêm nhánh tìm kiếm từ khóa BM25 thông qua kiểu tsvector và chỉ mục đảo GIN trên PostgreSQL.',
+        embedding: makeDeterministicVector(305, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess3!.id,
+        attachmentId: attS3Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s3-chunk-02',
+        startSec: 1420,
+        endSec: 2100,
+        pageNumber: 14,
+        content:
+          'Thuật toán Reciprocal Rank Fusion (RRF) hợp nhất bảng xếp hạng từ nhánh Dense Vector và nhánh BM25 theo công thức: RRF_Score(d) = 1 / (k + rank_dense(d)) + 1 / (k + rank_bm25(d)) với hằng số làm mượt k = 60. Sau khi lấy Top 30 ứng viên từ RRF, mô hình Cross-Encoder Reranker sẽ chấm điểm cặp (câu hỏi, đoạn văn) để chọn ra Top 5 chính xác nhất.',
+        embedding: makeDeterministicVector(306, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess3!.id,
+        attachmentId: attS3Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 3,
+        contentHash: 'hash-s3-chunk-03',
+        startSec: 2680,
+        endSec: 3400,
+        pageNumber: 22,
+        content:
+          'Nguyên tắc bảo mật cốt lõi trong RAG doanh nghiệp là Pre-filtering RBAC: Bộ lọc kiểm soát quyền truy cập (visibility = PUBLIC hoặc kiểm tra quyền ghi danh khóa học) bắt buộc phải thực thi trực tiếp trong mệnh đề WHERE của câu lệnh SQL trước khi đưa văn bản vào ngữ cảnh của mô hình ngôn ngữ lớn.',
+        embedding: makeDeterministicVector(307, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess4!.id,
+        attachmentId: attS4Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s4-chunk-01',
+        startSec: 540,
+        endSec: 1260,
+        pageNumber: 11,
+        content:
+          'Trong cơ chế Function Calling, mô hình LLM không trực tiếp chạy câu lệnh SQL mà chỉ sinh ra cấu trúc JSON chứa tên hàm và các đối số tuân theo lược đồ Pydantic v2. Mã nguồn Backend của bạn chịu trách nhiệm xác thực quyền hạn từ JWT (req.user.id), thực thi hàm và gửi kết quả quan sát (Observation) trở lại cho mô hình.',
+        embedding: makeDeterministicVector(308, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess4!.id,
+        attachmentId: attS4Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s4-chunk-02',
+        startSec: 1890,
+        endSec: 2520,
+        pageNumber: 18,
+        content:
+          'Khi điều phối vòng lặp ReAct Agent và đồ thị trạng thái LangGraph, luôn phải đặt giới hạn số bước lặp tối đa (max_iterations = 4) để chống lặp vô tận. Nếu đối số do LLM sinh ra vi phạm kiểu dữ liệu Pydantic (ValidationError), hãy đóng gói chi tiết lỗi gửi trả lại vào bản tin tool message để mô hình tự sửa tham số (Self-Correction).',
+        embedding: makeDeterministicVector(309, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess5!.id,
+        attachmentId: attS5Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s5-chunk-01',
+        startSec: 480,
+        endSec: 1320,
+        pageNumber: 12,
+        content:
+          'Bộ khung đánh giá Ragas đo lường chất lượng hệ thống RAG qua 4 chỉ số định lượng: Context Precision và Context Recall đánh giá chất lượng tầng truy xuất (Retrieval), trong khi Faithfulness (độ trung thực chống ảo giác) và Answer Relevancy đánh giá chất lượng tầng sinh câu trả lời (Generation).',
+        embedding: makeDeterministicVector(310, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess5!.id,
+        attachmentId: attS5Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s5-chunk-02',
+        startSec: 2150,
+        endSec: 2940,
+        pageNumber: 20,
+        content:
+          'Khi triển khai Semantic Cache trên Redis, cần kết hợp khóa phân vùng ngữ cảnh (ví dụ namespace theo session_id hoặc course_id) cùng ngưỡng tương đồng Cosine chặt chẽ (>= 0.94) để tiết kiệm 40% chi phí token mà không gặp hiện tượng dương tính giả (False Cache Hit).',
+        embedding: makeDeterministicVector(311, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess6!.id,
+        attachmentId: attS6Slide!.id,
+        sourceType: 'VIDEO_TRANSCRIPT',
+        chunkIndex: 1,
+        contentHash: 'hash-s6-chunk-01',
+        startSec: 360,
+        endSec: 1080,
+        pageNumber: 8,
+        content:
+          'Tổng duyệt kiến trúc Production AI: Tách biệt cổng giao dịch Node.js/TypeScript và AI Microservice FastAPI, đưa tác vụ bóc tách PDF nặng vào Celery/Redis và luôn kiểm tra healthcheck `service_healthy` trước khi mở lưu lượng người dùng.',
+        embedding: makeDeterministicVector(312, 1024),
+      },
+      {
+        visibility: 'ENROLLED_ONLY',
+        courseId: courseAi!.id,
+        cohortId: cohortAiK01!.id,
+        sessionId: sess6!.id,
+        attachmentId: attS6Slide!.id,
+        sourceType: 'ATTACHMENT_DOC',
+        chunkIndex: 2,
+        contentHash: 'hash-s6-chunk-02',
+        startSec: 1600,
+        endSec: 2300,
+        pageNumber: 16,
+        content:
+          'Quy chế thi sát hạch cuối khóa và cấp chứng chỉ số HMAC-SHA256: Học viên cần hoàn thành 6/6 buổi học, vượt qua kỳ thi >= 70% mà không vi phạm quy chế webcam (3-Strike Auto-Suspension) để nhận chứng chỉ xác thực và +4 lượt phỏng vấn thử AI.',
+        embedding: makeDeterministicVector(313, 1024),
+      },
+    ])
+    .returning();
 
-  await db.insert(studentSkillStates).values([
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skPython!.id,
-      masteryScore: 0.92,
-      evidenceCount: 14,
-      trend: 0.12,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skRag!.id,
-      masteryScore: 0.94,
-      evidenceCount: 16,
-      trend: 0.18,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skTool!.id,
-      masteryScore: 0.89,
-      evidenceCount: 12,
-      trend: 0.15,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skSqlVec!.id,
-      masteryScore: 0.91,
-      evidenceCount: 15,
-      trend: 0.14,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skFastApi!.id,
-      masteryScore: 0.9,
-      evidenceCount: 11,
-      trend: 0.1,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuAnAcc!.id,
-      skillId: skEval!.id,
-      masteryScore: 0.88,
-      evidenceCount: 9,
-      trend: 0.21,
-      updatedAt: new Date('2026-04-03T11:40:00Z'),
-    },
-    {
-      accountId: stuMaiAcc!.id,
-      skillId: skPython!.id,
-      masteryScore: 0.9,
-      evidenceCount: 15,
-      trend: 0.11,
-      updatedAt: new Date('2026-03-25T10:00:00Z'),
-    },
-    {
-      accountId: stuMaiAcc!.id,
-      skillId: skSqlVec!.id,
-      masteryScore: 0.93,
-      evidenceCount: 18,
-      trend: 0.16,
-      updatedAt: new Date('2026-03-25T10:00:00Z'),
-    },
-    {
-      accountId: stuMaiAcc!.id,
-      skillId: skRag!.id,
-      masteryScore: 0.85,
-      evidenceCount: 10,
-      trend: 0.14,
-      updatedAt: new Date('2026-03-25T10:00:00Z'),
-    },
-    {
-      accountId: stuMaiAcc!.id,
-      skillId: skTool!.id,
-      masteryScore: 0.82,
-      evidenceCount: 8,
-      trend: 0.09,
-      updatedAt: new Date('2026-03-25T10:00:00Z'),
-    },
-    {
-      accountId: stuHaAcc!.id,
-      skillId: skPython!.id,
-      masteryScore: 0.78,
-      evidenceCount: 8,
-      trend: 0.08,
-      updatedAt: new Date('2026-03-26T15:00:00Z'),
-    },
-    {
-      accountId: stuHaAcc!.id,
-      skillId: skRag!.id,
-      masteryScore: 0.75,
-      evidenceCount: 7,
-      trend: 0.1,
-      updatedAt: new Date('2026-03-26T15:00:00Z'),
-    },
-    {
-      accountId: stuHaAcc!.id,
-      skillId: skTool!.id,
-      masteryScore: 0.62,
-      evidenceCount: 5,
-      trend: -0.04,
-      updatedAt: new Date('2026-03-26T15:00:00Z'),
-    },
-    {
-      accountId: stuKhoiAcc!.id,
-      skillId: skPython!.id,
-      masteryScore: 0.87,
-      evidenceCount: 12,
-      trend: 0.13,
-      updatedAt: new Date('2026-02-26T10:00:00Z'),
-    },
-    {
-      accountId: stuKhoiAcc!.id,
-      skillId: skSqlVec!.id,
-      masteryScore: 0.89,
-      evidenceCount: 14,
-      trend: 0.15,
-      updatedAt: new Date('2026-02-26T10:00:00Z'),
-    },
-  ]);
+  const insertedSkillStates = await db
+    .insert(studentSkillStates)
+    .values([
+      // --- Nguyễn Văn An (Tất cả 7 kỹ năng AI gồm cả LANGGRAPH_AGENT + 3 kỹ năng SWE đã học) ---
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skPython!.id,
+        masteryScore: 0.92,
+        evidenceCount: 14,
+        trend: 0.12,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skRag!.id,
+        masteryScore: 0.94,
+        evidenceCount: 16,
+        trend: 0.18,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skTool!.id,
+        masteryScore: 0.89,
+        evidenceCount: 12,
+        trend: 0.15,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skLangGraph!.id,
+        masteryScore: 0.87,
+        evidenceCount: 8,
+        trend: 0.19,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.91,
+        evidenceCount: 15,
+        trend: 0.14,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skFastApi!.id,
+        masteryScore: 0.9,
+        evidenceCount: 11,
+        trend: 0.1,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skEval!.id,
+        masteryScore: 0.88,
+        evidenceCount: 9,
+        trend: 0.21,
+        updatedAt: new Date('2026-04-03T11:40:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skNode!.id,
+        masteryScore: 0.86,
+        evidenceCount: 6,
+        trend: 0.14,
+        updatedAt: new Date('2026-03-29T15:32:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skSysDesign!.id,
+        masteryScore: 0.82,
+        evidenceCount: 4,
+        trend: 0.11,
+        updatedAt: new Date('2026-03-29T15:32:00Z'),
+      },
+      {
+        accountId: stuAnAcc!.id,
+        skillId: skDocker!.id,
+        masteryScore: 0.78,
+        evidenceCount: 3,
+        trend: 0.08,
+        updatedAt: new Date('2026-03-29T15:32:00Z'),
+      },
+
+      // --- Lê Hoàng Mai (AI K01 + PY K04) ---
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skPython!.id,
+        masteryScore: 0.9,
+        evidenceCount: 15,
+        trend: 0.11,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.93,
+        evidenceCount: 18,
+        trend: 0.16,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skFastApi!.id,
+        masteryScore: 0.86,
+        evidenceCount: 10,
+        trend: 0.12,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skRag!.id,
+        masteryScore: 0.85,
+        evidenceCount: 10,
+        trend: 0.14,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skTool!.id,
+        masteryScore: 0.82,
+        evidenceCount: 8,
+        trend: 0.09,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skLangGraph!.id,
+        masteryScore: 0.8,
+        evidenceCount: 5,
+        trend: 0.11,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        skillId: skEval!.id,
+        masteryScore: 0.84,
+        evidenceCount: 6,
+        trend: 0.13,
+        updatedAt: new Date('2026-03-17T16:25:00Z'),
+      },
+
+      // --- Trần Thu Hà (AI K01 Buổi 1-4) ---
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skPython!.id,
+        masteryScore: 0.78,
+        evidenceCount: 8,
+        trend: 0.08,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skFastApi!.id,
+        masteryScore: 0.76,
+        evidenceCount: 5,
+        trend: 0.07,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.74,
+        evidenceCount: 6,
+        trend: 0.06,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skRag!.id,
+        masteryScore: 0.75,
+        evidenceCount: 7,
+        trend: 0.1,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skTool!.id,
+        masteryScore: 0.62,
+        evidenceCount: 5,
+        trend: -0.04,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+      {
+        accountId: stuHaAcc!.id,
+        skillId: skLangGraph!.id,
+        masteryScore: 0.58,
+        evidenceCount: 4,
+        trend: -0.05,
+        updatedAt: new Date('2026-03-26T15:00:00Z'),
+      },
+
+      // --- Phạm Minh Quân (AI K01 Buổi 1-6 + Final Exam bị đình chỉ) ---
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skPython!.id,
+        masteryScore: 0.72,
+        evidenceCount: 7,
+        trend: 0.04,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skFastApi!.id,
+        masteryScore: 0.7,
+        evidenceCount: 6,
+        trend: 0.03,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.71,
+        evidenceCount: 7,
+        trend: 0.04,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skRag!.id,
+        masteryScore: 0.69,
+        evidenceCount: 6,
+        trend: 0.02,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skTool!.id,
+        masteryScore: 0.68,
+        evidenceCount: 5,
+        trend: 0.01,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skLangGraph!.id,
+        masteryScore: 0.66,
+        evidenceCount: 4,
+        trend: 0.0,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+      {
+        accountId: stuQuanAcc!.id,
+        skillId: skEval!.id,
+        masteryScore: 0.65,
+        evidenceCount: 4,
+        trend: -0.02,
+        updatedAt: new Date('2026-04-01T14:20:00Z'),
+      },
+
+      // --- Vũ Đình Khôi (PY K04) ---
+      {
+        accountId: stuKhoiAcc!.id,
+        skillId: skPython!.id,
+        masteryScore: 0.87,
+        evidenceCount: 12,
+        trend: 0.13,
+        updatedAt: new Date('2026-02-26T10:00:00Z'),
+      },
+      {
+        accountId: stuKhoiAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.89,
+        evidenceCount: 14,
+        trend: 0.15,
+        updatedAt: new Date('2026-02-26T10:00:00Z'),
+      },
+      {
+        accountId: stuKhoiAcc!.id,
+        skillId: skFastApi!.id,
+        masteryScore: 0.82,
+        evidenceCount: 6,
+        trend: 0.1,
+        updatedAt: new Date('2026-02-26T10:00:00Z'),
+      },
+
+      // --- Hoàng Gia Bảo (SWE K01 Buổi 1-3) ---
+      {
+        accountId: stuBaoAcc!.id,
+        skillId: skNode!.id,
+        masteryScore: 0.91,
+        evidenceCount: 8,
+        trend: 0.16,
+        updatedAt: new Date('2026-04-01T16:00:00Z'),
+      },
+      {
+        accountId: stuBaoAcc!.id,
+        skillId: skSqlVec!.id,
+        masteryScore: 0.88,
+        evidenceCount: 6,
+        trend: 0.12,
+        updatedAt: new Date('2026-04-01T16:00:00Z'),
+      },
+      {
+        accountId: stuBaoAcc!.id,
+        skillId: skSysDesign!.id,
+        masteryScore: 0.9,
+        evidenceCount: 7,
+        trend: 0.15,
+        updatedAt: new Date('2026-04-01T16:00:00Z'),
+      },
+      {
+        accountId: stuBaoAcc!.id,
+        skillId: skDocker!.id,
+        masteryScore: 0.8,
+        evidenceCount: 3,
+        trend: 0.08,
+        updatedAt: new Date('2026-04-01T16:00:00Z'),
+      },
+    ])
+    .returning();
 
   const [chatTutorS3, chatTutorS5, chatAdvisorAn] = await db
     .insert(chatSessions)
@@ -4432,7 +5985,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         sessionId: sess3!.id,
         scope: 'SESSION_TUTOR',
         title: 'Hỏi đáp Buổi 3: Công thức RRF & Pre-filtering RBAC',
-        createdAt: new Date('2026-03-17T15:30:00Z'),
+        createdAt: new Date('2026-03-10T15:30:00Z'),
       },
       {
         accountId: stuAnAcc!.id,
@@ -4440,7 +5993,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         sessionId: sess5!.id,
         scope: 'SESSION_TUTOR',
         title: 'Hỏi đáp Buổi 5: Các chỉ số Ragas & Semantic Cache',
-        createdAt: new Date('2026-04-02T14:40:00Z'),
+        createdAt: new Date('2026-03-17T14:40:00Z'),
       },
       {
         accountId: stuAnAcc!.id,
@@ -4448,7 +6001,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         sessionId: null,
         scope: 'ADVISOR_GLOBAL',
         title: 'Tư vấn lộ trình nâng cấp từ AI Engineer lên Kiến trúc Backend Chuyên sâu',
-        createdAt: new Date('2026-03-24T20:00:00Z'),
+        createdAt: new Date('2026-03-23T20:00:00Z'),
       },
     ])
     .returning();
@@ -4466,7 +6019,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 42,
       completionTokens: 0,
       latencyMs: 12,
-      createdAt: new Date('2026-03-17T15:30:10Z'),
+      createdAt: new Date('2026-03-10T15:30:10Z'),
     },
     {
       chatSessionId: chatTutorS3!.id,
@@ -4491,7 +6044,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 380,
       completionTokens: 165,
       latencyMs: 640,
-      createdAt: new Date('2026-03-17T15:30:12Z'),
+      createdAt: new Date('2026-03-10T15:30:12Z'),
     },
     {
       chatSessionId: chatTutorS5!.id,
@@ -4504,7 +6057,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 35,
       completionTokens: 0,
       latencyMs: 10,
-      createdAt: new Date('2026-04-02T14:40:15Z'),
+      createdAt: new Date('2026-03-17T14:40:15Z'),
     },
     {
       chatSessionId: chatTutorS5!.id,
@@ -4524,7 +6077,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 340,
       completionTokens: 140,
       latencyMs: 590,
-      createdAt: new Date('2026-04-02T14:40:17Z'),
+      createdAt: new Date('2026-03-17T14:40:17Z'),
     },
     {
       chatSessionId: chatAdvisorAn!.id,
@@ -4538,7 +6091,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 48,
       completionTokens: 0,
       latencyMs: 15,
-      createdAt: new Date('2026-03-24T20:00:10Z'),
+      createdAt: new Date('2026-03-23T20:00:10Z'),
     },
     {
       chatSessionId: chatAdvisorAn!.id,
@@ -4552,187 +6105,309 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       promptTokens: 410,
       completionTokens: 155,
       latencyMs: 620,
-      createdAt: new Date('2026-03-24T20:00:12Z'),
+      createdAt: new Date('2026-03-23T20:00:12Z'),
     },
   ]);
 
-  await db.insert(mockInterviews).values([
-    {
-      accountId: stuAnAcc!.id,
-      targetLevel: 'FRESHER',
-      targetRole: 'Fresher AI Engineer (RAG & Agentic Workflows)',
-      jdRawText:
-        'Tuyển dụng Fresher AI Engineer phát triển hệ thống trợ lý tri thức doanh nghiệp. Yêu cầu: Thành thạo Python AsyncIO, FastAPI, thiết kế hệ thống Hybrid RAG với PostgreSQL pgvector + BM25, hiểu rõ cơ chế Function Calling với Pydantic và biết đo lường chất lượng bằng Ragas.',
-      cvScreeningResult: {
-        matchPercent: 88,
-        passedGate: true,
-        layoutAndPresentationFeedback:
-          'Bố cục CV chuẩn kỹ sư, nêu bật rõ 2 dự án thực tế (3T SmartDocs và AutoOrder Agent) kèm các chỉ số đo lường độ trễ và tỷ lệ giảm ảo giác rất thuyết phục.',
-        jdMatchEvaluation:
-          'Hồ sơ đạt độ khớp 88% so với JD vị trí Fresher AI Engineer. Ứng viên đáp ứng đầy đủ các từ khóa cốt lõi: Python AsyncIO, FastAPI, pgvector HNSW, BM25 RRF và Function Calling.',
-        missingKeywordsOrGaps: [
-          'Có thể bổ sung thêm số liệu cụ thể về kích thước tập dữ liệu Golden Dataset khi chạy kiểm thử Ragas trong dự án SmartDocs.',
+  const insertedMockInterviews = await db
+    .insert(mockInterviews)
+    .values([
+      {
+        accountId: stuAnAcc!.id,
+        targetLevel: 'FRESHER',
+        targetRole: 'Fresher AI Engineer (RAG & Agentic Workflows)',
+        jdRawText:
+          'Tuyển dụng Fresher AI Engineer phát triển hệ thống trợ lý tri thức doanh nghiệp. Yêu cầu: Thành thạo Python AsyncIO, FastAPI, thiết kế hệ thống Hybrid RAG với PostgreSQL pgvector + BM25, hiểu rõ cơ chế Function Calling với Pydantic và biết đo lường chất lượng bằng Ragas.',
+        cvScreeningResult: {
+          matchPercent: 88,
+          passedGate: true,
+          layoutAndPresentationFeedback:
+            'Bố cục CV chuẩn kỹ sư, nêu bật rõ 2 dự án thực tế (3T SmartDocs và AutoOrder Agent) kèm các chỉ số đo lường độ trễ và tỷ lệ giảm ảo giác rất thuyết phục.',
+          jdMatchEvaluation:
+            'Hồ sơ đạt độ khớp 88% so với JD vị trí Fresher AI Engineer. Ứng viên đáp ứng đầy đủ các từ khóa cốt lõi: Python AsyncIO, FastAPI, pgvector HNSW, BM25 RRF và Function Calling.',
+          missingKeywordsOrGaps: [
+            'Có thể bổ sung thêm số liệu cụ thể về kích thước tập dữ liệu Golden Dataset khi chạy kiểm thử Ragas trong dự án SmartDocs.',
+          ],
+        },
+        transcriptLog: [
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 1/3 · Xác thực dự án trong CV',
+            text: 'Chào An! Trong CV bạn có nêu dự án 3T SmartDocs giúp giảm tỷ lệ ảo giác từ 28% xuống dưới 4.5%. Bạn hãy trình bày chi tiết cách bạn thiết kế chiến lược Chunking và kết hợp Hybrid Search trong dự án này?',
+            createdAt: '2026-04-03T14:00:00.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Nguyễn Văn An',
+            stageTag: 'Trả lời câu 1/3',
+            questionPrompt:
+              'Chào An! Trong CV bạn có nêu dự án 3T SmartDocs giúp giảm tỷ lệ ảo giác từ 28% xuống dưới 4.5%. Bạn hãy trình bày chi tiết cách bạn thiết kế chiến lược Chunking và kết hợp Hybrid Search trong dự án này?',
+            text: 'Dạ chào hội đồng! Trong dự án 3T SmartDocs, em áp dụng chiến lược chunking 2 tầng: đầu tiên tách theo cấu trúc tiêu đề Markdown để giữ ngữ cảnh chương mục, sau đó dùng RecursiveCharacterTextSplitter với kích thước 600 tokens và độ chồng lấp 15%. Về truy xuất, em kết hợp nhánh Dense Vector 1024 chiều trên pgvector HNSW với nhánh từ khóa PostgreSQL tsvector BM25 thông qua công thức Reciprocal Rank Fusion với hằng số k=60 để lấy Top 30, rồi đưa qua Cross-Encoder Reranker chọn ra Top 5 đoạn chính xác nhất trước khi đưa vào LLM.',
+            durationSec: 52,
+            createdAt: '2026-04-03T14:01:00.000Z',
+          },
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 2/3 · Xử lý tình huống kỹ thuật chuyên sâu',
+            text: 'Rất rõ ràng! Vậy ở dự án thứ hai là AutoOrder Agent, khi mô hình LLM sinh lời gọi hàm (Function Calling) nhưng truyền sai định dạng tham số khiến Pydantic báo lỗi ValidationError, bạn xử lý vòng lặp ReAct như thế nào để hệ thống tự phục hồi mà không bị treo?',
+            createdAt: '2026-04-03T14:01:05.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Nguyễn Văn An',
+            stageTag: 'Trả lời câu 2/3',
+            questionPrompt:
+              'Rất rõ ràng! Vậy ở dự án thứ hai là AutoOrder Agent, khi mô hình LLM sinh lời gọi hàm (Function Calling) nhưng truyền sai định dạng tham số khiến Pydantic báo lỗi ValidationError, bạn xử lý vòng lặp ReAct như thế nào để hệ thống tự phục hồi mà không bị treo?',
+            text: 'Trong bộ điều phối ReAct Agent của em, em luôn đặt giới hạn cứng max_iterations bằng 4 bước. Khi thực thi công cụ mà bắt được ngoại lệ ValidationError từ Pydantic v2, em không ném lỗi 500 ra ngoài mà đóng gói danh sách lỗi chi tiết của trường bị sai vào một bản tin có role là tool gửi trả ngược lại cho LLM. Nhờ đó ở bước suy luận kế tiếp, mô hình đọc được lỗi định dạng và tự động hiệu chỉnh lại tham số chuẩn xác.',
+            durationSec: 48,
+            createdAt: '2026-04-03T14:02:00.000Z',
+          },
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 3/3 · Bảo mật dữ liệu & Phân quyền doanh nghiệp',
+            text: 'Câu hỏi cuối cùng: Nếu hệ thống SmartDocs lưu trữ cả tài liệu công khai lẫn tài liệu mật của từng phòng ban, bạn đặt cơ chế kiểm soát truy cập ở đâu để đảm bảo người dùng không thể dùng Prompt Injection khai thác trái phép tài liệu mật?',
+            createdAt: '2026-04-03T14:02:05.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Nguyễn Văn An',
+            stageTag: 'Trả lời câu 3/3',
+            questionPrompt:
+              'Câu hỏi cuối cùng: Nếu hệ thống SmartDocs lưu trữ cả tài liệu công khai lẫn tài liệu mật của từng phòng ban, bạn đặt cơ chế kiểm soát truy cập ở đâu để đảm bảo người dùng không thể dùng Prompt Injection khai thác trái phép tài liệu mật?',
+            text: 'Em áp dụng nguyên tắc Pre-filtering RBAC ngay tại tầng cơ sở dữ liệu PostgreSQL. Cụ thể, danh tính và quyền hạn của người dùng được lấy trực tiếp từ JWT token ở tầng Backend để truyền vào mệnh đề WHERE của câu truy vấn Hybrid Search. Như vậy các đoạn tài liệu không thuộc quyền truy cập của người dùng bị loại bỏ hoàn toàn ngay từ tầng SQL và không bao giờ được nạp vào ngữ cảnh của mô hình LLM.',
+            durationSec: 46,
+            createdAt: '2026-04-03T14:03:00.000Z',
+          },
         ],
+        evaluationReport: {
+          overallScore: 89,
+          projectDepthScore: 92,
+          communicationScore: 87,
+          technicalAccuracy: 90,
+          strengths: [
+            'Hiểu rất sâu kiến trúc thực tế của các dự án đã liệt kê trong CV (Markdown + Recursive Chunking, RRF k=60, Cross-Encoder Reranker).',
+            'Nắm vững cơ chế tự phục hồi lỗi ValidationError trong vòng lặp ReAct Agent và nguyên tắc bảo mật Pre-filtering RBAC ở tầng SQL.',
+          ],
+          improvements: [
+            'Có thể nêu thêm cách thiết lập Semantic Cache theo từng phân vùng quyền hạn để câu trả lời đạt mức hoàn hảo.',
+          ],
+        },
+        status: 'COMPLETED',
+        createdAt: new Date('2026-04-03T13:58:00Z'),
+        completedAt: new Date('2026-04-03T14:03:30Z'),
       },
-      transcriptLog: [
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 1/3 · Xác thực dự án trong CV',
-          text: 'Chào An! Trong CV bạn có nêu dự án 3T SmartDocs giúp giảm tỷ lệ ảo giác từ 28% xuống dưới 4.5%. Bạn hãy trình bày chi tiết cách bạn thiết kế chiến lược Chunking và kết hợp Hybrid Search trong dự án này?',
-          createdAt: '2026-04-03T14:00:00.000Z',
+      {
+        accountId: stuMaiAcc!.id,
+        targetLevel: 'JUNIOR',
+        targetRole: 'Junior AI & Backend Engineer',
+        jdRawText:
+          'Tuyển dụng Junior AI & Backend Engineer xây dựng dịch vụ phân tích tài liệu tài chính bằng LLM và tối ưu cơ sở dữ liệu PostgreSQL/pgvector.',
+        cvScreeningResult: {
+          matchPercent: 91,
+          passedGate: true,
+          layoutAndPresentationFeedback:
+            'CV trình bày rõ kinh nghiệm thực tế tại Tiki và dự án FinRAG với con số đo lường độ chính xác 94.2%.',
+          jdMatchEvaluation: 'Hồ sơ khớp 91% với yêu cầu vị trí Junior AI & Backend Engineer.',
+          missingKeywordsOrGaps: [
+            'Bổ sung thêm chi tiết về chiến lược giám sát độ trễ p95 trên môi trường container.',
+          ],
         },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Nguyễn Văn An',
-          stageTag: 'Trả lời câu 1/3',
-          questionPrompt:
-            'Chào An! Trong CV bạn có nêu dự án 3T SmartDocs giúp giảm tỷ lệ ảo giác từ 28% xuống dưới 4.5%. Bạn hãy trình bày chi tiết cách bạn thiết kế chiến lược Chunking và kết hợp Hybrid Search trong dự án này?',
-          text: 'Dạ chào hội đồng! Trong dự án 3T SmartDocs, em áp dụng chiến lược chunking 2 tầng: đầu tiên tách theo cấu trúc tiêu đề Markdown để giữ ngữ cảnh chương mục, sau đó dùng RecursiveCharacterTextSplitter với kích thước 600 tokens và độ chồng lấp 15%. Về truy xuất, em kết hợp nhánh Dense Vector 1024 chiều trên pgvector HNSW với nhánh từ khóa PostgreSQL tsvector BM25 thông qua công thức Reciprocal Rank Fusion với hằng số k=60 để lấy Top 30, rồi đưa qua Cross-Encoder Reranker chọn ra Top 5 đoạn chính xác nhất trước khi đưa vào LLM.',
-          durationSec: 52,
-          createdAt: '2026-04-03T14:01:00.000Z',
-        },
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 2/3 · Xử lý tình huống kỹ thuật chuyên sâu',
-          text: 'Rất rõ ràng! Vậy ở dự án thứ hai là AutoOrder Agent, khi mô hình LLM sinh lời gọi hàm (Function Calling) nhưng truyền sai định dạng tham số khiến Pydantic báo lỗi ValidationError, bạn xử lý vòng lặp ReAct như thế nào để hệ thống tự phục hồi mà không bị treo?',
-          createdAt: '2026-04-03T14:01:05.000Z',
-        },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Nguyễn Văn An',
-          stageTag: 'Trả lời câu 2/3',
-          questionPrompt:
-            'Rất rõ ràng! Vậy ở dự án thứ hai là AutoOrder Agent, khi mô hình LLM sinh lời gọi hàm (Function Calling) nhưng truyền sai định dạng tham số khiến Pydantic báo lỗi ValidationError, bạn xử lý vòng lặp ReAct như thế nào để hệ thống tự phục hồi mà không bị treo?',
-          text: 'Trong bộ điều phối ReAct Agent của em, em luôn đặt giới hạn cứng max_iterations bằng 4 bước. Khi thực thi công cụ mà bắt được ngoại lệ ValidationError từ Pydantic v2, em không ném lỗi 500 ra ngoài mà đóng gói danh sách lỗi chi tiết của trường bị sai vào một bản tin có role là tool gửi trả ngược lại cho LLM. Nhờ đó ở bước suy luận kế tiếp, mô hình đọc được lỗi định dạng và tự động hiệu chỉnh lại tham số chuẩn xác.',
-          durationSec: 48,
-          createdAt: '2026-04-03T14:02:00.000Z',
-        },
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 3/3 · Bảo mật dữ liệu & Phân quyền doanh nghiệp',
-          text: 'Câu hỏi cuối cùng: Nếu hệ thống SmartDocs lưu trữ cả tài liệu công khai lẫn tài liệu mật của từng phòng ban, bạn đặt cơ chế kiểm soát truy cập ở đâu để đảm bảo người dùng không thể dùng Prompt Injection khai thác trái phép tài liệu mật?',
-          createdAt: '2026-04-03T14:02:05.000Z',
-        },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Nguyễn Văn An',
-          stageTag: 'Trả lời câu 3/3',
-          questionPrompt:
-            'Câu hỏi cuối cùng: Nếu hệ thống SmartDocs lưu trữ cả tài liệu công khai lẫn tài liệu mật của từng phòng ban, bạn đặt cơ chế kiểm soát truy cập ở đâu để đảm bảo người dùng không thể dùng Prompt Injection khai thác trái phép tài liệu mật?',
-          text: 'Em áp dụng nguyên tắc Pre-filtering RBAC ngay tại tầng cơ sở dữ liệu PostgreSQL. Cụ thể, danh tính và quyền hạn của người dùng được lấy trực tiếp từ JWT token ở tầng Backend để truyền vào mệnh đề WHERE của câu truy vấn Hybrid Search. Như vậy các đoạn tài liệu không thuộc quyền truy cập của người dùng bị loại bỏ hoàn toàn ngay từ tầng SQL và không bao giờ được nạp vào ngữ cảnh của mô hình LLM.',
-          durationSec: 46,
-          createdAt: '2026-04-03T14:03:00.000Z',
-        },
-      ],
-      evaluationReport: {
-        overallScore: 89,
-        projectDepthScore: 92,
-        communicationScore: 87,
-        technicalAccuracy: 90,
-        strengths: [
-          'Hiểu rất sâu kiến trúc thực tế của các dự án đã liệt kê trong CV (Markdown + Recursive Chunking, RRF k=60, Cross-Encoder Reranker).',
-          'Nắm vững cơ chế tự phục hồi lỗi ValidationError trong vòng lặp ReAct Agent và nguyên tắc bảo mật Pre-filtering RBAC ở tầng SQL.',
+        transcriptLog: [
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 1/3 · Xác thực dự án trong CV',
+            text: 'Chào Mai! Hãy chia sẻ cách bạn xử lý bảng biểu trong báo cáo tài chính PDF ở dự án FinRAG để mô hình không đọc sai các con số theo cột?',
+            createdAt: '2026-04-04T09:00:00.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Lê Hoàng Mai',
+            stageTag: 'Trả lời câu 1/3',
+            text: 'Em chuyển toàn bộ bảng biểu tài chính sang định dạng bảng Markdown chuẩn kèm tiêu đề kỳ kế toán và đơn vị tiền tệ trên từng chunk trước khi tạo vector embedding và lưu song song vào tsvector.',
+            durationSec: 45,
+            createdAt: '2026-04-04T09:01:00.000Z',
+          },
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 2/3 · Xử lý tình huống kỹ thuật chuyên sâu',
+            text: 'Khi kết hợp tìm kiếm từ khóa và vector trên dữ liệu lớn, bạn tối ưu truy vấn PostgreSQL như thế nào?',
+            createdAt: '2026-04-04T09:01:05.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Lê Hoàng Mai',
+            stageTag: 'Trả lời câu 2/3',
+            text: 'Em dùng CTE tách riêng nhánh HNSW index scan và nhánh GIN index scan trên tsvector, giới hạn mỗi nhánh lấy Top 30 rồi mới FULL OUTER JOIN tính điểm RRF.',
+            durationSec: 42,
+            createdAt: '2026-04-04T09:02:00.000Z',
+          },
+          {
+            speaker: 'SENIOR_AI',
+            speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
+            stageTag: 'Câu 3/3 · Bảo mật dữ liệu & Phân quyền doanh nghiệp',
+            text: 'Làm sao bạn bảo vệ các API xử lý thanh toán hoặc báo cáo tài chính trước lỗi xử lý trùng lặp?',
+            createdAt: '2026-04-04T09:02:05.000Z',
+          },
+          {
+            speaker: 'STUDENT',
+            speakerLabel: 'Lê Hoàng Mai',
+            stageTag: 'Trả lời câu 3/3',
+            text: 'Em sử dụng khóa duy nhất (UNIQUE constraint) trên mã giao dịch đối tác kết hợp giao dịch ACID để đảm bảo tính Idempotency tuyệt đối.',
+            durationSec: 40,
+            createdAt: '2026-04-04T09:03:00.000Z',
+          },
         ],
-        improvements: [
-          'Có thể nêu thêm cách thiết lập Semantic Cache theo từng phân vùng quyền hạn để câu trả lời đạt mức hoàn hảo.',
-        ],
+        evaluationReport: {
+          overallScore: 91,
+          projectDepthScore: 94,
+          communicationScore: 89,
+          technicalAccuracy: 92,
+          strengths: [
+            'Tư duy tối ưu cơ sở dữ liệu PostgreSQL và thiết kế truy vấn lai rất vững vàng.',
+            'Giải quyết bài toán trích xuất bảng biểu tài chính thực tế và mạch lạc.',
+          ],
+          improvements: [
+            'Có thể mở rộng thêm về cách đánh giá tự động bằng bộ chỉ số Ragas sau mỗi lần cập nhật parser.',
+          ],
+        },
+        status: 'COMPLETED',
+        createdAt: new Date('2026-04-04T08:58:00Z'),
+        completedAt: new Date('2026-04-04T09:03:30Z'),
       },
-      status: 'COMPLETED',
-      createdAt: new Date('2026-04-03T13:58:00Z'),
-      completedAt: new Date('2026-04-03T14:03:30Z'),
-    },
-    {
-      accountId: stuMaiAcc!.id,
-      targetLevel: 'JUNIOR',
-      targetRole: 'Junior AI & Backend Engineer',
-      jdRawText:
-        'Tuyển dụng Junior AI & Backend Engineer xây dựng dịch vụ phân tích tài liệu tài chính bằng LLM và tối ưu cơ sở dữ liệu PostgreSQL/pgvector.',
-      cvScreeningResult: {
-        matchPercent: 91,
-        passedGate: true,
-        layoutAndPresentationFeedback:
-          'CV trình bày rõ kinh nghiệm thực tế tại Tiki và dự án FinRAG với con số đo lường độ chính xác 94.2%.',
-        jdMatchEvaluation: 'Hồ sơ khớp 91% với yêu cầu vị trí Junior AI & Backend Engineer.',
-        missingKeywordsOrGaps: [
-          'Bổ sung thêm chi tiết về chiến lược giám sát độ trễ p95 trên môi trường container.',
-        ],
-      },
-      transcriptLog: [
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 1/3 · Xác thực dự án trong CV',
-          text: 'Chào Mai! Hãy chia sẻ cách bạn xử lý bảng biểu trong báo cáo tài chính PDF ở dự án FinRAG để mô hình không đọc sai các con số theo cột?',
-          createdAt: '2026-04-04T09:00:00.000Z',
-        },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Lê Hoàng Mai',
-          stageTag: 'Trả lời câu 1/3',
-          text: 'Em chuyển toàn bộ bảng biểu tài chính sang định dạng bảng Markdown chuẩn kèm tiêu đề kỳ kế toán và đơn vị tiền tệ trên từng chunk trước khi tạo vector embedding và lưu song song vào tsvector.',
-          durationSec: 45,
-          createdAt: '2026-04-04T09:01:00.000Z',
-        },
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 2/3 · Xử lý tình huống kỹ thuật chuyên sâu',
-          text: 'Khi kết hợp tìm kiếm từ khóa và vector trên dữ liệu lớn, bạn tối ưu truy vấn PostgreSQL như thế nào?',
-          createdAt: '2026-04-04T09:01:05.000Z',
-        },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Lê Hoàng Mai',
-          stageTag: 'Trả lời câu 2/3',
-          text: 'Em dùng CTE tách riêng nhánh HNSW index scan và nhánh GIN index scan trên tsvector, giới hạn mỗi nhánh lấy Top 30 rồi mới FULL OUTER JOIN tính điểm RRF.',
-          durationSec: 42,
-          createdAt: '2026-04-04T09:02:00.000Z',
-        },
-        {
-          speaker: 'SENIOR_AI',
-          speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-          stageTag: 'Câu 3/3 · Bảo mật dữ liệu & Phân quyền doanh nghiệp',
-          text: 'Làm sao bạn bảo vệ các API xử lý thanh toán hoặc báo cáo tài chính trước lỗi xử lý trùng lặp?',
-          createdAt: '2026-04-04T09:02:05.000Z',
-        },
-        {
-          speaker: 'STUDENT',
-          speakerLabel: 'Lê Hoàng Mai',
-          stageTag: 'Trả lời câu 3/3',
-          text: 'Em sử dụng khóa duy nhất (UNIQUE constraint) trên mã giao dịch đối tác kết hợp giao dịch ACID để đảm bảo tính Idempotency tuyệt đối.',
-          durationSec: 40,
-          createdAt: '2026-04-04T09:03:00.000Z',
-        },
-      ],
-      evaluationReport: {
-        overallScore: 91,
-        projectDepthScore: 94,
-        communicationScore: 89,
-        technicalAccuracy: 92,
-        strengths: [
-          'Tư duy tối ưu cơ sở dữ liệu PostgreSQL và thiết kế truy vấn lai rất vững vàng.',
-          'Giải quyết bài toán trích xuất bảng biểu tài chính thực tế và mạch lạc.',
-        ],
-        improvements: [
-          'Có thể mở rộng thêm về cách đánh giá tự động bằng bộ chỉ số Ragas sau mỗi lần cập nhật parser.',
-        ],
-      },
-      status: 'COMPLETED',
-      createdAt: new Date('2026-04-04T08:58:00Z'),
-      completedAt: new Date('2026-04-04T09:03:30Z'),
-    },
-  ]);
+    ])
+    .returning();
+
+  // =========================================================================
+  // 19. CROSS-TABLE SEED CONSISTENCY SELF-AUDIT
+  // =========================================================================
+  const insertedSubtitles = await db.select().from(sessionSubtitles);
+  const insertedProgress = await db.select().from(sessionProgress);
+  const insertedCerts = await db.select().from(certificates);
+  const insertedCohorts = await db.select().from(cohorts);
+  const insertedAssessments = await db.select().from(assessments);
+
+  const consistencyViolations = findSeedConsistencyViolations({
+    cohorts: insertedCohorts.map((c) => ({
+      id: c.id,
+      code: c.code,
+      enrolledCount: c.enrolledCount,
+      scheduleSlots: c.scheduleSlots as Array<{ dayOfWeek: number; startTime: string; endTime: string }>,
+    })),
+    enrollments: insertedEnrollments.map((e) => ({
+      id: e.id,
+      accountId: e.accountId,
+      cohortId: e.cohortId,
+      status: e.status,
+      finalExamPassed: e.finalExamPassed,
+      enrolledAt: e.enrolledAt,
+      completedAt: e.completedAt,
+    })),
+    certificates: insertedCerts.map((c) => ({
+      enrollmentId: c.enrollmentId,
+      accountId: c.accountId,
+      certificateCode: c.certificateCode,
+      issuedAt: c.issuedAt,
+    })),
+    sessions: insertedSessions.map((s) => ({
+      id: s.id,
+      cohortId: s.cohortId,
+      sessionOrder: s.sessionOrder,
+      status: s.status,
+      scheduledStart: s.scheduledStart,
+      scheduledEnd: s.scheduledEnd,
+      videoR2Key: s.videoR2Key,
+    })),
+    subtitles: insertedSubtitles.map((sub) => ({ sessionId: sub.sessionId })),
+    progress: insertedProgress.map((p) => ({
+      accountId: p.accountId,
+      sessionId: p.sessionId,
+      isCompleted: p.isCompleted,
+      completedAt: p.completedAt,
+      lastActivityAt: p.lastActivityAt,
+    })),
+    assessments: insertedAssessments.map((a) => ({
+      id: a.id,
+      cohortId: a.cohortId,
+      sessionId: a.sessionId,
+      purpose: a.purpose,
+      passScorePct: a.passScorePct,
+    })),
+    assessmentItems: allInsertedItems.map((i) => ({
+      id: i.id,
+      assessmentId: i.assessmentId,
+      skillId: i.skillId,
+      points: i.points,
+    })),
+    attempts: insertedAttempts.map((att) => ({
+      id: att.id,
+      assessmentId: att.assessmentId,
+      accountId: att.accountId,
+      totalScore: att.totalScore,
+      scorePct: att.scorePct,
+      isPassed: att.isPassed,
+      integrityStatus: att.integrityStatus,
+      totalRiskScore: att.totalRiskScore,
+      startedAt: att.startedAt,
+      gradingCompletedAt: att.gradingCompletedAt,
+    })),
+    answers: allSubmissionAnswers.map((ans) => ({
+      attemptId: ans.attemptId,
+      itemId: ans.itemId,
+      finalScore: ans.finalScore,
+      gradedAt: ans.gradedAt,
+    })),
+    proctoringEvents: insertedProctoringEvents.map((ev) => ({
+      attemptId: ev.attemptId,
+      eventType: ev.eventType,
+      riskDelta: ev.riskDelta,
+      occurredAt: ev.occurredAt,
+    })),
+    knowledgeChunks: insertedKnowledgeChunks.map((ch) => ({
+      sessionId: ch.sessionId,
+      sourceType: ch.sourceType,
+    })),
+    profiles: insertedProfiles.map((p) => ({
+      accountId: p.accountId,
+      interviewCredits: p.interviewCredits,
+      cvParsedData: (p.cvParsedData ?? {}) as Record<string, unknown>,
+    })),
+    mockInterviews: insertedMockInterviews.map((m) => ({
+      accountId: m.accountId,
+      status: m.status,
+      createdAt: m.createdAt,
+      completedAt: m.completedAt,
+    })),
+    skillStates: insertedSkillStates.map((s) => ({
+      accountId: s.accountId,
+      skillId: s.skillId,
+    })),
+  });
+
+  if (consistencyViolations.length > 0) {
+    logger.error({ violations: consistencyViolations }, 'Seed consistency check failed');
+    throw new Error(`Seed consistency check failed:\n- ${consistencyViolations.join('\n- ')}`);
+  }
 
   logger.info(
-    'Full A-to-Z 3T Academy database seed completed successfully across all 26 schema tables!'
+    'Full A-to-Z 3T Academy database seed completed & verified across all 26 schema tables!'
   );
-  await pool.end();
 }
 
-seed().catch((err) => {
-  logger.error({ err }, 'Database seed failed');
-  process.exit(1);
-});
+const entryArg = typeof process !== 'undefined' ? process.argv[1] : undefined;
+const isDirectRun =
+  typeof entryArg === 'string' &&
+  import.meta.url === pathToFileURL(path.resolve(entryArg)).href;
+
+if (isDirectRun) {
+  runSeed(defaultDb)
+    .then(() => pool.end())
+    .catch((err) => {
+      logger.error({ err }, 'Database seed failed');
+      process.exit(1);
+    });
+}
