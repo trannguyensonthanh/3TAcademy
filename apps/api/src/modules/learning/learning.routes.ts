@@ -47,6 +47,7 @@ import {
   resolvePlayableVideoSource,
   getLiveRoomState,
   broadcastLiveRoomEvent,
+  markParticipantJoinedRoom,
   registerLiveRoomClient,
   setHandRaiseState,
   addLiveReaction,
@@ -1845,7 +1846,6 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
       chunks,
       discussions,
       liveChatRows,
-      participantRows,
       getStaffForInstructor,
     ] = await Promise.all([
       cohort
@@ -1879,23 +1879,6 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
         .leftJoin(accounts, eq(chatSessions.accountId, accounts.id))
         .where(and(eq(chatSessions.sessionId, session.id), eq(chatSessions.scope, 'LIVE_COPILOT')))
         .orderBy(asc(chatMessages.createdAt)),
-      db
-        .select({
-          accountId: enrollments.accountId,
-          status: enrollments.status,
-          fullName: userProfiles.fullName,
-          avatarUrl: userProfiles.avatarUrl,
-          role: accounts.role,
-        })
-        .from(enrollments)
-        .leftJoin(userProfiles, eq(enrollments.accountId, userProfiles.accountId))
-        .leftJoin(accounts, eq(enrollments.accountId, accounts.id))
-        .where(
-          and(
-            eq(enrollments.cohortId, session.cohortId),
-            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
-          )
-        ),
       buildInstructorStaffMap(),
     ]);
 
@@ -1977,32 +1960,18 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
       };
     });
 
-    const kickedSet = new Set(roomState.kickedIdentities);
-    const participants = [
-      {
-        accountId: String(session.instructorId),
-        fullName: staffInfo.instructorName,
-        role: 'INSTRUCTOR',
-        roleLabel: 'Giảng viên',
-        avatarUrl: staffInfo.instructorAvatarUrl,
-        isHost: true,
-      },
-      ...participantRows
-        .filter(
-          (p) =>
-            p.accountId !== session.instructorId &&
-            !kickedSet.has(String(p.accountId)) &&
-            !kickedSet.has(`acc-${p.accountId}`)
-        )
-        .map((p) => ({
-          accountId: String(p.accountId),
-          fullName: p.fullName || 'Học viên',
-          role: p.role || 'STUDENT',
-          roleLabel: p.role === 'INSTRUCTOR' ? 'Trợ giảng' : 'Học viên',
-          avatarUrl: p.avatarUrl || undefined,
-          isHost: false,
-        })),
-    ];
+    const callerFullName =
+      currentProfile?.fullName || (isHost ? staffInfo.instructorName : req.user!.email);
+    const participants = markParticipantJoinedRoom(session.id, {
+      accountId: String(accountId),
+      fullName: callerFullName,
+      role: userRole,
+      roleLabel: isHost ? 'Giảng viên' : 'Học viên',
+      avatarUrl:
+        currentProfile?.avatarUrl ||
+        (isHost ? staffInfo.instructorAvatarUrl : undefined),
+      isHost,
+    });
 
     res.json({
       session: mapClassSessionDto(session, {
@@ -2028,7 +1997,7 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
           }
         : null,
       participants,
-      participantCount: Math.max(participants.length, cohort?.enrolledCount || 0),
+      participantCount: participants.length,
       isHost,
       video: videoSource,
       livekit: {
@@ -2037,7 +2006,7 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
         serverUrl: livekitServerUrl,
         enabled: Boolean(livekitServerUrl),
       },
-      roomState,
+      roomState: getLiveRoomState(session.id),
       chatMessages: chatMessagesDto,
       discussions: discussions.map((d) => ({
         ...d,
@@ -2070,7 +2039,7 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
   }
 });
 
-// 3.13 GET /live/sessions/:sessionId/events (SSE stream for live chat, Q&A, hand-raise, reactions, status)
+// 3.13 GET /live/sessions/:sessionId/events (SSE stream for live chat, Q&A, hand-raise, reactions, status, presence)
 learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req, res, next) => {
   try {
     let authUser = req.user;
@@ -2141,16 +2110,36 @@ learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req,
       }
     }
 
+    const [[profile], getStaffForInstructor] = await Promise.all([
+      db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, authUser.id))
+        .limit(1),
+      buildInstructorStaffMap(),
+    ]);
+    const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+    const staffInfo = getStaffForInstructor(session.instructorId);
+
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
+    const unregister = registerLiveRoomClient(session.id, res, {
+      accountId: String(authUser.id),
+      fullName: profile?.fullName || (isHost ? staffInfo.instructorName : authUser.email),
+      role: userRole,
+      roleLabel: isHost ? 'Giảng viên' : 'Học viên',
+      avatarUrl:
+        profile?.avatarUrl || (isHost ? staffInfo.instructorAvatarUrl : undefined),
+      isHost,
+    });
+
     const initialState = getLiveRoomState(session.id);
     res.write(`event: room_state\ndata: ${JSON.stringify(initialState)}\n\n`);
 
-    const unregister = registerLiveRoomClient(session.id, res);
     const heartbeat = setInterval(() => {
       try {
         res.write(': keepalive\n\n');

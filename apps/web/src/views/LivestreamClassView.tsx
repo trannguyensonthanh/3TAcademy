@@ -19,9 +19,11 @@ import {
   PlayCircle,
   Radio,
   RefreshCw,
+  Save,
   Send,
   Sparkles,
   Square,
+  Trash2,
   UserPlus,
   UserX,
   Users,
@@ -33,7 +35,6 @@ import {
   RoomEvent,
   Track,
   type Participant,
-  type RemoteParticipant,
   type RemoteTrack,
   type RemoteTrackPublication,
 } from 'livekit-client';
@@ -73,12 +74,21 @@ interface FloatingReaction {
   leftPct: number;
 }
 
+interface PendingRecordingDraft {
+  blob: Blob;
+  previewUrl: string;
+  durationSec: number;
+  sizeBytes: number;
+  mimeType: string;
+}
+
 const DEFAULT_ROOM_STATE: LiveRoomRuntimeState = {
   raisedHands: [],
   recentReactions: [],
   questionVotes: {},
   mutedIdentities: [],
   kickedIdentities: [],
+  activeParticipants: [],
   recording: {
     isRecording: false,
   },
@@ -87,6 +97,13 @@ const DEFAULT_ROOM_STATE: LiveRoomRuntimeState = {
     liveTopicNote: '',
     updatedAt: '',
   },
+};
+
+const formatDurationClock = (seconds: number): string => {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 
 export const LivestreamClassView: React.FC<{
@@ -142,10 +159,13 @@ export const LivestreamClassView: React.FC<{
   const [screenSharing, setScreenSharing] = useState<boolean>(false);
   const [mediaNotice, setMediaNotice] = useState<string | null>(null);
 
-  // LiveKit remote stream tracking
+  // LiveKit remote stream & online participant tracking
   const [livekitConnected, setLivekitConnected] = useState<boolean>(false);
   const [livekitConnecting, setLivekitConnecting] = useState<boolean>(false);
   const [remoteVideoTracks, setRemoteVideoTracks] = useState<AttachedRemoteTrackItem[]>([]);
+  const [livekitRemoteParticipants, setLivekitRemoteParticipants] = useState<
+    LiveParticipantItem[]
+  >([]);
   const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<string[]>([]);
 
   // Stage mode toggle: STAGE (Màn hình chính) | GRID (Hiển thị lưới)
@@ -165,12 +185,15 @@ export const LivestreamClassView: React.FC<{
   const [lateJoinAiSummaryText, setLateJoinAiSummaryText] = useState<string | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
 
-  // Host session status & background recording state
+  // Host session status & 2-step recording state (Record -> Stop -> Preview & Save/Discard)
   const [isUpdatingHostState, setIsUpdatingHostState] = useState<boolean>(false);
   const [isRecordingBusy, setIsRecordingBusy] = useState<boolean>(false);
+  const [isUploadingRecording, setIsUploadingRecording] = useState<boolean>(false);
   const [recordingElapsedSec, setRecordingElapsedSec] = useState<number>(0);
+  const [pendingRecording, setPendingRecording] = useState<PendingRecordingDraft | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingStartMsRef = useRef<number>(0);
 
   const activeSessionId = guestMeta?.sessionId || roomData?.session.id || sessionId;
   const activeSession = roomData?.session;
@@ -283,10 +306,20 @@ export const LivestreamClassView: React.FC<{
     };
   }, [stopAllLocalMediaAndRoom]);
 
+  // Extract primitive LiveKit token & server URL so SSE roomData updates never disconnect the WebRTC room!
+  const activeLivekitToken = joinedAsVerifiedGuest
+    ? guestMeta?.livekit?.token || ''
+    : roomData?.livekit?.token || '';
+  const activeLivekitServerUrl =
+    (joinedAsVerifiedGuest
+      ? guestMeta?.livekit?.serverUrl
+      : roomData?.livekit?.serverUrl) ||
+    'wss://project-3t-academy-live-3vunmpp5.livekit.cloud';
+
   // Connect to LiveKit SFU ONLY when session is actually LIVE (or when Instructor is inside the room)
   useEffect(() => {
     const canConnectWebRtc = isHost || joinedAsVerifiedGuest || sessionStatus === 'LIVE';
-    if (!canConnectWebRtc) {
+    if (!canConnectWebRtc || !activeLivekitToken || !activeLivekitServerUrl) {
       if (livekitRoomRef.current) {
         void livekitRoomRef.current.disconnect();
         livekitRoomRef.current = null;
@@ -294,16 +327,7 @@ export const LivestreamClassView: React.FC<{
       setLivekitConnected(false);
       setLivekitConnecting(false);
       setRemoteVideoTracks([]);
-      return;
-    }
-
-    const lkInfo = joinedAsVerifiedGuest ? guestMeta?.livekit : roomData?.livekit;
-    const serverUrl =
-      lkInfo?.serverUrl || 'wss://project-3t-academy-live-3vunmpp5.livekit.cloud';
-    if (!lkInfo?.token || !serverUrl) {
-      setLivekitConnected(false);
-      setLivekitConnecting(false);
-      setRemoteVideoTracks([]);
+      setLivekitRemoteParticipants([]);
       return;
     }
 
@@ -312,29 +336,78 @@ export const LivestreamClassView: React.FC<{
     const room = new Room({ adaptiveStream: true, dynacast: true });
     livekitRoomRef.current = room;
 
-    const handleTrackSubscribed = (
-      track: RemoteTrack,
-      publication: RemoteTrackPublication,
-      participant: RemoteParticipant
-    ) => {
-      if (track.kind === Track.Kind.Video) {
-        const sid = publication.trackSid || `${participant.identity}-${publication.source}`;
-        const sourceType: 'camera' | 'screen_share' =
-          publication.source === Track.Source.ScreenShare ? 'screen_share' : 'camera';
-        setRemoteVideoTracks((prev) => [
-          ...prev.filter((item) => item.sid !== sid),
-          {
-            sid,
-            participantIdentity: participant.identity,
-            participantName: participant.name || participant.identity,
-            source: sourceType,
-            track,
-          },
-        ]);
-      } else if (track.kind === Track.Kind.Audio && remoteAudioContainerRef.current) {
-        const audioEl = track.attach();
-        remoteAudioContainerRef.current.appendChild(audioEl);
+    const syncRemoteStateFromRoom = () => {
+      if (cancelled) return;
+      const nextVideoTracks: AttachedRemoteTrackItem[] = [];
+      const nextParticipants: LiveParticipantItem[] = [];
+
+      for (const participant of room.remoteParticipants.values()) {
+        const cleanId = participant.identity.replace(/^acc-/, '');
+        let isRemoteHost = false;
+        let remoteRole = 'STUDENT';
+        try {
+          if (participant.metadata) {
+            const parsed = JSON.parse(participant.metadata) as {
+              isHost?: boolean;
+              role?: string;
+            };
+            if (parsed.isHost || parsed.role === 'INSTRUCTOR' || parsed.role === 'ADMIN') {
+              isRemoteHost = true;
+              remoteRole = parsed.role || 'INSTRUCTOR';
+            }
+          }
+        } catch {
+          // Ignore metadata parse error
+        }
+
+        nextParticipants.push({
+          accountId: cleanId,
+          fullName: participant.name || participant.identity,
+          role: remoteRole,
+          roleLabel: isRemoteHost ? 'Giảng viên' : 'Học viên',
+          isHost: isRemoteHost,
+        });
+
+        for (const pub of participant.trackPublications.values()) {
+          if (!pub.isSubscribed) {
+            try {
+              pub.setSubscribed(true);
+            } catch {
+              // Ignore subscription call error
+            }
+          }
+          const track = pub.track as RemoteTrack | undefined;
+          if (!track) continue;
+
+          if (track.kind === Track.Kind.Video) {
+            const sid = pub.trackSid || `${participant.identity}-${pub.source}`;
+            const isScreen =
+              pub.source === Track.Source.ScreenShare ||
+              pub.trackName?.toLowerCase().includes('screen');
+            nextVideoTracks.push({
+              sid,
+              participantIdentity: participant.identity,
+              participantName: participant.name || participant.identity,
+              source: isScreen ? 'screen_share' : 'camera',
+              track,
+            });
+          } else if (track.kind === Track.Kind.Audio && remoteAudioContainerRef.current) {
+            const sid = pub.trackSid || `${participant.identity}-audio`;
+            const existingAudio = remoteAudioContainerRef.current.querySelector(
+              `audio[data-track-sid="${sid}"]`
+            );
+            if (!existingAudio) {
+              const audioEl = track.attach();
+              audioEl.setAttribute('data-track-sid', sid);
+              remoteAudioContainerRef.current.appendChild(audioEl);
+              void audioEl.play().catch(() => {});
+            }
+          }
+        }
       }
+
+      setRemoteVideoTracks(nextVideoTracks);
+      setLivekitRemoteParticipants(nextParticipants);
     };
 
     const handleTrackUnsubscribed = (
@@ -342,14 +415,24 @@ export const LivestreamClassView: React.FC<{
       publication: RemoteTrackPublication
     ) => {
       track.detach();
-      if (track.kind === Track.Kind.Video) {
+      if (track.kind === Track.Kind.Audio && remoteAudioContainerRef.current) {
         const sid = publication.trackSid;
-        setRemoteVideoTracks((prev) => prev.filter((item) => item.sid !== sid));
+        const existingAudio = remoteAudioContainerRef.current.querySelector(
+          `audio[data-track-sid="${sid}"]`
+        );
+        existingAudio?.remove();
       }
+      syncRemoteStateFromRoom();
     };
 
-    room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+    room.on(RoomEvent.TrackSubscribed, () => syncRemoteStateFromRoom());
     room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
+    room.on(RoomEvent.TrackPublished, () => syncRemoteStateFromRoom());
+    room.on(RoomEvent.TrackUnpublished, () => syncRemoteStateFromRoom());
+    room.on(RoomEvent.ParticipantConnected, () => syncRemoteStateFromRoom());
+    room.on(RoomEvent.ParticipantDisconnected, () => syncRemoteStateFromRoom());
+    room.on(RoomEvent.Reconnected, () => syncRemoteStateFromRoom());
+
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
       if (!cancelled) {
         setActiveSpeakerIdentities(speakers.map((s) => s.identity));
@@ -369,16 +452,20 @@ export const LivestreamClassView: React.FC<{
         setLivekitConnected(false);
         setLivekitConnecting(false);
         setRemoteVideoTracks([]);
+        setLivekitRemoteParticipants([]);
         setActiveSpeakerIdentities([]);
       }
     });
 
     room
-      .connect(serverUrl, lkInfo.token)
+      .connect(activeLivekitServerUrl, activeLivekitToken)
       .then(async () => {
         if (cancelled) return;
         setLivekitConnected(true);
         setLivekitConnecting(false);
+
+        // Immediately sync any remote tracks/participants already in the room!
+        syncRemoteStateFromRoom();
 
         const camTrack = localMediaStreamRef.current?.getVideoTracks()?.[0];
         if (camTrack && camTrack.readyState === 'live' && camTrack.enabled) {
@@ -395,7 +482,10 @@ export const LivestreamClassView: React.FC<{
         const screenTrack = screenShareStreamRef.current?.getVideoTracks()?.[0];
         if (screenTrack && screenTrack.readyState === 'live') {
           await room.localParticipant
-            .publishTrack(screenTrack, { source: Track.Source.ScreenShare })
+            .publishTrack(screenTrack, {
+              source: Track.Source.ScreenShare,
+              simulcast: false,
+            })
             .catch(() => {});
         }
       })
@@ -411,7 +501,7 @@ export const LivestreamClassView: React.FC<{
       void room.disconnect();
       livekitRoomRef.current = null;
     };
-  }, [roomData?.livekit, guestMeta?.livekit, joinedAsVerifiedGuest, isHost, sessionStatus]);
+  }, [activeLivekitToken, activeLivekitServerUrl, joinedAsVerifiedGuest, isHost, sessionStatus]);
 
   // Recording elapsed clock ticker
   useEffect(() => {
@@ -431,9 +521,9 @@ export const LivestreamClassView: React.FC<{
     return () => window.clearInterval(timer);
   }, [runtimeState.recording?.isRecording, runtimeState.recording?.startedAt]);
 
-  // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions, Status, Mute & Kick
+  // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions, Status, Mute, Kick & Online Presence
   useEffect(() => {
-    if (!roomData || typeof EventSource === 'undefined') return;
+    if (!roomData?.session.id || typeof EventSource === 'undefined') return;
     const eventsUrl = learningApi.getLiveEventsUrl(roomData.session.id);
     const source = new EventSource(eventsUrl);
 
@@ -444,8 +534,45 @@ export const LivestreamClassView: React.FC<{
       try {
         const parsed = JSON.parse((evt as MessageEvent).data) as LiveRoomRuntimeState;
         setRuntimeState(parsed);
+        if (Array.isArray(parsed.activeParticipants)) {
+          setRoomData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  participants: parsed.activeParticipants!,
+                  participantCount: parsed.activeParticipants!.length,
+                }
+              : prev
+          );
+        }
       } catch {
         // Ignore malformed event
+      }
+    });
+
+    source.addEventListener('participants_updated', (evt) => {
+      try {
+        const payload = JSON.parse((evt as MessageEvent).data) as {
+          participants: LiveParticipantItem[];
+          participantCount: number;
+        };
+        if (Array.isArray(payload.participants)) {
+          setRuntimeState((prev) => ({
+            ...prev,
+            activeParticipants: payload.participants,
+          }));
+          setRoomData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  participants: payload.participants,
+                  participantCount: payload.participantCount ?? payload.participants.length,
+                }
+              : prev
+          );
+        }
+      } catch {
+        // Ignore
       }
     });
 
@@ -714,7 +841,7 @@ export const LivestreamClassView: React.FC<{
       setCamOn(false);
       setMediaNotice('Đã tắt Camera.');
 
-      if (livekitRoomRef.current && livekitConnected) {
+      if (livekitRoomRef.current) {
         const camPub = livekitRoomRef.current.localParticipant.getTrackPublication(
           Track.Source.Camera
         );
@@ -761,7 +888,15 @@ export const LivestreamClassView: React.FC<{
           setWebcamActive(false);
           setCamOn(false);
         };
-        if (livekitRoomRef.current && livekitConnected) {
+        if (livekitRoomRef.current && livekitRoomRef.current.state === 'connected') {
+          const existingPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+            Track.Source.Camera
+          );
+          if (existingPub?.track) {
+            await livekitRoomRef.current.localParticipant
+              .unpublishTrack(existingPub.track, false)
+              .catch(() => {});
+          }
           await livekitRoomRef.current.localParticipant
             .publishTrack(videoTrack, { source: Track.Source.Camera })
             .catch(() => {});
@@ -784,7 +919,7 @@ export const LivestreamClassView: React.FC<{
       setMicOn(false);
       setMediaNotice('Đã tắt Micro.');
 
-      if (livekitRoomRef.current && livekitConnected) {
+      if (livekitRoomRef.current) {
         const micPub = livekitRoomRef.current.localParticipant.getTrackPublication(
           Track.Source.Microphone
         );
@@ -815,7 +950,15 @@ export const LivestreamClassView: React.FC<{
       setMediaNotice('Đã bật Micro.');
 
       const audioTrack = audioStream.getAudioTracks()[0];
-      if (audioTrack && livekitRoomRef.current && livekitConnected) {
+      if (audioTrack && livekitRoomRef.current && livekitRoomRef.current.state === 'connected') {
+        const existingPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+          Track.Source.Microphone
+        );
+        if (existingPub?.track) {
+          await livekitRoomRef.current.localParticipant
+            .unpublishTrack(existingPub.track, false)
+            .catch(() => {});
+        }
         await livekitRoomRef.current.localParticipant
           .publishTrack(audioTrack, { source: Track.Source.Microphone })
           .catch(() => {});
@@ -825,32 +968,10 @@ export const LivestreamClassView: React.FC<{
     }
   };
 
-  const handleToggleScreenShare = async () => {
-    if (screenSharing) {
-      if (screenShareStreamRef.current) {
-        screenShareStreamRef.current.getTracks().forEach((t) => t.stop());
-        screenShareStreamRef.current = null;
-      }
-      setScreenShareStream(null);
-      setScreenSharing(false);
-      setMediaNotice('Đã dừng chia sẻ màn hình.');
-
-      if (livekitRoomRef.current && livekitConnected) {
-        const screenPub = livekitRoomRef.current.localParticipant.getTrackPublication(
-          Track.Source.ScreenShare
-        );
-        if (screenPub?.track) {
-          await livekitRoomRef.current.localParticipant
-            .unpublishTrack(screenPub.track, false)
-            .catch(() => {});
-        }
-      }
-      return;
-    }
-
+  const startScreenShareInternal = async (): Promise<MediaStream | null> => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
       setMediaNotice('Trình duyệt hiện tại không hỗ trợ chia sẻ màn hình.');
-      return;
+      return null;
     }
 
     try {
@@ -860,7 +981,7 @@ export const LivestreamClassView: React.FC<{
           height: { ideal: 1080 },
           frameRate: { ideal: 30 },
         },
-        audio: false,
+        audio: true,
       });
       screenShareStreamRef.current = displayStream;
       setScreenShareStream(displayStream);
@@ -871,7 +992,7 @@ export const LivestreamClassView: React.FC<{
       const videoTrack = displayStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
-          if (livekitRoomRef.current && livekitConnected) {
+          if (livekitRoomRef.current) {
             const screenPub = livekitRoomRef.current.localParticipant.getTrackPublication(
               Track.Source.ScreenShare
             );
@@ -885,15 +1006,55 @@ export const LivestreamClassView: React.FC<{
           setScreenShareStream(null);
           setScreenSharing(false);
         };
-        if (livekitRoomRef.current && livekitConnected) {
+        if (livekitRoomRef.current && livekitRoomRef.current.state === 'connected') {
+          const existingScreenPub =
+            livekitRoomRef.current.localParticipant.getTrackPublication(
+              Track.Source.ScreenShare
+            );
+          if (existingScreenPub?.track) {
+            await livekitRoomRef.current.localParticipant
+              .unpublishTrack(existingScreenPub.track, false)
+              .catch(() => {});
+          }
           await livekitRoomRef.current.localParticipant
-            .publishTrack(videoTrack, { source: Track.Source.ScreenShare })
+            .publishTrack(videoTrack, {
+              source: Track.Source.ScreenShare,
+              simulcast: false,
+            })
             .catch(() => {});
         }
       }
+      return displayStream;
     } catch {
       setMediaNotice('Bạn đã hủy chọn cửa sổ chia sẻ màn hình.');
+      return null;
     }
+  };
+
+  const handleToggleScreenShare = async () => {
+    if (screenSharing) {
+      if (screenShareStreamRef.current) {
+        screenShareStreamRef.current.getTracks().forEach((t) => t.stop());
+        screenShareStreamRef.current = null;
+      }
+      setScreenShareStream(null);
+      setScreenSharing(false);
+      setMediaNotice('Đã dừng chia sẻ màn hình.');
+
+      if (livekitRoomRef.current) {
+        const screenPub = livekitRoomRef.current.localParticipant.getTrackPublication(
+          Track.Source.ScreenShare
+        );
+        if (screenPub?.track) {
+          await livekitRoomRef.current.localParticipant
+            .unpublishTrack(screenPub.track, false)
+            .catch(() => {});
+        }
+      }
+      return;
+    }
+
+    await startScreenShareInternal();
   };
 
   const handleToggleHandRaise = async () => {
@@ -1102,36 +1263,72 @@ export const LivestreamClassView: React.FC<{
     }
   };
 
-  // Start recording in background
+  // ============================================================================
+  // 2-STEP RECORDING FLOW:
+  // Step 1: Start Recording -> Records Screen Share or Camera + Mic
+  // Step 2: Stop Recording -> Stops recording WITHOUT ending Live, shows Preview + "Lưu bản ghi (MP4)" / "Không lưu (Hủy)"
+  // ============================================================================
   const handleStartRecording = async () => {
     setIsRecordingBusy(true);
     try {
+      let baseVideoStream =
+        screenShareStreamRef.current || localMediaStreamRef.current;
+
+      // If Instructor hasn't turned on Screen Share or Camera yet, prompt Screen Share so there is a real video stream to record
+      if (!baseVideoStream || baseVideoStream.getVideoTracks().length === 0) {
+        baseVideoStream = await startScreenShareInternal();
+      }
+
+      if (!baseVideoStream || baseVideoStream.getVideoTracks().length === 0) {
+        setMediaNotice(
+          'Vui lòng bật Chia sẻ màn hình hoặc Camera trước khi bấm Ghi hình để bản ghi có hình ảnh.'
+        );
+        return;
+      }
+
+      // Clear any previous unsaved draft
+      if (pendingRecording?.previewUrl) {
+        URL.revokeObjectURL(pendingRecording.previewUrl);
+      }
+      setPendingRecording(null);
+
       const res = await teachApi.startSessionRecording(activeSessionId);
       setRuntimeState((prev) => ({
         ...prev,
         recording: res.recording,
       }));
+      recordingStartMsRef.current = Date.now();
 
-      const captureStream =
-        screenShareStreamRef.current || localMediaStreamRef.current;
-      if (
-        captureStream &&
-        typeof MediaRecorder !== 'undefined' &&
-        captureStream.getTracks().length > 0
-      ) {
-        try {
-          recordedChunksRef.current = [];
-          const recorder = new MediaRecorder(captureStream);
-          recorder.ondataavailable = (ev) => {
-            if (ev.data && ev.data.size > 0) {
-              recordedChunksRef.current.push(ev.data);
-            }
-          };
-          recorder.start(1000);
-          mediaRecorderRef.current = recorder;
-        } catch {
-          // Ignore if browser codec doesn't match stream tracks
+      if (typeof MediaRecorder !== 'undefined') {
+        const combinedTracks: MediaStreamTrack[] = [
+          ...baseVideoStream.getVideoTracks(),
+          ...baseVideoStream.getAudioTracks(),
+        ];
+        if (localAudioStreamRef.current) {
+          combinedTracks.push(...localAudioStreamRef.current.getAudioTracks());
         }
+        const combinedStream = new MediaStream(combinedTracks);
+
+        const preferredMime =
+          typeof MediaRecorder.isTypeSupported === 'function' &&
+          MediaRecorder.isTypeSupported('video/mp4')
+            ? 'video/mp4'
+            : typeof MediaRecorder.isTypeSupported === 'function' &&
+                MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+              ? 'video/webm;codecs=vp8,opus'
+              : 'video/webm';
+
+        recordedChunksRef.current = [];
+        const recorder = new MediaRecorder(combinedStream, {
+          mimeType: preferredMime,
+        });
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) {
+            recordedChunksRef.current.push(ev.data);
+          }
+        };
+        recorder.start(1000);
+        mediaRecorderRef.current = recorder;
       }
 
       setMediaNotice('Đã bắt đầu ghi hình buổi học.');
@@ -1156,14 +1353,16 @@ export const LivestreamClassView: React.FC<{
       reader.readAsDataURL(blob);
     });
 
-  // Stop recording & automatically upload/save in background
+  // Step 2: Stop recording WITHOUT ending Live, and let Instructor preview & choose Save or Discard!
   const handleStopRecording = async () => {
     setIsRecordingBusy(true);
     try {
+      let mimeType = 'video/mp4';
       if (
         mediaRecorderRef.current &&
         mediaRecorderRef.current.state !== 'inactive'
       ) {
+        mimeType = mediaRecorderRef.current.mimeType || 'video/mp4';
         await new Promise<void>((resolve) => {
           const rec = mediaRecorderRef.current!;
           rec.onstop = () => resolve();
@@ -1172,60 +1371,71 @@ export const LivestreamClassView: React.FC<{
       }
       mediaRecorderRef.current = null;
 
-      if (recordedChunksRef.current.length > 0) {
-        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-        recordedChunksRef.current = [];
-        const base64Data = await blobToBase64(blob);
-        const uploaded = await teachApi.uploadSessionRecordingToR2(
-          activeSessionId,
-          {
-            fileName: `live-session-${activeSessionId}-${Date.now()}.webm`,
-            contentType: 'video/webm',
-            base64Data,
-            markReplayReady: true,
-          }
-        );
-        setRuntimeState((prev) => ({
-          ...prev,
-          recording: uploaded.recording,
-        }));
-        updateSessionDetails(String(activeSessionId), {
-          status: uploaded.status,
-          videoR2Key: uploaded.videoUrl,
-        });
-        setRoomData((prev) =>
-          prev
-            ? {
-                ...prev,
-                session: {
-                  ...prev.session,
-                  status: uploaded.status,
-                  videoR2Key: uploaded.videoUrl,
-                },
-                video: {
-                  ...prev.video,
-                  videoUrl: uploaded.videoUrl,
-                  playbackType: 'MP4',
-                },
-              }
-            : prev
-        );
-        setMediaNotice(
-          'Đã dừng ghi hình và lưu bản ghi buổi học. Học viên có thể xem lại trong phần Video bài giảng.'
-        );
-        return;
-      }
+      const elapsed =
+        recordingElapsedSec > 0
+          ? recordingElapsedSec
+          : recordingStartMsRef.current > 0
+            ? Math.max(1, Math.floor((Date.now() - recordingStartMsRef.current) / 1000))
+            : 1;
 
+      // Notify backend that recording stopped while keeping session LIVE (markReplayReady: false)
       const stopped = await teachApi.stopSessionRecording(activeSessionId, {
-        markReplayReady: true,
+        markReplayReady: false,
       });
       setRuntimeState((prev) => ({
         ...prev,
         recording: stopped.recording,
       }));
+
+      if (recordedChunksRef.current.length > 0) {
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        recordedChunksRef.current = [];
+        const previewUrl = URL.createObjectURL(blob);
+        setPendingRecording({
+          blob,
+          previewUrl,
+          durationSec: elapsed,
+          sizeBytes: blob.size,
+          mimeType,
+        });
+        setMediaNotice(
+          'Đã dừng ghi hình (Phòng Live vẫn đang hoạt động). Hãy kiểm tra bản ghi bên dưới và bấm "Lưu bản ghi" hoặc "Hủy bỏ".'
+        );
+      } else {
+        setMediaNotice(
+          'Đã dừng ghi hình (Phòng Live vẫn đang hoạt động bình thường).'
+        );
+      }
+    } catch {
+      setMediaNotice('Đã dừng ghi hình.');
+    } finally {
+      setIsRecordingBusy(false);
+    }
+  };
+
+  // Explicit Save Recording to Cloudflare R2 (MP4)
+  const handleSavePendingRecording = async () => {
+    if (!pendingRecording) return;
+    setIsUploadingRecording(true);
+    try {
+      const base64Data = await blobToBase64(pendingRecording.blob);
+      const uploaded = await teachApi.uploadSessionRecordingToR2(
+        activeSessionId,
+        {
+          fileName: `buoi-${sessionOrder}-session-${activeSessionId}-${Date.now()}.mp4`,
+          contentType: 'video/mp4',
+          base64Data,
+          markReplayReady: false,
+        }
+      );
+
+      setRuntimeState((prev) => ({
+        ...prev,
+        recording: uploaded.recording,
+      }));
       updateSessionDetails(String(activeSessionId), {
-        status: stopped.status,
-        videoR2Key: stopped.r2PublicUrl,
+        status: uploaded.status,
+        videoR2Key: uploaded.videoUrl,
       });
       setRoomData((prev) =>
         prev
@@ -1233,25 +1443,38 @@ export const LivestreamClassView: React.FC<{
               ...prev,
               session: {
                 ...prev.session,
-                status: stopped.status,
-                videoR2Key: stopped.r2PublicUrl,
+                status: uploaded.status,
+                videoR2Key: uploaded.videoUrl,
               },
               video: {
                 ...prev.video,
-                videoUrl: stopped.videoUrl,
-                playbackType: stopped.playbackType,
+                videoUrl: uploaded.videoUrl,
+                playbackType: 'MP4',
               },
             }
           : prev
       );
+
+      URL.revokeObjectURL(pendingRecording.previewUrl);
+      setPendingRecording(null);
       setMediaNotice(
-        'Đã dừng ghi hình và lưu bản ghi buổi học. Học viên có thể xem lại trong phần Video bài giảng.'
+        'Đã lưu bản ghi MP4 lên hệ thống thành công! Học viên có thể xem lại trong mục Video bài giảng.'
       );
     } catch {
-      setMediaNotice('Không thể lưu bản ghi buổi học.');
+      setMediaNotice('Không thể tải bản ghi lên hệ thống. Vui lòng thử bấm Lưu lại.');
     } finally {
-      setIsRecordingBusy(false);
+      setIsUploadingRecording(false);
     }
+  };
+
+  // Explicit Discard Recording without saving/uploading
+  const handleDiscardPendingRecording = () => {
+    if (pendingRecording?.previewUrl) {
+      URL.revokeObjectURL(pendingRecording.previewUrl);
+    }
+    setPendingRecording(null);
+    recordedChunksRef.current = [];
+    setMediaNotice('Đã hủy bỏ bản ghi nháp (không lưu lên hệ thống).');
   };
 
   const handleVerifyAndJoinGuestStage = async () => {
@@ -1290,20 +1513,64 @@ export const LivestreamClassView: React.FC<{
     }
   };
 
-  // Deduplicated participant list for the right-hand "Thành viên" tab
+  // Real-time online participants ONLY (combining SSE online presence + LiveKit WebRTC participants + self)
   const uniqueParticipants = useMemo(() => {
-    const raw = roomData?.participants ?? [];
+    const kickedSet = new Set(runtimeState.kickedIdentities || []);
+    const mergedSource: LiveParticipantItem[] = [
+      ...(runtimeState.activeParticipants && runtimeState.activeParticipants.length > 0
+        ? runtimeState.activeParticipants
+        : roomData?.participants ?? []),
+      ...livekitRemoteParticipants,
+    ];
+
+    if (currentAccountId) {
+      mergedSource.unshift({
+        accountId: currentAccountId,
+        fullName:
+          currentUser?.fullName ||
+          guestDisplayName ||
+          (isHost ? activeSession?.hostInstructorName || 'Giảng viên' : 'Học viên'),
+        role: isHost ? 'INSTRUCTOR' : 'STUDENT',
+        roleLabel: isHost ? 'Giảng viên' : 'Học viên',
+        isHost,
+      });
+    }
+
     const seen = new Set<string>();
     const result: LiveParticipantItem[] = [];
-    for (const p of raw) {
-      const key = `${p.accountId}-${p.fullName.trim().toLowerCase()}`;
-      if (seen.has(key) || (p.accountId && seen.has(p.accountId))) continue;
-      seen.add(key);
-      if (p.accountId) seen.add(p.accountId);
-      result.push(p);
+
+    for (const p of mergedSource) {
+      const cleanId = String(p.accountId || '').replace(/^acc-/, '').trim();
+      if (!cleanId && !p.fullName) continue;
+      if (kickedSet.has(cleanId) || kickedSet.has(`acc-${cleanId}`)) continue;
+      if (cleanId && seen.has(cleanId)) continue;
+      const nameKey = `${p.isHost ? 'host' : 'member'}-${p.fullName.trim().toLowerCase()}`;
+      if (seen.has(nameKey)) continue;
+
+      if (cleanId) seen.add(cleanId);
+      seen.add(nameKey);
+      result.push({
+        ...p,
+        accountId: cleanId || p.accountId,
+      });
     }
-    return result;
-  }, [roomData?.participants]);
+
+    return result.sort((a, b) => {
+      if (a.isHost && !b.isHost) return -1;
+      if (!a.isHost && b.isHost) return 1;
+      return 0;
+    });
+  }, [
+    runtimeState.activeParticipants,
+    runtimeState.kickedIdentities,
+    roomData?.participants,
+    livekitRemoteParticipants,
+    currentAccountId,
+    currentUser?.fullName,
+    guestDisplayName,
+    isHost,
+    activeSession?.hostInstructorName,
+  ]);
 
   // ============================================================================
   // 1. MÀN HÌNH THAM GIA CHO DIỄN GIẢ KHÁCH MỜI (/live/guest)
@@ -1553,8 +1820,6 @@ export const LivestreamClassView: React.FC<{
 
   // ============================================================================
   // 4. PHÒNG CHỜ HOẶC THÔNG BÁO KẾT THÚC DÀNH CHO HỌC VIÊN KHI GIẢNG VIÊN CHƯA BẬT LIVE
-  //    (Khi Giảng viên bấm mở Live, sự kiện SSE `session_status` sẽ tự động đưa học viên
-  //     vào thẳng phòng học mà không cần tải lại trang!)
   // ============================================================================
   if (!isHost && !joinedAsVerifiedGuest && sessionStatus !== 'LIVE') {
     const isEnded = sessionStatus === 'REPLAY_READY';
@@ -1593,7 +1858,6 @@ export const LivestreamClassView: React.FC<{
             </p>
           </div>
 
-          {/* Khu vực kiểm tra trước Camera & Micro giống Google Meet */}
           {!isEnded && (
             <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
               <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
@@ -1754,7 +2018,7 @@ export const LivestreamClassView: React.FC<{
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer tabular-nums"
           >
             <Users className="w-3.5 h-3.5 text-emerald-600" />
-            <span>{uniqueParticipants.length} thành viên</span>
+            <span>{uniqueParticipants.length} đang trong phòng</span>
           </button>
         </div>
       </header>
@@ -1837,6 +2101,63 @@ export const LivestreamClassView: React.FC<{
             onStopRecording={() => void handleStopRecording()}
           />
 
+          {/* =================================================================
+              2-STEP RECORDING CONFIRMATION PANEL (PREVIEW + SAVE TO R2 OR DISCARD)
+              Hiển thị ngay sau khi Giảng viên bấm "Dừng ghi hình" để Giảng viên
+              xem thử bản ghi và quyết định Lưu (MP4) hay Hủy bỏ!
+          ================================================================= */}
+          {isHost && pendingRecording && (
+            <div className="rounded-2xl bg-white dark:bg-slate-900 border-2 border-emerald-500 p-4 sm:p-5 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                    <Video className="w-4 h-4 text-emerald-600" />
+                    <span>XÁC NHẬN BẢN GHI VỪA QUAY · CHỌN LƯU HOẶC HỦY BỎ</span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Thời lượng: <strong>{formatDurationClock(pendingRecording.durationSec)}</strong> · Dung lượng:{' '}
+                    <strong>{(pendingRecording.sizeBytes / (1024 * 1024)).toFixed(2)} MB</strong> · Định dạng: MP4
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isUploadingRecording}
+                    onClick={() => void handleSavePendingRecording()}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span>
+                      {isUploadingRecording
+                        ? 'Đang lưu bản ghi lên hệ thống...'
+                        : 'Lưu bản ghi (MP4)'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isUploadingRecording}
+                    onClick={handleDiscardPendingRecording}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Không lưu (Hủy bản ghi)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl overflow-hidden bg-black border border-slate-200 dark:border-slate-800 max-h-64 flex items-center justify-center">
+                <video
+                  src={pendingRecording.previewUrl}
+                  controls
+                  playsInline
+                  className="w-full max-h-60 object-contain"
+                />
+              </div>
+            </div>
+          )}
+
           {mediaNotice && (
             <div className="px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-2">
               <span>{mediaNotice}</span>
@@ -1852,9 +2173,6 @@ export const LivestreamClassView: React.FC<{
 
           {/* =================================================================
               BALANCED 3-ZONE GOOGLE MEET / ZOOM BOTTOM CONTROL BAR
-              - Left Zone: Class code & role status
-              - Center Zone: Perfectly balanced media & interaction controls
-              - Right Zone: End / Leave room actions
           ================================================================= */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-3 shadow-xs grid grid-cols-1 xl:grid-cols-12 items-center gap-3">
             {/* LEFT ZONE: Session & Role Info */}
@@ -2124,7 +2442,7 @@ export const LivestreamClassView: React.FC<{
               }`}
             >
               <Users className="w-3.5 h-3.5 shrink-0" />
-              <span>Thành viên</span>
+              <span>Thành viên ({uniqueParticipants.length})</span>
             </button>
           </div>
 
@@ -2327,7 +2645,7 @@ export const LivestreamClassView: React.FC<{
             </div>
           )}
 
-          {/* TAB 4: THÀNH VIÊN TRONG LỚP & ĐIỀU PHỐI HỌC VIÊN */}
+          {/* TAB 4: THÀNH VIÊN ĐANG TRONG PHÒNG HỌC & ĐIỀU PHỐI HỌC VIÊN */}
           {rightTab === 'PARTICIPANTS' && (
             <div className="p-4 space-y-4 min-h-[480px] overflow-y-auto max-h-[540px]">
               {runtimeState.raisedHands.length > 0 && (
@@ -2354,8 +2672,9 @@ export const LivestreamClassView: React.FC<{
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Danh sách thành viên ({uniqueParticipants.length})
+                  <div className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>Đang có mặt trực tuyến ({uniqueParticipants.length})</span>
                   </div>
                 </div>
 
@@ -2385,7 +2704,7 @@ export const LivestreamClassView: React.FC<{
                           </div>
                           <div className="text-[11px] text-slate-500 dark:text-slate-400">
                             {p.isHost ? 'Giảng viên phụ trách' : p.roleLabel || 'Học viên'}
-                            {isMutedStudent ? ' · Đã tắt mic' : ''}
+                            {isMutedStudent ? ' · Đã tắt mic' : ' · Đang trực tuyến'}
                           </div>
                         </div>
                       </div>

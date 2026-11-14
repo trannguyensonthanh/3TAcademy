@@ -43,8 +43,9 @@ export const LiveMediaTrackView: React.FC<LiveMediaTrackViewProps> = ({ track, c
 
   useEffect(() => {
     const el = videoRef.current;
-    if (!el) return;
+    if (!el || !track) return;
     track.attach(el);
+    el.muted = true;
     void el.play().catch(() => {});
     return () => {
       track.detach(el);
@@ -56,6 +57,7 @@ export const LiveMediaTrackView: React.FC<LiveMediaTrackViewProps> = ({ track, c
       ref={videoRef}
       autoPlay
       playsInline
+      muted
       className={className || 'w-full h-full object-cover'}
     />
   );
@@ -181,13 +183,11 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const [mirrorSelfCamera, setMirrorSelfCamera] = useState<boolean>(true);
   const [pinnedTrackSid, setPinnedTrackSid] = useState<string | null>(null);
-  // Allows a student to optionally expand their own PiP camera to the main stage and minimize back
   const [focusSelfOnMainStage, setFocusSelfOnMainStage] = useState<boolean>(false);
 
   const hasLocalCameraVideo = Boolean(webcamActive && camOn && localVideoStream);
   const hasLocalScreenVideo = Boolean(screenSharing && screenShareStream);
 
-  // Reset self-focus if student turns off their camera
   useEffect(() => {
     if (!hasLocalCameraVideo && !hasLocalScreenVideo) {
       setFocusSelfOnMainStage(false);
@@ -231,7 +231,6 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   const primaryRemoteCamera = pinnedRemoteTrack || hostRemoteCameraTrack || remoteCameraTracks[0];
   const isRecording = Boolean(recordingState?.isRecording);
 
-  // Check if Instructor is currently speaking via LiveKit active speakers
   const isHostSpeaking = useMemo(() => {
     if (isHost) return micOn;
     if (!hostParticipant) return false;
@@ -242,7 +241,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
     );
   }, [isHost, micOn, hostParticipant, activeSpeakerIdentities]);
 
-  // Deduplicate participants so the current user never appears twice
+  // Deduplicate online participants so the current user never appears twice
   const otherParticipants = useMemo(() => {
     const seen = new Set<string>();
     if (selfAccountId) {
@@ -325,7 +324,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                   className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <Square className="w-3 h-3 fill-current" />
-                  <span>{isRecordingBusy ? 'Đang lưu...' : 'Dừng ghi'}</span>
+                  <span>{isRecordingBusy ? 'Đang xử lý...' : 'Dừng ghi hình'}</span>
                 </button>
               )}
             </>
@@ -388,12 +387,12 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
 
       {/* =====================================================================
           MODE 1: GRID VIEW (Hiển thị lưới Google Meet / Zoom)
-          Giảng viên đứng đầu tiên, tiếp theo là các thành viên trong lớp
+          Chỉ hiển thị những người đang thực sự có mặt trực tuyến trong phòng!
       ===================================================================== */}
       {stageViewMode === 'GRID' ? (
         <div className="p-4 bg-slate-900 min-h-[460px] flex flex-col justify-between gap-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 flex-1">
-            {/* If User is Student, show Instructor Tile FIRST in Grid so Instructor is always prominent */}
+            {/* If User is Student and Instructor is online in the room, show Instructor Tile FIRST */}
             {!isHost && hostParticipant && (
               <div
                 className={`relative rounded-xl bg-slate-800 border-2 ${
@@ -500,7 +499,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
               </div>
             </div>
 
-            {/* Remote Video Tracks of other participants */}
+            {/* Remote Video Tracks of other online participants */}
             {remoteVideoTracks
               .filter((rt) => {
                 if (!isHost && hostParticipant) {
@@ -585,7 +584,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                 );
               })}
 
-            {/* Other Participants without active camera */}
+            {/* Other Online Participants without active camera */}
             {otherParticipants
               .filter((p) => {
                 if (!isHost && p.isHost) return false;
@@ -662,23 +661,23 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
       ) : (
         /* =====================================================================
            MODE 2: GOOGLE MEET / ZOOM SPEAKER STAGE (Màn hình chính 16:9)
-           - Học viên: Màn hình chính luôn ưu tiên hiển thị Giảng viên (bài trình chiếu
+           - Học viên: Màn hình chính luôn ưu tiên hiển thị Giảng viên (màn hình chia sẻ
              hoặc camera của Giảng viên). Camera/Mic của Học viên hiển thị ở góc dưới
              (Picture-in-Picture) đúng chuẩn Google Meet / Zoom.
            - Giảng viên: Hiển thị màn hình chia sẻ / camera của Giảng viên và có thể
              quan sát học viên ở góc hoặc chuyển sang chế độ Lưới.
         ===================================================================== */
         <div className="relative aspect-video bg-slate-900 flex items-center justify-center overflow-hidden">
-          {/* 1. Remote Screen Share (e.g. Instructor presenting slides/code to students) */}
+          {/* 1. Remote Screen Share (e.g. Instructor presenting slides/code/screen to students) */}
           {remoteScreenTrack && !focusSelfOnMainStage ? (
             <div className="relative w-full h-full bg-black flex items-center justify-center">
               <LiveMediaTrackView
                 track={remoteScreenTrack.track}
                 className="w-full h-full object-contain"
               />
-              <div className="absolute top-4 left-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/80 text-white text-xs font-semibold">
+              <div className="absolute top-4 left-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/85 border border-white/15 text-white text-xs font-semibold shadow-md">
                 <MonitorUp className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{remoteScreenTrack.participantName} đang trình bày màn hình</span>
+                <span>{remoteScreenTrack.participantName} đang chia sẻ màn hình</span>
               </div>
             </div>
           ) : hasLocalScreenVideo ? (
@@ -708,7 +707,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                 </div>
               </div>
             ) : (
-              /* Instructor's camera is currently off -> Student sees the Instructor's main stage */
+              /* Instructor's camera & screen share are currently off -> Student sees the Instructor's main stage */
               <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center select-none bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
                 <div className="relative mb-4">
                   {isHostSpeaking && (
@@ -731,12 +730,12 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                   Giảng viên phụ trách lớp · Màn hình giảng dạy chính
                 </p>
                 <p className="text-[11px] text-slate-400 mt-2">
-                  Sử dụng thanh điều khiển bên dưới để bật Micro, Camera, Chia sẻ màn hình hoặc Giơ tay phát biểu
+                  Khi Giảng viên bật Camera hoặc Chia sẻ màn hình, nội dung sẽ hiển thị trực tiếp tại đây
                 </p>
               </div>
             )
           ) : isHost && hasLocalCameraVideo ? (
-            /* 4. INSTRUCTOR VIEW (or Student who clicked Expand on their PiP): Local Camera on Main Stage */
+            /* 4. INSTRUCTOR VIEW: Local Camera on Main Stage */
             <div className="relative w-full h-full bg-slate-950 flex items-center justify-center">
               <LocalMediaStreamView
                 stream={localVideoStream}
@@ -843,14 +842,22 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
 
           {/* =================================================================
               PICTURE-IN-PICTURE (PiP) CORNER TILE (Google Meet / Zoom Standard)
-              - Đối với Học viên: Khi xem màn hình Giảng viên ở chính giữa, góc dưới
-                bên phải luôn hiển thị khung hình của chính Học viên (Camera hoặc trạng thái Mic)
-                để Học viên kiểm soát hình ảnh cá nhân mà không che khuất Giảng viên.
-              - Đối với Giảng viên: Hiển thị khung hình nhỏ khi đang chia sẻ màn hình
-                hoặc hiển thị camera học viên đang phát biểu.
           ================================================================= */}
           {!isHost && !focusSelfOnMainStage && (
-            <div className="absolute bottom-4 right-4 z-20">
+            <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
+              {/* If Instructor is sharing screen AND also has camera on, show Instructor's camera PiP above Student's PiP */}
+              {remoteScreenTrack && hostRemoteCameraTrack && (
+                <div className="relative w-40 sm:w-48 aspect-video rounded-xl overflow-hidden border-2 border-emerald-400/80 shadow-xl bg-slate-800">
+                  <LiveMediaTrackView
+                    track={hostRemoteCameraTrack.track}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-1.5 left-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] font-medium text-white truncate">
+                    {hostRemoteCameraTrack.participantName} (Giảng viên)
+                  </div>
+                </div>
+              )}
+
               {hasLocalCameraVideo ? (
                 <div className="relative w-44 sm:w-56 aspect-video rounded-xl overflow-hidden border-2 border-white/80 shadow-xl bg-slate-800 group">
                   <LocalMediaStreamView
@@ -885,7 +892,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                       {micOn ? (
                         <span className="text-emerald-400">Mic đang bật</span>
                       ) : (
-                        <span className="text-slate-400">Mic đang tắt</span>
+                        <span className="text-slate-400">Mic tắt</span>
                       )}
                       <span>·</span>
                       <span>{camOn ? 'Cam bật' : 'Cam tắt'}</span>
@@ -955,61 +962,68 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
         </div>
       )}
 
-      {/* Compact Participant Strip at the bottom of the stage */}
-      {stageViewMode === 'STAGE' && otherParticipants.length > 0 && (
+      {/* Compact Real-Time Online Participant Strip at the bottom of the stage */}
+      {stageViewMode === 'STAGE' && (
         <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-900/90 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 overflow-x-auto">
           <div className="flex items-center gap-2 min-w-0">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <Users className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Thành viên trong lớp ({1 + otherParticipants.length}):</span>
+              <span>Đang có mặt trong phòng ({1 + otherParticipants.length}):</span>
             </span>
 
-            <div className="flex items-center gap-2 overflow-x-auto py-0.5">
-              {otherParticipants.slice(0, 6).map((p) => {
-                const pid = `acc-${p.accountId}`;
-                const isRaisingHand = raisedHands.some((h) => h.accountId === p.accountId);
-                return (
-                  <div
-                    key={p.accountId}
-                    className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs shrink-0"
-                  >
-                    <AvatarWithFallback
-                      name={p.fullName}
-                      className="w-5 h-5 rounded-full text-[10px]"
-                    />
-                    <span className="font-medium text-slate-800 dark:text-slate-200">
-                      {p.fullName}
-                    </span>
-                    {p.isHost && (
-                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                        (Giảng viên)
+            {otherParticipants.length === 0 ? (
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                {selfName} (Bạn) · Chưa có thành viên nào khác vào phòng
+              </span>
+            ) : (
+              <div className="flex items-center gap-2 overflow-x-auto py-0.5">
+                {otherParticipants.slice(0, 6).map((p) => {
+                  const pid = `acc-${p.accountId}`;
+                  const isRaisingHand = raisedHands.some((h) => h.accountId === p.accountId);
+                  return (
+                    <div
+                      key={p.accountId}
+                      className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs shrink-0"
+                    >
+                      <AvatarWithFallback
+                        name={p.fullName}
+                        className="w-5 h-5 rounded-full text-[10px]"
+                      />
+                      <span className="font-medium text-slate-800 dark:text-slate-200">
+                        {p.fullName}
                       </span>
-                    )}
-                    {isRaisingHand && <Hand className="w-3.5 h-3.5 text-amber-500" />}
-                    {isHost && !p.isHost && (
-                      <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
-                        <button
-                          type="button"
-                          onClick={() => onMuteParticipant(pid, p.fullName)}
-                          title="Tắt mic học viên này"
-                          className="p-1 rounded hover:bg-amber-50 dark:hover:bg-amber-950/50 text-slate-500 hover:text-amber-600 cursor-pointer"
-                        >
-                          <MicOff className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onKickParticipant(pid, p.fullName)}
-                          title="Mời ra khỏi phòng"
-                          className="p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-500 hover:text-rose-600 cursor-pointer"
-                        >
-                          <UserX className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      {p.isHost && (
+                        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                          (Giảng viên)
+                        </span>
+                      )}
+                      {isRaisingHand && <Hand className="w-3.5 h-3.5 text-amber-500" />}
+                      {isHost && !p.isHost && (
+                        <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+                          <button
+                            type="button"
+                            onClick={() => onMuteParticipant(pid, p.fullName)}
+                            title="Tắt mic học viên này"
+                            className="p-1 rounded hover:bg-amber-50 dark:hover:bg-amber-950/50 text-slate-500 hover:text-amber-600 cursor-pointer"
+                          >
+                            <MicOff className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onKickParticipant(pid, p.fullName)}
+                            title="Mời ra khỏi phòng"
+                            className="p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-500 hover:text-rose-600 cursor-pointer"
+                          >
+                            <UserX className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {otherParticipants.length > 6 && (

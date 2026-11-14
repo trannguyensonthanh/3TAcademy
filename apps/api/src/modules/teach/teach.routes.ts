@@ -1281,12 +1281,14 @@ teachRouter.post(
         stoppedAt: new Date().toISOString(),
       });
 
+      // Stopping a recording MUST NOT end the live session unless markReplayReady === true is explicitly passed
       const nextStatus =
-        req.body.markReplayReady === false ? session.status : 'REPLAY_READY';
-      const nextVideoKey =
-        activeRec.mode === 'LIVEKIT_EGRESS' || req.body.objectKey
-          ? finalPublicUrl
-          : session.videoR2Key || finalPublicUrl;
+        req.body.markReplayReady === true ? 'REPLAY_READY' : session.status;
+      const shouldPersistVideoKey =
+        activeRec.mode === 'LIVEKIT_EGRESS' || Boolean(req.body.objectKey?.trim());
+      const nextVideoKey = shouldPersistVideoKey
+        ? finalPublicUrl
+        : session.videoR2Key;
 
       const [updated] = await db
         .update(classSessions)
@@ -1350,8 +1352,8 @@ teachRouter.post(
         return;
       }
 
-      const contentType = (req.body.contentType || 'video/webm').trim();
-      const ext = contentType.includes('mp4') ? 'mp4' : 'webm';
+      const contentType = (req.body.contentType || 'video/mp4').trim();
+      const ext = contentType.includes('webm') && !req.body.fileName?.endsWith('.mp4') ? 'webm' : 'mp4';
       const safeName = (req.body.fileName || `live-session-${session.id}-${Date.now()}.${ext}`)
         .replace(/[^a-zA-Z0-9._-]/g, '_');
       const objectKey = `recordings/session-${session.id}/${safeName}`;
@@ -1367,8 +1369,9 @@ teachRouter.post(
         contentType,
       });
 
+      // Saving a recording to R2 keeps the live session open unless markReplayReady === true
       const nextStatus =
-        req.body.markReplayReady === false ? session.status : 'REPLAY_READY';
+        req.body.markReplayReady === true ? 'REPLAY_READY' : session.status;
 
       await db
         .update(classSessions)

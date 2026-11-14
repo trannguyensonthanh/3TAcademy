@@ -35,5 +35,8 @@
     "proctoring"
   ],
   "author": "Google Antigravity Pair Programmer",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "hls.js": "^1.7.4"
+  }
 }
