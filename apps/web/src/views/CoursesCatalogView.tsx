@@ -18,8 +18,15 @@ import { catalogApi } from '../services/catalog.api';
 
 function getCategoryFallbackIcon(cat: CourseCategoryItem) {
   const key = (cat.iconName || cat.slug || cat.name || '').toLowerCase();
-  if (key.includes('ai') || key.includes('rag')) return Cpu;
-  if (key.includes('cloud') || key.includes('swe') || key.includes('phan-mem') || key.includes('phần mềm')) {
+  if (key.includes('ai') || key.includes('rag') || key.includes('trí tuệ')) return Cpu;
+  if (
+    key.includes('cloud') ||
+    key.includes('swe') ||
+    key.includes('backend') ||
+    key.includes('hệ thống') ||
+    key.includes('phan-mem') ||
+    key.includes('phần mềm')
+  ) {
     return Cloud;
   }
   return Database;
@@ -27,13 +34,29 @@ function getCategoryFallbackIcon(cat: CourseCategoryItem) {
 
 const TARGET_SKILLS = ['Python', 'Trợ lý AI', 'RAG', 'Node.js', 'SQL'];
 
-const DIFFICULTY_LABELS: Record<number, { text: string; colorClass: string }> = {
-  1: { text: '1 · Nhập môn', colorClass: 'text-[#10B981]' },
-  2: { text: '2 · Cơ bản Thực chiến', colorClass: 'text-[#10B981]' },
-  3: { text: '3 · Trung cấp Chuyên sâu', colorClass: 'text-[#F59E0B]' },
-  4: { text: '4 · Nâng cao Production', colorClass: 'text-[#F59E0B]' },
-  5: { text: '5 · Chuyên gia Kiến trúc', colorClass: 'text-[#EF4444]' },
+const DIFFICULTY_LABELS: Record<
+  number,
+  { label: string; shortLabel: string; colorClass: string }
+> = {
+  1: { label: 'Nhập môn', shortLabel: 'Nhập môn', colorClass: 'text-[#059669] dark:text-[#34D399]' },
+  2: { label: 'Cơ bản', shortLabel: 'Cơ bản', colorClass: 'text-[#059669] dark:text-[#34D399]' },
+  3: { label: 'Trung cấp', shortLabel: 'Trung cấp', colorClass: 'text-[#D97706] dark:text-[#FBBF24]' },
+  4: { label: 'Nâng cao', shortLabel: 'Nâng cao', colorClass: 'text-[#D97706] dark:text-[#FBBF24]' },
+  5: { label: 'Chuyên sâu', shortLabel: 'Chuyên sâu', colorClass: 'text-[#DC2626] dark:text-[#F87171]' },
 };
+
+function isAllCategoryItem(cat: CourseCategoryItem): boolean {
+  const id = String(cat.id ?? '').trim().toLowerCase();
+  const slug = String(cat.slug ?? '').trim().toLowerCase();
+  const name = String(cat.name ?? '').trim().toLowerCase();
+  return (
+    id === 'all' ||
+    slug === 'all' ||
+    name === 'tất cả lĩnh vực' ||
+    name === 'tất cả chuyên ngành' ||
+    name === 'tất cả khóa học'
+  );
+}
 
 export const CoursesCatalogView: React.FC = () => {
   const {
@@ -62,37 +85,74 @@ export const CoursesCatalogView: React.FC = () => {
   );
 
   const courses = apiCourses ?? contextCourses;
-  const categoryList =
+  const rawCategoryList =
     apiCategories && apiCategories.length > 0 ? apiCategories : contextCategories;
+
+  const allCategoryEntry = useMemo(
+    () => rawCategoryList.find((cat) => isAllCategoryItem(cat)),
+    [rawCategoryList]
+  );
+
+  const realCategories = useMemo(
+    () => rawCategoryList.filter((cat) => !isAllCategoryItem(cat)),
+    [rawCategoryList]
+  );
+
+  const totalCourseCount = useMemo(() => {
+    if (allCategoryEntry) {
+      const c = allCategoryEntry.courseCount ?? allCategoryEntry.count;
+      if (typeof c === 'number' && c >= 0) return c;
+    }
+    const sum = realCategories.reduce(
+      (acc, cat) => acc + (cat.courseCount ?? cat.count ?? 0),
+      0
+    );
+    return sum > 0 ? sum : contextCourses.length;
+  }, [allCategoryEntry, realCategories, contextCourses.length]);
 
   const filteredCourses = useMemo(() => {
     const q = searchQueryGlobal.trim().toLowerCase();
 
     const list = courses.filter((course) => {
-      if (selectedCategory !== 'ALL' && course.category !== selectedCategory) {
-        return false;
+      if (selectedCategory !== 'ALL') {
+        const matchedCat = realCategories.find(
+          (c) => c.slug === selectedCategory || c.name === selectedCategory
+        );
+        const courseCatLower = (course.category || '').trim().toLowerCase();
+        const targetNameLower = (matchedCat?.name || selectedCategory).trim().toLowerCase();
+        if (courseCatLower !== targetNameLower && courseCatLower !== selectedCategory.toLowerCase()) {
+          return false;
+        }
       }
       if (selectedDifficulty !== null && course.difficultyLevel !== selectedDifficulty) {
         return false;
       }
       if (
         selectedSkill &&
-        !course.skills.some((s) => s.name.toLowerCase() === selectedSkill.toLowerCase())
+        !course.skills.some((s) => s.name.toLowerCase().includes(selectedSkill.toLowerCase()))
       ) {
         return false;
       }
-      const courseCohorts = cohorts.filter((ch) => ch.courseId === course.id);
-      if (onlyOpeningCohorts && !courseCohorts.some((ch) => ch.status === 'OPENING')) {
+      const embeddedCohorts = (course as { cohorts?: typeof cohorts }).cohorts;
+      const courseCohorts =
+        embeddedCohorts && embeddedCohorts.length > 0
+          ? embeddedCohorts
+          : cohorts.filter((ch) => ch.courseId === course.id);
+      if (
+        onlyOpeningCohorts &&
+        !courseCohorts.some((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING')
+      ) {
         return false;
       }
       if (q) {
         const matchTitle = course.title.toLowerCase().includes(q);
         const matchDesc = course.shortDescription.toLowerCase().includes(q);
+        const matchCategory = (course.category || '').toLowerCase().includes(q);
         const matchSkill = course.skills.some((s) => s.name.toLowerCase().includes(q));
         const matchCohortCode = courseCohorts.some((ch) =>
           ch.code.toLowerCase().includes(q)
         );
-        if (!matchTitle && !matchDesc && !matchSkill && !matchCohortCode) {
+        if (!matchTitle && !matchDesc && !matchCategory && !matchSkill && !matchCohortCode) {
           return false;
         }
       }
@@ -104,12 +164,10 @@ export const CoursesCatalogView: React.FC = () => {
         return b.difficultyLevel - a.difficultyLevel;
       }
       if (sortBy === 'PRICE_ASC') {
-        const minA = Math.min(
-          ...cohorts.filter((c) => c.courseId === a.id).map((c) => c.tuitionVnd)
-        );
-        const minB = Math.min(
-          ...cohorts.filter((c) => c.courseId === b.id).map((c) => c.tuitionVnd)
-        );
+        const cohortsA = cohorts.filter((c) => c.courseId === a.id).map((c) => c.tuitionVnd);
+        const cohortsB = cohorts.filter((c) => c.courseId === b.id).map((c) => c.tuitionVnd);
+        const minA = cohortsA.length > 0 ? Math.min(...cohortsA) : 0;
+        const minB = cohortsB.length > 0 ? Math.min(...cohortsB) : 0;
         return minA - minB;
       }
       return (b.reviewCount ?? 0) - (a.reviewCount ?? 0);
@@ -117,6 +175,7 @@ export const CoursesCatalogView: React.FC = () => {
   }, [
     courses,
     cohorts,
+    realCategories,
     selectedCategory,
     selectedDifficulty,
     selectedSkill,
@@ -137,10 +196,10 @@ export const CoursesCatalogView: React.FC = () => {
     <div className="max-w-[1320px] mx-auto px-6 py-10">
       <div className="mb-8 space-y-2">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5]">
-          Danh Mục Chương Trình &amp; Đợt Học Trực Tiếp
+          Khóa học &amp; Lịch khai giảng
         </h1>
         <p className="text-sm text-[#475569] dark:text-[#94A3B8]">
-          Lọc chính xác theo nhóm chuyên ngành, độ khó (1–5) và kỹ năng mục tiêu để chọn đợt khai giảng phù hợp nhất.
+          Chọn lĩnh vực, trình độ và lịch học phù hợp với mục tiêu của bạn.
         </p>
       </div>
 
@@ -149,23 +208,23 @@ export const CoursesCatalogView: React.FC = () => {
         <aside className="w-full lg:w-[280px] shrink-0 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-5 space-y-6">
           <div className="flex items-center justify-between pb-3 border-b border-[#E2ECE7] dark:border-[#1E2D24]">
             <h2 className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-              Bộ Lọc Chuyên Sâu
+              Bộ lọc
             </h2>
             <button
               type="button"
               onClick={handleResetFilters}
-              className="inline-flex items-center gap-1 text-xs font-medium text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer whitespace-nowrap shrink-0"
             >
               <RotateCcw className="w-3 h-3" />
               <span>Đặt lại</span>
             </button>
           </div>
 
-          {/* Toggle: Chỉ hiện khóa đang mở đợt học */}
+          {/* Toggle: Chỉ hiện khóa đang tuyển sinh */}
           <div className="pb-4 border-b border-[#E2ECE7] dark:border-[#1E2D24]">
             <label className="flex items-center justify-between gap-3 cursor-pointer">
               <span className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-                Chỉ hiện khóa đang mở đợt học
+                Chỉ hiện khóa đang mở đăng ký
               </span>
               <input
                 type="checkbox"
@@ -179,40 +238,46 @@ export const CoursesCatalogView: React.FC = () => {
           {/* Category Filter */}
           <div className="space-y-2">
             <div className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-              Chuyên ngành đào tạo
+              Lĩnh vực
             </div>
             <div className="space-y-1">
               <button
                 type="button"
                 onClick={() => setSelectedCategory('ALL')}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                className={`w-full flex items-center justify-between gap-2 text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                   selectedCategory === 'ALL'
                     ? 'bg-[#D1FAE5] dark:bg-emerald-950/90 text-[#065F46] dark:text-emerald-300 font-semibold'
                     : 'text-[#475569] dark:text-[#94A3B8] hover:bg-[#F7FBF9] dark:hover:bg-white/5'
                 }`}
               >
-                Tất cả chuyên ngành ({courses.length})
+                <span className="truncate">Tất cả khóa học</span>
+                <span className="font-mono text-[11px] opacity-80 tabular-nums">
+                  {totalCourseCount}
+                </span>
               </button>
-              {categoryList.map((cat) => {
+              {realCategories.map((cat) => {
                 const CatIcon = getCategoryFallbackIcon(cat);
                 const countVal = cat.courseCount ?? cat.count;
+                const isSelected = selectedCategory === cat.name || selectedCategory === cat.slug;
                 return (
                   <button
                     key={String(cat.id)}
                     type="button"
                     onClick={() => setSelectedCategory(cat.name)}
                     className={`w-full flex items-center justify-between gap-2 text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                      selectedCategory === cat.name
+                      isSelected
                         ? 'bg-[#D1FAE5] dark:bg-emerald-950/90 text-[#065F46] dark:text-emerald-300 font-semibold'
                         : 'text-[#475569] dark:text-[#94A3B8] hover:bg-[#F7FBF9] dark:hover:bg-white/5'
                     }`}
                   >
-                    <span className="inline-flex items-center gap-2 truncate">
+                    <span className="inline-flex items-center gap-2 min-w-0">
                       <CatIcon className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
                       <span className="truncate">{cat.name}</span>
                     </span>
                     {countVal !== undefined && (
-                      <span className="font-mono text-[11px] opacity-80">{countVal}</span>
+                      <span className="font-mono text-[11px] opacity-80 tabular-nums shrink-0">
+                        {countVal}
+                      </span>
                     )}
                   </button>
                 );
@@ -220,10 +285,10 @@ export const CoursesCatalogView: React.FC = () => {
             </div>
           </div>
 
-          {/* Difficulty Filter (1-5 color-coded) */}
+          {/* Difficulty Filter */}
           <div className="space-y-2 pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
             <div className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-              Mức độ chuyên sâu (1 – 5)
+              Trình độ
             </div>
             <div className="space-y-1">
               {[1, 2, 3, 4, 5].map((lvl) => {
@@ -240,8 +305,10 @@ export const CoursesCatalogView: React.FC = () => {
                         : 'text-[#475569] dark:text-[#94A3B8] hover:bg-[#F7FBF9] dark:hover:bg-white/5'
                     }`}
                   >
-                    <span>{info.text}</span>
-                    <span className={`font-mono font-bold ${info.colorClass}`}>Bậc {lvl}</span>
+                    <span>{info.label}</span>
+                    <span className={`font-mono text-[11px] font-semibold tabular-nums ${info.colorClass}`}>
+                      {lvl}/5
+                    </span>
                   </button>
                 );
               })}
@@ -251,7 +318,7 @@ export const CoursesCatalogView: React.FC = () => {
           {/* Target Skills */}
           <div className="space-y-2.5 pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
             <div className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-              Kỹ năng trọng tâm
+              Kỹ năng
             </div>
             <div className="flex flex-wrap gap-1.5">
               {TARGET_SKILLS.map((skill) => {
@@ -261,10 +328,10 @@ export const CoursesCatalogView: React.FC = () => {
                     key={skill}
                     type="button"
                     onClick={() => setSelectedSkill(active ? null : skill)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       active
                         ? 'bg-[#10B981] text-white font-semibold'
-                        : 'bg-[#D1FAE5]/70 dark:bg-emerald-950/60 text-[#065F46] dark:text-emerald-300 hover:bg-[#D1FAE5]'
+                        : 'bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#0F172A] dark:text-[#ECFDF5] hover:border-[#10B981]'
                     }`}
                   >
                     {skill}
@@ -286,7 +353,7 @@ export const CoursesCatalogView: React.FC = () => {
                 aria-label="Tìm kiếm trong danh mục khóa học"
                 value={searchQueryGlobal}
                 onChange={(e) => setSearchQueryGlobal(e.target.value)}
-                placeholder="Tìm theo tên khóa học, kỹ năng (Python, Trợ lý AI, SQL) hoặc mã lớp..."
+                placeholder="Tìm tên khóa học, kỹ năng (Python, AI, SQL) hoặc mã lớp..."
                 className="w-full bg-transparent text-xs sm:text-sm text-[#0F172A] dark:text-[#ECFDF5] placeholder:text-[#475569] dark:placeholder:text-[#94A3B8] focus:outline-none"
               />
             </div>
@@ -301,9 +368,9 @@ export const CoursesCatalogView: React.FC = () => {
                 onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
                 className="px-3 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-medium text-[#0F172A] dark:text-[#ECFDF5]"
               >
-                <option value="POPULAR">Nhiều học viên đánh giá nhất</option>
+                <option value="POPULAR">Phổ biến nhất</option>
                 <option value="PRICE_ASC">Học phí thấp đến cao</option>
-                <option value="DIFFICULTY">Cấp độ chuyên sâu giảm dần</option>
+                <option value="DIFFICULTY">Trình độ cao đến thấp</option>
               </select>
             </div>
           </div>
@@ -314,24 +381,28 @@ export const CoursesCatalogView: React.FC = () => {
               <EmptyStateBotanicalIllustration className="w-16 h-16 mx-auto" />
               <div className="space-y-1">
                 <h3 className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  Không tìm thấy chương trình khớp bộ lọc hiện tại
+                  Không tìm thấy khóa học phù hợp
                 </h3>
                 <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                  Thử gỡ bỏ bộ lọc độ khó hoặc nhấn Đặt lại để xem toàn bộ các đợt khai giảng đang mở.
+                  Thử bỏ bớt điều kiện lọc hoặc nhấn Đặt lại để xem toàn bộ các khóa học đang mở.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-xs font-semibold hover:bg-[#059669] transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-xs font-semibold hover:bg-[#059669] transition-colors cursor-pointer whitespace-nowrap"
               >
-                Hiển thị tất cả khóa học
+                Xem tất cả khóa học
               </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredCourses.map((course) => {
-                const courseCohorts = cohorts.filter((c) => c.courseId === course.id);
+                const embeddedCohorts = (course as { cohorts?: typeof cohorts }).cohorts;
+                const courseCohorts =
+                  embeddedCohorts && embeddedCohorts.length > 0
+                    ? embeddedCohorts
+                    : cohorts.filter((c) => c.courseId === course.id);
                 const primaryCohort = courseCohorts[0];
                 const diffInfo = DIFFICULTY_LABELS[course.difficultyLevel];
 
@@ -342,9 +413,9 @@ export const CoursesCatalogView: React.FC = () => {
                   >
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
-                        <span>{course.category}</span>
-                        <span className={`font-mono font-semibold ${diffInfo.colorClass}`}>
-                          Độ khó {course.difficultyLevel}/5
+                        <span className="truncate">{course.category}</span>
+                        <span className={`font-semibold shrink-0 ${diffInfo?.colorClass ?? ''}`}>
+                          {diffInfo?.shortLabel ?? `Cấp ${course.difficultyLevel}`}
                         </span>
                       </div>
 
@@ -366,8 +437,8 @@ export const CoursesCatalogView: React.FC = () => {
                       </p>
 
                       {/* Skills summary line */}
-                      <div className="text-xs text-[#065F46] dark:text-emerald-300 font-medium pt-1">
-                        Kỹ năng: {course.skills.map((s) => s.name).join(' · ')}
+                      <div className="text-xs text-[#065F46] dark:text-emerald-300 font-medium pt-1 line-clamp-2">
+                        {course.skills.map((s) => s.name).join(' · ')}
                       </div>
 
                       {primaryCohort && (
@@ -393,10 +464,10 @@ export const CoursesCatalogView: React.FC = () => {
 
                     <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-2">
                       <div>
-                        <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                        <div className="text-[11px] text-[#475569] dark:text-[#94A3B8] tabular-nums">
                           Đánh giá {course.ratingAvg}/5 ({course.reviewCount})
                         </div>
-                        <div className="text-sm font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                        <div className="text-sm font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5] tabular-nums">
                           {primaryCohort ? formatVnd(primaryCohort.tuitionVnd) : 'Liên hệ'}
                         </div>
                       </div>
@@ -406,7 +477,7 @@ export const CoursesCatalogView: React.FC = () => {
                         onClick={() => navigate(`/courses/${course.slug}`)}
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <span>Chọn đợt học</span>
+                        <span>Xem chi tiết</span>
                         <ArrowRight className="w-3.5 h-3.5" />
                       </button>
                     </div>

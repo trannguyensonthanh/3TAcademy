@@ -125,25 +125,25 @@ export async function runSeed(targetDb: typeof defaultDb = defaultDb) {
     .insert(categories)
     .values([
       {
-        name: 'AI & LLM Engineering',
+        name: 'Trí tuệ nhân tạo & AI',
         slug: 'ai-llm-engineering',
         description:
           'Xây dựng hệ thống RAG, Multi-Agent, LLMOps và tích hợp mô hình ngôn ngữ lớn vào sản phẩm thực tế.',
       },
       {
-        name: 'Backend & System Architecture',
+        name: 'Lập trình Backend & Hệ thống',
         slug: 'backend-system-architecture',
         description:
           'Thiết kế hệ thống phân tán, bất đồng bộ, Microservices, bảo mật API và tối ưu cơ sở dữ liệu.',
       },
       {
-        name: 'Data Engineering & Analytics',
+        name: 'Kỹ thuật Dữ liệu',
         slug: 'data-engineering-analytics',
         description:
           'Xây dựng Data Pipeline, Lakehouse, Streaming Kafka/Spark và kho dữ liệu phân tích doanh nghiệp.',
       },
       {
-        name: 'Foundational Programming',
+        name: 'Lập trình Nền tảng',
         slug: 'foundational-programming',
         description:
           'Nền tảng lập trình Python, TypeScript, Cấu trúc dữ liệu & Giải thuật và SQL chuẩn kỹ sư.',

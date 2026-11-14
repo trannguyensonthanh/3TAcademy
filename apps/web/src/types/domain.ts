@@ -1,7 +1,12 @@
 export type CourseCategory =
   | 'AI & Dữ liệu'
   | 'Kỹ thuật Phần mềm & Cloud'
-  | 'Phân tích Dữ liệu';
+  | 'Phân tích Dữ liệu'
+  | 'Trí tuệ nhân tạo & AI'
+  | 'Lập trình Backend & Hệ thống'
+  | 'Kỹ thuật Dữ liệu'
+  | 'Lập trình Nền tảng'
+  | (string & {});
 
 export interface CourseCategoryItem {
   id: string | number;

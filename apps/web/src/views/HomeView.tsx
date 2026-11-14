@@ -30,8 +30,15 @@ import { catalogApi } from '../services/catalog.api';
 
 function resolveCategoryIcon(cat: CourseCategoryItem) {
   const key = (cat.iconName || cat.slug || cat.name || '').toLowerCase();
-  if (key.includes('ai') || key.includes('rag')) return Cpu;
-  if (key.includes('cloud') || key.includes('swe') || key.includes('phan-mem') || key.includes('phần mềm')) {
+  if (key.includes('ai') || key.includes('rag') || key.includes('trí tuệ')) return Cpu;
+  if (
+    key.includes('cloud') ||
+    key.includes('swe') ||
+    key.includes('backend') ||
+    key.includes('hệ thống') ||
+    key.includes('phan-mem') ||
+    key.includes('phần mềm')
+  ) {
     return Cloud;
   }
   return Database;
@@ -154,7 +161,10 @@ export const HomeView: React.FC = () => {
                       key={String(cat.id)}
                       type="button"
                       onClick={() => {
-                        setSearchQueryGlobal(cat.name);
+                        const isAll =
+                          String(cat.id).toLowerCase() === 'all' ||
+                          (cat.slug || '').toLowerCase() === 'all';
+                        setSearchQueryGlobal(isAll ? '' : cat.name);
                         navigate('/courses');
                       }}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-medium text-[#0F172A] dark:text-[#ECFDF5] transition-colors cursor-pointer"
@@ -282,7 +292,7 @@ export const HomeView: React.FC = () => {
                       {cohort.code}
                     </span>
                     <span>
-                      {course.category} · Mức độ {course.difficultyLevel}/5
+                      {course.category} · Trình độ {course.difficultyLevel}/5
                     </span>
                   </div>
 

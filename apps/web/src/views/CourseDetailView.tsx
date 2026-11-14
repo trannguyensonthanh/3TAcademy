@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
 import {
   Calendar,
   Clock,
   Users,
-  ChevronDown,
-  ChevronUp,
   AlertTriangle,
   CheckCircle2,
   ArrowLeft,
@@ -13,7 +13,6 @@ import {
   LogIn,
 } from 'lucide-react';
 import { useAcademy } from '../context/AcademyContext';
-import { ActivityTag } from '../types/domain';
 import {
   formatVnd,
   checkCohortScheduleConflict,
@@ -25,12 +24,22 @@ import { AvatarWithFallback } from '../components/BotanicalStickers';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { catalogApi } from '../services/catalog.api';
 
-const ACTIVITY_LABELS: Record<ActivityTag, string> = {
-  THEORY: 'Lý thuyết Trọng tâm',
-  LIVE_CODING: 'Live Coding Thực chiến',
-  EXERCISE_REVIEW: 'Chữa bài & Code Review',
-  WORKSHOP: 'Workshop Thiết kế Hệ thống',
+const DIFFICULTY_TEXT: Record<number, string> = {
+  1: 'Nhập môn',
+  2: 'Cơ bản',
+  3: 'Trung cấp',
+  4: 'Nâng cao',
+  5: 'Chuyên sâu',
 };
+
+function normalizeCourseMarkdown(rawMd?: string): string {
+  if (!rawMd) return '';
+  return rawMd
+    .replace(/\r\n/g, '\n')
+    .replace(/(###[^\n]+)\n([^\n])/g, '$1\n\n$2')
+    .replace(/\s+-\s+\*\*/g, '\n- **')
+    .trim();
+}
 
 export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
   const { courses, cohorts, enrolledCohortIds, navigate, role } = useAcademy();
@@ -83,8 +92,6 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
     }
   }, [courseCohorts, selectedCohortId]);
 
-  const [expandedOrders, setExpandedOrders] = useState<number[]>([1, 4, 5]);
-
   const selectedCohort =
     courseCohorts.find((c) => c.id === selectedCohortId) ??
     courseCohorts[0] ??
@@ -112,14 +119,9 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
     : null;
   const isAlreadyEnrolled = enrolledCohortIds.includes(selectedCohort.id);
 
-  const toggleSessionAccordion = (order: number) => {
-    setExpandedOrders((prev) =>
-      prev.includes(order) ? prev.filter((o) => o !== order) : [...prev, order]
-    );
-  };
-
   const prerequisites = course.skills.filter((s) => s.type === 'PREREQUISITE');
   const outcomes = course.skills.filter((s) => s.type === 'LEARNING_OUTCOME');
+  const formattedDescriptionMd = normalizeCourseMarkdown(course.descriptionMd);
 
   return (
     <div className="max-w-[1320px] mx-auto px-6 py-10 space-y-8">
@@ -145,60 +147,112 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
               <span className="font-semibold text-[#059669] dark:text-[#34D399]">
                 {course.category}
               </span>
-              <span>·</span>
-              <span className="font-mono">Cấp độ {course.difficultyLevel}/5</span>
-              <span>·</span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Trình độ {DIFFICULTY_TEXT[course.difficultyLevel] ?? `${course.difficultyLevel}/5`}
+              </span>
+              <span aria-hidden="true">·</span>
               <span className="tabular-nums">
-                Đánh giá {course.ratingAvg}/5 ({course.reviewCount} học viên tốt nghiệp)
+                Đánh giá {course.ratingAvg}/5 ({course.reviewCount} học viên)
               </span>
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5] leading-snug">
+            <h1
+              className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5] leading-snug"
+              style={{ textWrap: 'balance' }}
+            >
               {course.title}
             </h1>
 
-            <p className="text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-              {course.descriptionMd}
-            </p>
+            <div className="pt-1 space-y-3 text-[15px] text-[#334155] dark:text-[#CBD5E1] leading-7">
+              <ReactMarkdown
+                rehypePlugins={[rehypeSanitize]}
+                components={{
+                  h1: ({ children }) => (
+                    <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5] pt-2">
+                      {children}
+                    </h2>
+                  ),
+                  h2: ({ children }) => (
+                    <h2 className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5] pt-2">
+                      {children}
+                    </h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5] pt-1">
+                      {children}
+                    </h3>
+                  ),
+                  p: ({ children }) => (
+                    <p className="text-[15px] leading-7 text-[#334155] dark:text-[#CBD5E1]">
+                      {children}
+                    </p>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="space-y-2.5 pl-5 list-disc marker:text-[#10B981]">
+                      {children}
+                    </ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="space-y-2.5 pl-5 list-decimal marker:text-[#10B981] marker:font-semibold">
+                      {children}
+                    </ol>
+                  ),
+                  li: ({ children }) => (
+                    <li className="text-[15px] leading-7 text-[#334155] dark:text-[#CBD5E1] pl-1">
+                      {children}
+                    </li>
+                  ),
+                  strong: ({ children }) => (
+                    <strong className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+                      {children}
+                    </strong>
+                  ),
+                  code: ({ children }) => (
+                    <code className="px-1.5 py-0.5 rounded bg-[#F1F5F9] dark:bg-[#1E293B] font-mono text-[13px] text-[#0F766E] dark:text-[#34D399]">
+                      {children}
+                    </code>
+                  ),
+                }}
+              >
+                {formattedDescriptionMd}
+              </ReactMarkdown>
+            </div>
 
-            {/* Prerequisite vs Learning Outcome Skill Tags */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-[#475569] dark:text-[#94A3B8]">
-                  Kỹ năng đầu vào cần có (Prerequisites):
+            {/* Prerequisite vs Learning Outcome Skill Lists */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-5 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
+              <div className="space-y-2.5">
+                <div className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+                  Kiến thức cần có trước khi học
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {prerequisites.length === 0 ? (
-                    <span className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Không yêu cầu kinh nghiệm trước
-                    </span>
-                  ) : (
-                    prerequisites.map((sk) => (
-                      <span
-                        key={sk.code}
-                        className="px-2.5 py-1 rounded-md bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-medium text-[#0F172A] dark:text-[#ECFDF5]"
-                      >
-                        {sk.name} ({sk.code})
-                      </span>
-                    ))
-                  )}
-                </div>
+                {prerequisites.length === 0 ? (
+                  <p className="text-sm text-[#475569] dark:text-[#94A3B8]">
+                    Không yêu cầu kinh nghiệm trước
+                  </p>
+                ) : (
+                  <ul className="space-y-1.5 text-sm text-[#334155] dark:text-[#CBD5E1]">
+                    {prerequisites.map((sk) => (
+                      <li key={sk.code} className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0 mt-0.5" />
+                        <span>{sk.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <div className="text-xs font-semibold text-[#065F46] dark:text-emerald-300">
-                  Năng lực đầu ra đạt được (Learning Outcomes):
+                  Kỹ năng đạt được sau khóa học
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <ul className="space-y-1.5 text-sm text-[#334155] dark:text-[#CBD5E1]">
                   {outcomes.map((sk) => (
-                    <span
-                      key={sk.code}
-                      className="px-2.5 py-1 rounded-md bg-[#D1FAE5] dark:bg-emerald-950/90 text-[#065F46] dark:text-emerald-300 text-xs font-semibold"
-                    >
-                      {sk.name}
-                    </span>
+                    <li key={sk.code} className="flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0 mt-0.5" />
+                      <span>{sk.name}</span>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             </div>
           </div>
@@ -207,10 +261,10 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
           <div className="space-y-4">
             <div className="space-y-1">
               <h2 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                Chọn Đợt Khai Giảng Phù Hợp Lịch Cá Nhân
+                Chọn đợt khai giảng phù hợp
               </h2>
               <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                Mỗi đợt học có Giảng viên phụ trách chính riêng. Nhấn chọn đợt học để kiểm tra xung đột lịch tự động.
+                Mỗi lớp có lịch học cố định hàng tuần và giảng viên phụ trách riêng.
               </p>
             </div>
 
@@ -300,86 +354,26 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
             </div>
           </div>
 
-          {/* Expandable Syllabus Accordion */}
+          {/* Clean Syllabus Session List */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <h2 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  Đề Cương Chi Tiết ({course.syllabusTemplate.length} Buổi Học Thực Chiến)
-                </h2>
-                <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                  Phiên bản giáo trình <span className="font-mono font-semibold">{selectedCohort.curriculumVersion}</span> · Mỗi buổi đều có Quiz kiểm tra năng lực ngắn để mở khóa hoàn thành.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setExpandedOrders(
-                    expandedOrders.length === course.syllabusTemplate.length
-                      ? []
-                      : course.syllabusTemplate.map((s) => s.order)
-                  )
-                }
-                className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
-              >
-                {expandedOrders.length === course.syllabusTemplate.length
-                  ? 'Thu gọn tất cả'
-                  : 'Mở rộng tất cả'}
-              </button>
-            </div>
+            <h2 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+              Đề cương khóa học ({course.syllabusTemplate.length} buổi)
+            </h2>
 
-            <div className="space-y-2.5">
-              {course.syllabusTemplate.map((item) => {
-                const isExpanded = expandedOrders.includes(item.order);
-                return (
-                  <div
-                    key={item.order}
-                    className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      aria-expanded={isExpanded}
-                      onClick={() => toggleSessionAccordion(item.order)}
-                      className="w-full flex items-center justify-between gap-4 p-4 text-left hover:bg-[#F7FBF9] dark:hover:bg-white/5 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="font-mono text-xs font-bold px-2.5 py-1 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 shrink-0">
-                          Buổi {item.order.toString().padStart(2, '0')}
-                        </span>
-                        <span className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5] truncate">
-                          {item.title}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span className="hidden sm:inline text-xs text-[#475569] dark:text-[#94A3B8]">
-                          {item.activityTags.map((t) => ACTIVITY_LABELS[t]).join(' · ')}
-                        </span>
-                        {isExpanded ? (
-                          <ChevronUp className="w-4 h-4 text-[#475569]" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4 text-[#475569]" />
-                        )}
-                      </div>
-                    </button>
-
-                    {isExpanded && (
-                      <div className="px-4 pb-4 pt-1 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-2 text-xs text-[#475569] dark:text-[#94A3B8]">
-                        <p className="leading-relaxed">{item.summary}</p>
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {item.activityTags.map((tag) => (
-                            <span
-                              key={tag}
-                              className="px-2 py-0.5 rounded bg-[#D1FAE5]/70 dark:bg-emerald-950/70 text-[#065F46] dark:text-emerald-300 font-medium"
-                            >
-                              {ACTIVITY_LABELS[tag]}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
+              {course.syllabusTemplate.map((item) => (
+                <div
+                  key={item.order}
+                  className="flex items-start sm:items-center gap-3.5 px-5 py-4"
+                >
+                  <span className="font-mono text-xs font-bold text-[#059669] dark:text-[#34D399] shrink-0 tabular-nums pt-0.5 sm:pt-0">
+                    Buổi {item.order.toString().padStart(2, '0')}
+                  </span>
+                  <span className="text-sm sm:text-[15px] font-medium text-[#0F172A] dark:text-[#ECFDF5] leading-relaxed">
+                    {item.title}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

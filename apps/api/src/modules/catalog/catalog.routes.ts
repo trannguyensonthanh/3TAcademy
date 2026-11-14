@@ -31,6 +31,37 @@ import {
 
 export const catalogRouter = Router();
 
+const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
+  'ai-llm-engineering': 'Trí tuệ nhân tạo & AI',
+  'ai & llm engineering': 'Trí tuệ nhân tạo & AI',
+  'backend-system-architecture': 'Lập trình Backend & Hệ thống',
+  'backend & system architecture': 'Lập trình Backend & Hệ thống',
+  'data-engineering-analytics': 'Kỹ thuật Dữ liệu',
+  'data engineering & analytics': 'Kỹ thuật Dữ liệu',
+  'foundational-programming': 'Lập trình Nền tảng',
+  'foundational programming': 'Lập trình Nền tảng',
+};
+
+function humanizeCategoryName(slug?: string | null, rawName?: string | null): string {
+  const slugKey = (slug || '').trim().toLowerCase();
+  if (slugKey && CATEGORY_DISPLAY_NAMES[slugKey]) {
+    return CATEGORY_DISPLAY_NAMES[slugKey];
+  }
+  const nameKey = (rawName || '').trim().toLowerCase();
+  if (nameKey && CATEGORY_DISPLAY_NAMES[nameKey]) {
+    return CATEGORY_DISPLAY_NAMES[nameKey];
+  }
+  return rawName || '';
+}
+
+const ALL_CATEGORY_TOKENS = new Set([
+  'all',
+  'tất cả',
+  'tất cả lĩnh vực',
+  'tất cả chuyên ngành',
+  'tất cả khóa học',
+]);
+
 // 2.1 GET /categories
 catalogRouter.get('/categories', async (_req, res, next) => {
   try {
@@ -42,9 +73,9 @@ catalogRouter.get('/categories', async (_req, res, next) => {
     const result = [
       {
         id: 'all',
-        name: 'Tất cả lĩnh vực',
+        name: 'Tất cả khóa học',
         slug: 'all',
-        description: 'Toàn bộ chương trình đào tạo tại 3T Academy',
+        description: 'Toàn bộ khóa học tại 3T Academy',
         parentId: null,
         courseCount: allPublishedCourses.length,
         count: allPublishedCourses.length,
@@ -54,7 +85,7 @@ catalogRouter.get('/categories', async (_req, res, next) => {
         const count = allPublishedCourses.filter((c) => c.categoryId === cat.id).length;
         return {
           id: String(cat.id),
-          name: cat.name,
+          name: humanizeCategoryName(cat.slug, cat.name),
           slug: cat.slug,
           description: cat.description || '',
           parentId: cat.parentId ? String(cat.parentId) : null,
@@ -122,17 +153,23 @@ catalogRouter.get('/courses', async (req, res, next) => {
 
     let filteredCourses = allCourses;
 
-    if (categoryFilter && String(categoryFilter).trim() !== '' && categoryFilter !== 'all') {
+    if (categoryFilter) {
       const catStr = String(categoryFilter).trim();
-      const catNum = Number(catStr);
-      filteredCourses = filteredCourses.filter((c) => {
-        const cat = catMap.get(c.categoryId);
-        if (!Number.isNaN(catNum) && c.categoryId === catNum) return true;
-        if (cat && (cat.slug === catStr || cat.name.toLowerCase() === catStr.toLowerCase())) {
-          return true;
-        }
-        return false;
-      });
+      const catLower = catStr.toLowerCase();
+      if (catStr !== '' && !ALL_CATEGORY_TOKENS.has(catLower)) {
+        const catNum = Number(catStr);
+        filteredCourses = filteredCourses.filter((c) => {
+          const cat = catMap.get(c.categoryId);
+          if (!Number.isNaN(catNum) && c.categoryId === catNum) return true;
+          if (!cat) return false;
+          const displayName = humanizeCategoryName(cat.slug, cat.name).toLowerCase();
+          return (
+            cat.slug.toLowerCase() === catLower ||
+            cat.name.toLowerCase() === catLower ||
+            displayName === catLower
+          );
+        });
+      }
     }
 
     if (level && String(level).trim() !== '' && level !== 'ALL') {
@@ -196,7 +233,7 @@ catalogRouter.get('/courses', async (req, res, next) => {
         slug: c.slug,
         title: c.title,
         categoryId: c.categoryId,
-        category: catMap.get(c.categoryId)?.name || '',
+        category: humanizeCategoryName(catMap.get(c.categoryId)?.slug, catMap.get(c.categoryId)?.name || ''),
         shortDescription: c.shortDescription,
         descriptionMd: c.descriptionMd,
         thumbnailUrl: c.thumbnailUrl,
@@ -365,7 +402,7 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       id: String(course.id),
       slug: course.slug,
       title: course.title,
-      category: category?.name || '',
+      category: humanizeCategoryName(category?.slug, category?.name || ''),
       shortDescription: course.shortDescription,
       descriptionMd: course.descriptionMd,
       thumbnailUrl: course.thumbnailUrl,
