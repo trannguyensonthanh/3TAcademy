@@ -72,7 +72,7 @@ export const StudentDashboardView: React.FC = () => {
   const [showNotifPopover, setShowNotifPopover] = useState(false);
   const [expandedCertCode, setExpandedCertCode] = useState<string | null>(null);
 
-  const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? sessions[0];
+  const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? null;
   const fallbackResume = sessions.find((s) => !s.isCompleted) ?? sessions[0];
   const authQueryKey = `${role}:${currentUser?.id || ''}`;
 
@@ -173,7 +173,12 @@ export const StudentDashboardView: React.FC = () => {
     { id: 'SETTINGS', label: 'Tài khoản', path: '/app', icon: Settings },
   ];
 
-  const liveSession = dashboardSummary.liveSession ?? fallbackLive;
+  const liveSession =
+    dashboardSummary.liveSession !== undefined
+      ? dashboardSummary.liveSession?.status === 'LIVE'
+        ? dashboardSummary.liveSession
+        : null
+      : fallbackLive;
   const resumeSession = dashboardSummary.resumeSession ?? fallbackResume;
   const effectiveUpcomingTasks =
     dashboardSummary.upcomingTasks && dashboardSummary.upcomingTasks.length > 0
@@ -198,6 +203,10 @@ export const StudentDashboardView: React.FC = () => {
     return Array.from(byId.values());
   })();
   const primaryCohort = myEnrolledCohorts[0];
+  const liveCohort =
+    (liveSession
+      ? myEnrolledCohorts.find((c) => String(c.id) === String(liveSession.cohortId))
+      : undefined) || primaryCohort;
   const effectiveReceipts =
     orderHistoryData && orderHistoryData.length > 0
       ? orderHistoryData
@@ -452,8 +461,8 @@ export const StudentDashboardView: React.FC = () => {
                 </section>
               )}
 
-              {/* BLOCK 1: LIVE EVENT BANNER */}
-              {liveSession && primaryCohort && (
+              {/* BLOCK 1: LIVE EVENT BANNER (CHỈ HIỂN THỊ KHI GIẢNG VIÊN ĐANG BẬT LIVE) */}
+              {liveSession && liveSession.status === 'LIVE' && liveCohort && (
                 <section
                   aria-label="Sự kiện lớp học trực tiếp hôm nay"
                   className="rounded-xl bg-[#0F172A] text-white border border-slate-800 p-6 space-y-5 shadow-xs"
@@ -461,10 +470,10 @@ export const StudentDashboardView: React.FC = () => {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-red-500/20 border border-[#EF4444]/50 text-[#EF4444] font-mono text-xs font-bold">
                       <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444] animate-pulse" />
-                      <span>ĐANG HỌC TRỰC TUYẾN · {primaryCohort.name.toUpperCase()}</span>
+                      <span>ĐANG HỌC TRỰC TUYẾN · {liveCohort.name.toUpperCase()}</span>
                     </div>
                     <span className="font-mono text-xs text-emerald-300">
-                      Khung giờ: 19:30 – 21:30 Hôm nay · Vào muộn có tóm tắt nhanh 1 chạm
+                      Giảng viên đang mở phòng trực tuyến · Vào lớp trao đổi ngay
                     </span>
                   </div>
 
@@ -473,13 +482,13 @@ export const StudentDashboardView: React.FC = () => {
                       ĐANG LIVE — Buổi {liveSession.sessionOrder}: {liveSession.title}
                     </h2>
                     <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-3xl">
-                      Cùng Giảng viên phụ trách chính {primaryCohort.staff[0]?.fullName || liveSession.hostInstructorName} thực hành trực tiếp và giải đáp câu hỏi ngay tại lớp.
+                      Cùng Giảng viên phụ trách chính {liveCohort.staff[0]?.fullName || liveSession.hostInstructorName} thực hành trực tiếp và giải đáp câu hỏi ngay tại lớp.
                     </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-800">
                     <div className="flex flex-wrap items-center gap-4">
-                      {primaryCohort.staff.map((st) => (
+                      {liveCohort.staff.map((st) => (
                         <div key={st.id} className="flex items-center gap-2.5">
                           <AvatarWithFallback
                             src={st.avatarUrl}

@@ -378,10 +378,15 @@ export const InstructorPortalView: React.FC = () => {
     };
   }, [selectedCohortId, selectedSessionId]);
 
+  const activeLiveSession =
+    scheduleData?.liveSession?.status === 'LIVE'
+      ? scheduleData.liveSession
+      : sessions.find((s) => s.status === 'LIVE') ?? null;
+
   const liveSession =
-    scheduleData?.liveSession ??
-    sessions.find((s) => s.status === 'LIVE') ??
-    sessions[4] ??
+    activeLiveSession ??
+    scheduleData?.upcomingSessions?.[0] ??
+    sessions.find((s) => s.status === 'SCHEDULED') ??
     activeSession;
 
   // Mở Cấp 2 (Chi tiết 1 lớp)
@@ -477,6 +482,27 @@ export const InstructorPortalView: React.FC = () => {
     const res = await teachApi.createGuestSpeakerLink(liveSession.id);
     navigator.clipboard?.writeText(res.oneTimeGuestUrl).catch(() => {});
     setGuestLinkGenerated(res.oneTimeGuestUrl);
+  };
+
+  const handleStartAndEnterLiveSession = async (targetSessionId: string) => {
+    try {
+      await teachApi.updateSessionLiveStatus(targetSessionId, { status: 'LIVE' });
+      updateSessionDetails(targetSessionId, { status: 'LIVE' });
+      await refetchSchedule();
+    } catch {
+      // Proceed to room where host can also toggle status
+    }
+    navigate(`/live/${targetSessionId}`);
+  };
+
+  const handleStopLiveSession = async (targetSessionId: string) => {
+    try {
+      await teachApi.updateSessionLiveStatus(targetSessionId, { status: 'REPLAY_READY' });
+      updateSessionDetails(targetSessionId, { status: 'REPLAY_READY' });
+      await refetchSchedule();
+    } catch {
+      // Ignore error
+    }
   };
 
   const handleRemindStudent = async (studentId: string, name: string) => {
@@ -873,32 +899,60 @@ export const InstructorPortalView: React.FC = () => {
               </p>
             </div>
 
-            {/* Thẻ Buổi học sắp diễn ra hôm nay */}
+            {/* Thẻ Trạng thái Phòng học Trực tuyến hôm nay (Đồng bộ trạng thái LIVE thật từ Backend) */}
             <div className="bg-white dark:bg-[#111A15] rounded-2xl border-2 border-[#10B981] p-6 space-y-5 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-1.5">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#EF4444]/10 text-[#EF4444] text-xs font-bold">
-                    <span className="w-2 h-2 rounded-full bg-[#EF4444] animate-pulse" />
-                    <span>CA DẠY TỐI NAY · 19:30 - 21:30 · LỚP KỸ SƯ AI KHÓA K01</span>
-                  </div>
+                  {activeLiveSession ? (
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#EF4444]/10 text-[#EF4444] text-xs font-bold">
+                      <span className="w-2 h-2 rounded-full bg-[#EF4444] animate-pulse" />
+                      <span>
+                        ĐANG MỞ PHÒNG TRỰC TUYẾN · BUỔI {activeLiveSession.sessionOrder}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <span>
+                        PHÒNG HỌC ĐANG TẮT · SẴN SÀNG MỞ CA DẠY TRỰC TUYẾN
+                      </span>
+                    </div>
+                  )}
                   <h2 className="text-lg sm:text-xl font-bold">
-                    Buổi 5: Kết hợp tìm kiếm từ khóa &amp; tìm kiếm ngữ nghĩa cho Trợ lý AI
+                    Buổi {liveSession.sessionOrder}: {liveSession.title}
                   </h2>
                   <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
-                    Giảng viên: TS. Trần Minh Khoa · Trợ giảng cùng trực lớp: KS. Đặng Hoàng Nam · Sĩ số: 48 học viên
+                    Giảng viên phụ trách: {liveSession.hostInstructorName || currentUser?.fullName || 'Giảng viên'} ·{' '}
+                    {activeLiveSession
+                      ? 'Học viên trong lớp đang thấy phòng Live và có thể vào học ngay'
+                      : 'Khi bấm Bắt đầu buổi học trực tuyến, phòng học sẽ mở cho học viên vào lớp'}
                   </p>
                 </div>
 
-                {/* 2 Nút thao tác nhanh bắt buộc */}
+                {/* Các nút điều khiển mở / vào / tắt phòng học trực tuyến */}
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="button"
-                    onClick={() => navigate(`/live/${liveSession.id}`)}
+                    onClick={() => void handleStartAndEnterLiveSession(liveSession.id)}
                     className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
                   >
                     <Play className="w-4 h-4 fill-current" />
-                    <span>Bắt đầu buổi học trực tuyến</span>
+                    <span>
+                      {activeLiveSession
+                        ? 'Vào phòng dạy trực tuyến'
+                        : 'Bắt đầu buổi học trực tuyến'}
+                    </span>
                   </button>
+
+                  {activeLiveSession && (
+                    <button
+                      type="button"
+                      onClick={() => void handleStopLiveSession(activeLiveSession.id)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
+                    >
+                      <span>Tắt Live (Đóng phòng)</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -1638,15 +1692,15 @@ export const InstructorPortalView: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Trường hợp 1: Buổi học sắp/đang diễn ra hôm nay (LIVE) */}
+                  {/* Trường hợp 1: Buổi học đang diễn ra (LIVE) */}
                   {activeSession.status === 'LIVE' && (
                     <div className="p-6 rounded-2xl bg-[#F7FBF9] dark:bg-[#090F0C] border-2 border-[#10B981] space-y-4">
                       <div className="space-y-1">
                         <div className="text-xs font-mono font-bold text-[#EF4444]">
-                          ● PHÒNG DẠY TRỰC TUYẾN ĐÃ SẴN SÀNG CHO CA TỐI NAY
+                          ● PHÒNG DẠY TRỰC TUYẾN ĐANG MỞ CHO HỌC VIÊN
                         </div>
                         <p className="text-sm font-bold">
-                          Bấm nút bên dưới để mở sân khấu Livestream giảng dạy hoặc tạo đường dẫn mời chuyên gia khách mời.
+                          Học viên có thể vào lớp ngay lúc này. Bấm vào phòng dạy hoặc tắt Live khi buổi học kết thúc.
                         </p>
                       </div>
 
@@ -1657,7 +1711,15 @@ export const InstructorPortalView: React.FC = () => {
                           className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-sm font-bold shadow-xs cursor-pointer"
                         >
                           <Play className="w-4 h-4 fill-current" />
-                          <span>Mở Phòng Livestream Dạy Học</span>
+                          <span>Vào Phòng Dạy Trực Tuyến</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handleStopLiveSession(activeSession.id)}
+                          className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold cursor-pointer"
+                        >
+                          <span>Tắt Live (Kết thúc buổi học)</span>
                         </button>
 
                         <button
@@ -1694,7 +1756,7 @@ export const InstructorPortalView: React.FC = () => {
                           title={activeSession.title}
                           compact
                           emptyTitle="Chưa gắn đường dẫn video bản ghi"
-                          emptyDescription="Hãy nhập URL video (.mp4 / .m3u8) hoặc R2 key ở khung bên dưới rồi bấm Lưu nguồn video."
+                          emptyDescription="Hãy nhập URL video (.mp4 / .m3u8) ở khung bên dưới rồi bấm Lưu nguồn video."
                         />
                       ) : (
                         <div className="rounded-2xl bg-[#0F172A] border border-slate-800 p-6 text-white flex flex-wrap items-center justify-between gap-4">
@@ -1703,23 +1765,32 @@ export const InstructorPortalView: React.FC = () => {
                               {activeSession.title}
                             </h3>
                             <p className="text-xs text-slate-300">
-                              Bản ghi buổi học đã sẵn sàng để giảng viên kiểm tra lại trước khi học viên ôn tập.
+                              Bản ghi buổi học đã sẵn sàng để giảng viên kiểm tra lại trước khi học viên ôn tập, hoặc bạn có thể mở lại phòng dạy trực tuyến nếu cần.
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setIsPlayingReplayPreview(true)}
-                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                            <span>Xem trước bản ghi video</span>
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setIsPlayingReplayPreview(true)}
+                              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Xem trước bản ghi video</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleStartAndEnterLiveSession(activeSession.id)}
+                              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-bold cursor-pointer"
+                            >
+                              <span>Mở lại phòng dạy trực tuyến</span>
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Trường hợp 3: Buổi học sắp tới hoặc buổi bổ trợ chưa Livestream (SCHEDULED) */}
+                  {/* Trường hợp 3: Buổi học sắp tới chưa phát trực tuyến (SCHEDULED) */}
                   {activeSession.status === 'SCHEDULED' && (
                     <div className="p-5 rounded-2xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1728,17 +1799,17 @@ export const InstructorPortalView: React.FC = () => {
                             Buổi học chưa diễn ra ({activeSession.scheduledStart})
                           </div>
                           <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                            Giảng viên có thể mở phòng Livestream dạy trực tiếp hoặc gắn link video bài giảng bổ trợ bên dưới.
+                            Khi đến giờ lên lớp, bấm nút bên phải để mở phòng học trực tuyến cho học viên tham gia.
                           </p>
                         </div>
 
                         <button
                           type="button"
-                          onClick={() => navigate(`/live/${activeSession.id}`)}
+                          onClick={() => void handleStartAndEnterLiveSession(activeSession.id)}
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
                         >
                           <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Mở Phòng Livestream Dạy Học</span>
+                          <span>Mở Phòng &amp; Bắt Đầu Dạy Trực Tuyến</span>
                         </button>
                       </div>
                     </div>

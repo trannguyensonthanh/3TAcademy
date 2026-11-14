@@ -138,9 +138,9 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
       finalExamPassed: enr.finalExamPassed,
       dropoutRiskScore: enr.dropoutRiskScore,
       riskLevel: enr.riskLevel as 'LOW' | 'MEDIUM' | 'HIGH',
-      lastActivityAt: enr.enrolledAt.toLocaleDateString('vi-VN'),
+      lastActivityAt: (enr.enrolledAt ? new Date(enr.enrolledAt) : new Date()).toLocaleDateString('vi-VN'),
       lastRemindedAt: enr.lastRemindedAt ? enr.lastRemindedAt.toLocaleString('vi-VN') : undefined,
-      enrolledAt: enr.enrolledAt.toISOString(),
+      enrolledAt: (enr.enrolledAt ? new Date(enr.enrolledAt) : new Date()).toISOString(),
     };
   });
 }
@@ -365,7 +365,7 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
     });
 
     const liveSession =
-      formattedSessions.find((s) => s.status === 'LIVE') || formattedSessions[0] || null;
+      formattedSessions.find((s) => s.status === 'LIVE') || null;
     const upcomingSessions = formattedSessions.filter((s) => s.status === 'SCHEDULED');
 
     const examReviews = allAttempts.map((att) => {

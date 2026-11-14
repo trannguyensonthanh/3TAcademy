@@ -30,7 +30,7 @@ export interface ExamCameraReviewItem {
 export const teachApi = {
   getInstructorSchedule: () =>
     httpRequest<{
-      liveSession: ClassSession;
+      liveSession: ClassSession | null;
       upcomingSessions: ClassSession[];
       allSessions: ClassSession[];
       examReviews: ExamCameraReviewItem[];

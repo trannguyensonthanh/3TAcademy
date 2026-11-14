@@ -368,7 +368,7 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
     });
 
     const liveSession =
-      mappedSessions.find((s) => s.status === 'LIVE') || mappedSessions[0] || null;
+      mappedSessions.find((s) => s.status === 'LIVE') || null;
 
     const resumeSession =
       mappedSessions.find((s) => !s.isCompleted && s.lastPositionSec > 0) ||

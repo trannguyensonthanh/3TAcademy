@@ -1,21 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
+  Clock,
   Download,
   FileText,
+  Grid,
   Hand,
   Heart,
   HelpCircle,
   LogOut,
+  Maximize2,
   MessageSquare,
   Mic,
   MicOff,
   MonitorUp,
+  PhoneOff,
+  Play,
   PlayCircle,
   Radio,
   RefreshCw,
   Send,
   Sparkles,
+  Square,
   UserPlus,
   UserX,
   Users,
@@ -35,6 +41,7 @@ import { useAcademy } from '../context/AcademyContext';
 import { AvatarWithFallback } from '../components/BotanicalStickers';
 import {
   LiveKitClassroomStage,
+  LocalMediaStreamView,
   type AttachedRemoteTrackItem,
 } from '../components/LiveKitClassroomStage';
 import {
@@ -86,7 +93,7 @@ export const LivestreamClassView: React.FC<{
   sessionId: string;
   isGuestEntry?: boolean;
 }> = ({ sessionId, isGuestEntry = false }) => {
-  const { navigate, role, currentUser } = useAcademy();
+  const { navigate, role, currentUser, updateSessionDetails } = useAcademy();
 
   const [roomData, setRoomData] = useState<LiveSessionRoomPayload | null>(null);
   const [roomLoading, setRoomLoading] = useState<boolean>(!isGuestEntry);
@@ -151,7 +158,7 @@ export const LivestreamClassView: React.FC<{
   const [qaList, setQaList] = useState<LiveQuestionItem[]>([]);
   const [newQaText, setNewQaText] = useState<string>('');
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
-  const [sseConnected, setSseConnected] = useState<boolean>(false);
+  const [, setSseConnected] = useState<boolean>(false);
 
   // Right panel tabs: CHAT | QA | LIVE_SUMMARY | PARTICIPANTS
   const [rightTab, setRightTab] = useState<'CHAT' | 'QA' | 'LIVE_SUMMARY' | 'PARTICIPANTS'>('CHAT');
@@ -170,6 +177,7 @@ export const LivestreamClassView: React.FC<{
   const activeCohort = roomData?.cohort;
   const isHost =
     Boolean(roomData?.isHost) || role === 'INSTRUCTOR' || role === 'ADMIN';
+  const sessionStatus = activeSession?.status || 'LIVE';
 
   const currentAccountId = currentUser?.id ? String(currentUser.id) : '';
   const handRaised = runtimeState.raisedHands.some(
@@ -275,8 +283,20 @@ export const LivestreamClassView: React.FC<{
     };
   }, [stopAllLocalMediaAndRoom]);
 
-  // Connect to LiveKit SFU automatically if backend returns serverUrl & token
+  // Connect to LiveKit SFU ONLY when session is actually LIVE (or when Instructor is inside the room)
   useEffect(() => {
+    const canConnectWebRtc = isHost || joinedAsVerifiedGuest || sessionStatus === 'LIVE';
+    if (!canConnectWebRtc) {
+      if (livekitRoomRef.current) {
+        void livekitRoomRef.current.disconnect();
+        livekitRoomRef.current = null;
+      }
+      setLivekitConnected(false);
+      setLivekitConnecting(false);
+      setRemoteVideoTracks([]);
+      return;
+    }
+
     const lkInfo = joinedAsVerifiedGuest ? guestMeta?.livekit : roomData?.livekit;
     const serverUrl =
       lkInfo?.serverUrl || 'wss://project-3t-academy-live-3vunmpp5.livekit.cloud';
@@ -391,7 +411,7 @@ export const LivestreamClassView: React.FC<{
       void room.disconnect();
       livekitRoomRef.current = null;
     };
-  }, [roomData?.livekit, guestMeta?.livekit, joinedAsVerifiedGuest]);
+  }, [roomData?.livekit, guestMeta?.livekit, joinedAsVerifiedGuest, isHost, sessionStatus]);
 
   // Recording elapsed clock ticker
   useEffect(() => {
@@ -411,7 +431,7 @@ export const LivestreamClassView: React.FC<{
     return () => window.clearInterval(timer);
   }, [runtimeState.recording?.isRecording, runtimeState.recording?.startedAt]);
 
-  // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions, Mute & Kick
+  // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions, Status, Mute & Kick
   useEffect(() => {
     if (!roomData || typeof EventSource === 'undefined') return;
     const eventsUrl = learningApi.getLiveEventsUrl(roomData.session.id);
@@ -534,6 +554,10 @@ export const LivestreamClassView: React.FC<{
           ...prev,
           hostBroadcast: payload.hostBroadcast || prev.hostBroadcast,
         }));
+        updateSessionDetails(String(roomData.session.id), {
+          status: payload.status,
+          ...(payload.videoUrl ? { videoR2Key: payload.videoUrl } : {}),
+        });
         setRoomData((prev) =>
           prev
             ? {
@@ -550,6 +574,9 @@ export const LivestreamClassView: React.FC<{
               }
             : prev
         );
+        if (!isHost && payload.status !== 'LIVE') {
+          stopAllLocalMediaAndRoom();
+        }
       } catch {
         // Ignore
       }
@@ -614,7 +641,6 @@ export const LivestreamClassView: React.FC<{
           kickedIdentities: payload.kickedIdentities || [],
         }));
 
-        // Remove kicked student from local roomData participants list
         const kickedSet = new Set(payload.kickedIdentities || []);
         setRoomData((prev) =>
           prev
@@ -671,6 +697,7 @@ export const LivestreamClassView: React.FC<{
     currentUser?.id,
     isHost,
     stopAllLocalMediaAndRoom,
+    updateSessionDetails,
   ]);
 
   // Real browser camera & microphone control
@@ -981,10 +1008,14 @@ export const LivestreamClassView: React.FC<{
         videoR2Key: overrides?.videoR2Key,
       });
       setRuntimeState((prev) => ({ ...prev, hostBroadcast: res.hostBroadcast }));
+      updateSessionDetails(String(activeSessionId), {
+        status: res.status,
+        ...(overrides?.videoR2Key ? { videoR2Key: overrides.videoR2Key } : {}),
+      });
       setRoomData((prev) =>
         prev
           ? {
-               ...prev,
+              ...prev,
               session: {
                 ...prev.session,
                 status: res.status,
@@ -998,11 +1029,14 @@ export const LivestreamClassView: React.FC<{
             }
           : prev
       );
+      if (overrides?.status === 'REPLAY_READY') {
+        stopAllLocalMediaAndRoom();
+      }
       setMediaNotice(
         overrides?.status === 'LIVE'
-          ? 'Đã bắt đầu buổi học trực tuyến.'
+          ? 'Đã mở phòng học trực tuyến. Học viên trong lớp đã có thể vào học.'
           : overrides?.status === 'REPLAY_READY'
-            ? 'Đã kết thúc buổi học trực tuyến.'
+            ? 'Đã kết thúc buổi học trực tuyến và đóng phòng Live.'
             : 'Đã cập nhật trạng thái lớp học.'
       );
     } catch {
@@ -1122,7 +1156,7 @@ export const LivestreamClassView: React.FC<{
       reader.readAsDataURL(blob);
     });
 
-  // Stop recording & automatically upload/save in background without technical URLs in UI
+  // Stop recording & automatically upload/save in background
   const handleStopRecording = async () => {
     setIsRecordingBusy(true);
     try {
@@ -1155,6 +1189,10 @@ export const LivestreamClassView: React.FC<{
           ...prev,
           recording: uploaded.recording,
         }));
+        updateSessionDetails(String(activeSessionId), {
+          status: uploaded.status,
+          videoR2Key: uploaded.videoUrl,
+        });
         setRoomData((prev) =>
           prev
             ? {
@@ -1185,6 +1223,10 @@ export const LivestreamClassView: React.FC<{
         ...prev,
         recording: stopped.recording,
       }));
+      updateSessionDetails(String(activeSessionId), {
+        status: stopped.status,
+        videoR2Key: stopped.r2PublicUrl,
+      });
       setRoomData((prev) =>
         prev
           ? {
@@ -1500,25 +1542,171 @@ export const LivestreamClassView: React.FC<{
     );
   }
 
-  // ============================================================================
-  // 4. MAIN LIVE CLASSROOM WORKSPACE (Clean Light Theme & Human Language)
-  // ============================================================================
   const sessionTitle = activeSession?.title || guestMeta?.sessionTitle || `Buổi ${sessionId}`;
   const sessionOrder = activeSession?.sessionOrder || 1;
-  const sessionStatus = activeSession?.status || 'LIVE';
   const cohortName = activeCohort?.name || guestMeta?.cohortName || 'Lớp học 3T Academy';
   const cohortCode = activeCohort?.code || guestMeta?.cohortCode || '';
   const hostName = activeSession?.hostInstructorName || guestMeta?.hostInstructorName || 'Giảng viên';
   const playableVideoUrl = roomData?.video?.videoUrl || '';
   const selfName = currentUser?.fullName || guestDisplayName || 'Thành viên';
+  const isRecording = Boolean(runtimeState.recording?.isRecording);
 
+  // ============================================================================
+  // 4. PHÒNG CHỜ HOẶC THÔNG BÁO KẾT THÚC DÀNH CHO HỌC VIÊN KHI GIẢNG VIÊN CHƯA BẬT LIVE
+  //    (Khi Giảng viên bấm mở Live, sự kiện SSE `session_status` sẽ tự động đưa học viên
+  //     vào thẳng phòng học mà không cần tải lại trang!)
+  // ============================================================================
+  if (!isHost && !joinedAsVerifiedGuest && sessionStatus !== 'LIVE') {
+    const isEnded = sessionStatus === 'REPLAY_READY';
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-2xl w-full rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 sm:p-8 space-y-6 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span
+              className={`inline-flex items-center gap-2 px-3 py-1 rounded-md text-xs font-bold ${
+                isEnded
+                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                  : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>
+                {isEnded
+                  ? 'BUỔI HỌC TRỰC TUYẾN ĐÃ KẾT THÚC'
+                  : 'PHÒNG CHỜ LỚP HỌC · ĐANG CHỜ GIẢNG VIÊN MỞ PHÒNG'}
+              </span>
+            </span>
+
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {cohortName} {cohortCode ? `(${cohortCode})` : ''}
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
+              Buổi {sessionOrder}: {sessionTitle}
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              {isEnded
+                ? `Giảng viên ${hostName} đã kết thúc phiên học trực tuyến của buổi học này. Bạn có thể chuyển sang xem Video bài giảng và làm bài kiểm tra củng cố.`
+                : `Giảng viên ${hostName} hiện chưa bật phát trực tuyến cho buổi học này. Hệ thống sẽ tự động đưa bạn vào lớp ngay khi Giảng viên mở phòng.`}
+            </p>
+          </div>
+
+          {/* Khu vực kiểm tra trước Camera & Micro giống Google Meet */}
+          {!isEnded && (
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
+              <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                Kiểm tra Camera &amp; Micro trước khi vào lớp
+              </div>
+
+              {webcamActive && localVideoStream ? (
+                <div className="relative aspect-video max-h-56 w-full rounded-xl overflow-hidden bg-slate-900 border border-slate-300 dark:border-slate-700">
+                  <LocalMediaStreamView
+                    stream={localVideoStream}
+                    muted
+                    mirrored
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-2 left-2 px-2.5 py-1 rounded bg-black/65 text-[11px] text-white font-medium">
+                    {selfName} (Xem trước Camera)
+                  </div>
+                </div>
+              ) : (
+                <div className="py-6 rounded-xl bg-slate-900 text-white flex flex-col items-center justify-center gap-2">
+                  <AvatarWithFallback name={selfName} className="w-14 h-14 rounded-full" />
+                  <span className="text-xs text-slate-300">
+                    Camera đang tắt · Bạn có thể bật thử trước khi vào phòng
+                  </span>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => void handleToggleMic()}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer ${
+                    micOn
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  {micOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5 text-rose-500" />}
+                  <span>{micOn ? 'Micro: Đang bật' : 'Thử bật Micro'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleToggleCamera()}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer ${
+                    camOn
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  {camOn ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5 text-rose-500" />}
+                  <span>{camOn ? 'Camera: Đang bật' : 'Thử bật Camera'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() =>
+                navigate(
+                  activeSession?.cohortId
+                    ? `/app/cohorts/${activeSession.cohortId}`
+                    : '/app'
+                )
+              }
+              className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              ← Quay về lộ trình lớp học
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {!isEnded && (
+                <button
+                  type="button"
+                  onClick={() => void loadRoom()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Kiểm tra lại trạng thái</span>
+                </button>
+              )}
+
+              {activeSession?.cohortId && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(`/learn/${activeSession.cohortId}/session/${activeSession.id}`)
+                  }
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+                >
+                  <PlayCircle className="w-4 h-4" />
+                  <span>Xem Video bài giảng &amp; Tài liệu →</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // 5. MAIN GOOGLE MEET / ZOOM CLASSROOM WORKSPACE
+  // ============================================================================
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between pb-16">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between pb-8">
       {/* Hidden audio output container for remote audio tracks */}
       <div ref={remoteAudioContainerRef} className="hidden" />
 
-      {/* Clean Top Header */}
-      <header className="px-6 py-3.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
+      {/* Top Classroom Header */}
+      <header className="px-6 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           {sessionStatus === 'LIVE' ? (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 text-xs font-bold shrink-0">
@@ -1526,9 +1714,9 @@ export const LivestreamClassView: React.FC<{
               <span>Đang diễn ra</span>
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold shrink-0">
-              <Radio className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{sessionStatus === 'REPLAY_READY' ? 'Đã kết thúc' : 'Chưa bắt đầu'}</span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-xs font-semibold shrink-0">
+              <Radio className="w-3.5 h-3.5 text-amber-600" />
+              <span>Phòng đang đóng với học viên</span>
             </span>
           )}
 
@@ -1538,36 +1726,15 @@ export const LivestreamClassView: React.FC<{
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {cohortCode ? `${cohortCode} · ` : ''}
-              Giảng viên: <strong className="font-semibold text-slate-700 dark:text-slate-200">{hostName}</strong>
+              Giảng viên phụ trách:{' '}
+              <strong className="font-semibold text-slate-700 dark:text-slate-200">
+                {hostName}
+              </strong>
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Instructor quick session state action if not yet LIVE */}
-          {isHost && sessionStatus !== 'LIVE' && (
-            <button
-              type="button"
-              disabled={isUpdatingHostState}
-              onClick={() => void handleUpdateHostBroadcast({ status: 'LIVE' })}
-              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-60"
-            >
-              Bắt đầu buổi học
-            </button>
-          )}
-
-          {isHost && sessionStatus === 'LIVE' && (
-            <button
-              type="button"
-              disabled={isUpdatingHostState}
-              onClick={() => void handleUpdateHostBroadcast({ status: 'REPLAY_READY' })}
-              className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition-colors cursor-pointer disabled:opacity-60"
-            >
-              Kết thúc buổi học
-            </button>
-          )}
-
-          {/* Link to dedicated Video Lecture screen ONLY if a recorded video exists */}
           {playableVideoUrl && activeSession?.cohortId && (
             <button
               type="button"
@@ -1592,10 +1759,34 @@ export const LivestreamClassView: React.FC<{
         </div>
       </header>
 
-      {/* Main 2-Column Workspace: Left Video Stage (8 cols) + Right Panel (4 cols) */}
+      {/* Pre-Live Notice Bar for Instructor when room is not yet open to students */}
+      {isHost && sessionStatus !== 'LIVE' && (
+        <div className="bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-800 px-6 py-2.5">
+          <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-amber-900 dark:text-amber-200 font-medium">
+              <Radio className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                Phòng học hiện đang ở chế độ chuẩn bị (học viên chưa thấy phòng Live). Bấm{' '}
+                <strong>Mở phòng &amp; Bắt đầu Live</strong> để học viên vào lớp.
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={isUpdatingHostState}
+              onClick={() => void handleUpdateHostBroadcast({ status: 'LIVE' })}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs cursor-pointer disabled:opacity-60"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Mở phòng &amp; Bắt đầu Live</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main 2-Column Workspace: Left Video Stage & Control Dock (8 cols) + Right Panel (4 cols) */}
       <div className="flex-1 max-w-[1440px] w-full mx-auto px-6 py-5 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* LEFT COLUMN: VIDEO STAGE & MEETING CONTROL BAR */}
-        <div className="lg:col-span-8 space-y-4">
+        {/* LEFT COLUMN: VIDEO STAGE & GOOGLE MEET / ZOOM BOTTOM CONTROL BAR */}
+        <div className="lg:col-span-8 space-y-3.5">
           <LiveKitClassroomStage
             sessionId={activeSessionId}
             sessionOrder={sessionOrder}
@@ -1659,97 +1850,201 @@ export const LivestreamClassView: React.FC<{
             </div>
           )}
 
-          {/* BOTTOM MEETING CONTROL BAR */}
-          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
+          {/* =================================================================
+              BALANCED 3-ZONE GOOGLE MEET / ZOOM BOTTOM CONTROL BAR
+              - Left Zone: Class code & role status
+              - Center Zone: Perfectly balanced media & interaction controls
+              - Right Zone: End / Leave room actions
+          ================================================================= */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-3 shadow-xs grid grid-cols-1 xl:grid-cols-12 items-center gap-3">
+            {/* LEFT ZONE: Session & Role Info */}
+            <div className="xl:col-span-3 flex items-center justify-between xl:justify-start gap-2.5 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                    sessionStatus === 'LIVE' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                <div className="truncate">
+                  <div className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                    {cohortCode || `Buổi ${sessionOrder}`}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                    {isHost ? 'Giảng viên chủ trì' : `Học viên · ${selfName}`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* CENTER ZONE: Symmetrical Media & Classroom Controls (Google Meet / Zoom style) */}
+            <div className="xl:col-span-6 flex flex-wrap items-center justify-center gap-2">
+              {/* 1. Microphone Toggle */}
               <button
                 type="button"
                 onClick={() => void handleToggleMic()}
-                className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                title={micOn ? 'Tắt Micro' : 'Bật Micro'}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   micOn
-                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100'
+                    ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700'
+                    : 'bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
                 }`}
               >
                 {micOn ? (
                   <Mic className="w-4 h-4 text-emerald-600" />
                 ) : (
-                  <MicOff className="w-4 h-4 text-rose-500" />
+                  <MicOff className="w-4 h-4 text-rose-600" />
                 )}
                 <span>{micOn ? 'Tắt Mic' : 'Bật Mic'}</span>
               </button>
 
+              {/* 2. Camera Toggle */}
               <button
                 type="button"
                 onClick={() => void handleToggleCamera()}
-                className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                title={camOn ? 'Tắt Camera' : 'Bật Camera'}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   camOn
-                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100'
+                    ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700'
+                    : 'bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
                 }`}
               >
                 {camOn ? (
                   <Video className="w-4 h-4 text-emerald-600" />
                 ) : (
-                  <VideoOff className="w-4 h-4 text-rose-500" />
+                  <VideoOff className="w-4 h-4 text-rose-600" />
                 )}
-                <span>{camOn ? 'Tắt Camera' : 'Bật Camera'}</span>
+                <span>{camOn ? 'Tắt Cam' : 'Bật Cam'}</span>
               </button>
 
+              {/* 3. Screen Share Toggle */}
               <button
                 type="button"
                 onClick={() => void handleToggleScreenShare()}
-                className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                title={screenSharing ? 'Dừng chia sẻ màn hình' : 'Chia sẻ màn hình'}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   screenSharing
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100'
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700'
                 }`}
               >
                 <MonitorUp className="w-4 h-4" />
                 <span>{screenSharing ? 'Dừng chia sẻ' : 'Chia sẻ màn hình'}</span>
               </button>
 
-              {/* ONLY Students see "Giơ tay phát biểu" — Instructor NEVER raises hand */}
-              {!isHost && (
+              {/* 4. Role-Specific Action: Hand Raise (Student) OR Recording (Instructor) */}
+              {!isHost ? (
                 <button
                   type="button"
                   onClick={() => void handleToggleHandRaise()}
-                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  title={handRaised ? 'Hạ tay xuống' : 'Giơ tay phát biểu'}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     handRaised
-                      ? 'bg-amber-500 text-slate-950'
-                      : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100'
+                      ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs'
+                      : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700'
                   }`}
                 >
                   <Hand className="w-4 h-4" />
-                  <span>{handRaised ? 'Hạ tay xuống' : 'Giơ tay phát biểu'}</span>
+                  <span>{handRaised ? 'Hạ tay' : 'Giơ tay'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isRecordingBusy}
+                  onClick={() =>
+                    isRecording ? void handleStopRecording() : void handleStartRecording()
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 ${
+                    isRecording
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                      : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  {isRecording ? (
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                  ) : (
+                    <Radio className="w-4 h-4 text-rose-600" />
+                  )}
+                  <span>{isRecording ? 'Dừng ghi hình' : 'Ghi hình'}</span>
                 </button>
               )}
-            </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              {/* 5. Quick Reactions Pill */}
+              <div className="inline-flex items-center gap-0.5 px-1.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <button
                   type="button"
                   onClick={() => void handleSendReaction('❤️ Thả tim')}
-                  className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold text-rose-600 dark:text-rose-400 transition-colors cursor-pointer"
+                  title="Thả tim"
+                  className="px-2 py-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold transition-colors cursor-pointer"
                 >
-                  ❤️ Tim
+                  ❤️
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleSendReaction('👏 Vỗ tay')}
-                  className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold text-amber-600 dark:text-amber-400 transition-colors cursor-pointer"
+                  title="Vỗ tay"
+                  className="px-2 py-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold transition-colors cursor-pointer"
                 >
-                  👏 Vỗ tay
+                  👏
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleSendReaction('🌟 Dễ hiểu')}
-                  className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer"
+                  title="Dễ hiểu"
+                  className="px-2 py-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-xs font-semibold transition-colors cursor-pointer"
                 >
-                  🌟 Dễ hiểu
+                  🌟
                 </button>
               </div>
+
+              {/* 6. Stage / Grid Layout Toggle */}
+              <button
+                type="button"
+                onClick={() =>
+                  setStageViewMode((prev) => (prev === 'STAGE' ? 'GRID' : 'STAGE'))
+                }
+                title="Đổi bố cục hiển thị"
+                className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+              >
+                {stageViewMode === 'STAGE' ? (
+                  <>
+                    <Grid className="w-4 h-4 text-emerald-600" />
+                    <span className="hidden sm:inline">Lưới</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-4 h-4 text-emerald-600" />
+                    <span className="hidden sm:inline">Màn hình chính</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* RIGHT ZONE: End / Leave Room Controls */}
+            <div className="xl:col-span-3 flex items-center justify-end gap-2">
+              {isHost && sessionStatus === 'LIVE' && (
+                <button
+                  type="button"
+                  disabled={isUpdatingHostState}
+                  onClick={() => void handleUpdateHostBroadcast({ status: 'REPLAY_READY' })}
+                  title="Đóng phòng học trực tuyến đối với toàn bộ học viên"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <PhoneOff className="w-4 h-4" />
+                  <span>Kết thúc Live</span>
+                </button>
+              )}
+
+              {isHost && sessionStatus !== 'LIVE' && (
+                <button
+                  type="button"
+                  disabled={isUpdatingHostState}
+                  onClick={() => void handleUpdateHostBroadcast({ status: 'LIVE' })}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Mở phòng Live</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1764,10 +2059,14 @@ export const LivestreamClassView: React.FC<{
                           : '/app'
                   )
                 }
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  isHost
+                    ? 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
+                    : 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                }`}
               >
                 <LogOut className="w-4 h-4" />
-                <span>Rời phòng học</span>
+                <span>{isHost ? 'Rời phòng' : 'Rời phòng học'}</span>
               </button>
             </div>
           </div>
@@ -2114,10 +2413,10 @@ export const LivestreamClassView: React.FC<{
                               void handleKickParticipant(`acc-${p.accountId}`, p.fullName)
                             }
                             title="Mời học viên này ra khỏi phòng"
-                            className="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-[11px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                            className="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-600 text-rose-600 dark:text-rose-300 hover:text-white border border-rose-200 dark:border-rose-800 text-[11px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
                           >
                             <UserX className="w-3 h-3" />
-                            <span>Mời ra ngoài</span>
+                            <span>Mời ra</span>
                           </button>
                         </div>
                       ) : null}

@@ -115,6 +115,7 @@ vi.mock('../src/db/index.js', () => {
                       status: 'ACTIVE',
                       fullName: 'Nguyễn Văn An',
                       role: 'STUDENT',
+                      enrolledAt: new Date('2026-03-01T00:00:00Z'),
                     },
                   ]
                 : [];
@@ -509,5 +510,59 @@ describe('live classroom & video HTTP routes', () => {
     const kickedJoinBody = (await kickedJoinRes.json()) as { code: string };
     expect(kickedJoinRes.status).toBe(403);
     expect(kickedJoinBody.code).toBe('KICKED_FROM_SESSION');
+  });
+
+  it('returns liveSession only when Instructor turns ON Live (status === LIVE) and returns null when Live is turned OFF', async () => {
+    const instructorToken = signToken({
+      id: 2,
+      email: 'khoa@3t.edu.vn',
+      role: 'INSTRUCTOR',
+    });
+    const studentToken = signToken({
+      id: 4,
+      email: 'an@3t.edu.vn',
+      role: 'STUDENT',
+    });
+
+    // 1. When session is LIVE -> both Student dashboard and Instructor schedule see liveSession
+    state.sessionStatus = 'LIVE';
+    const liveDashRes = await fetch(`${baseUrl}/api/v1/me/dashboard`, {
+      headers: { Authorization: `Bearer ${studentToken}` },
+    });
+    const liveDashBody = (await liveDashRes.json()) as {
+      liveSession: { id: string; status: string } | null;
+    };
+    expect(liveDashRes.status).toBe(200);
+    expect(liveDashBody.liveSession?.id).toBe('5');
+    expect(liveDashBody.liveSession?.status).toBe('LIVE');
+
+    // 2. Instructor ends Live (status -> REPLAY_READY)
+    await fetch(`${baseUrl}/api/v1/teach/sessions/5/live-status`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${instructorToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'REPLAY_READY' }),
+    });
+
+    // 3. Now both Student dashboard and Instructor schedule must return liveSession: null
+    const endedDashRes = await fetch(`${baseUrl}/api/v1/me/dashboard`, {
+      headers: { Authorization: `Bearer ${studentToken}` },
+    });
+    const endedDashBody = (await endedDashRes.json()) as {
+      liveSession: { id: string; status: string } | null;
+    };
+    expect(endedDashRes.status).toBe(200);
+    expect(endedDashBody.liveSession).toBeNull();
+
+    const endedTeachRes = await fetch(`${baseUrl}/api/v1/teach/schedule`, {
+      headers: { Authorization: `Bearer ${instructorToken}` },
+    });
+    const endedTeachBody = (await endedTeachRes.json()) as {
+      liveSession: { id: string; status: string } | null;
+    };
+    expect(endedTeachRes.status).toBe(200);
+    expect(endedTeachBody.liveSession).toBeNull();
   });
 });
