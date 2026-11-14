@@ -424,8 +424,18 @@ adminRouter.post(
       let resolvedCategoryId = categoryId ?? 1;
       if (!categoryId && category) {
         const allCats = await db.select().from(categories);
+        const catLower = category.trim().toLowerCase();
         const matchedCat = allCats.find(
-          (c) => c.name.toLowerCase() === category.toLowerCase() || c.slug === category
+          (c) =>
+            c.name.toLowerCase() === catLower ||
+            c.slug.toLowerCase() === catLower ||
+            (catLower.includes('ai') && c.slug === 'ai-llm-engineering') ||
+            ((catLower.includes('backend') || catLower.includes('cloud') || catLower.includes('hệ thống')) &&
+              c.slug === 'backend-system-architecture') ||
+            ((catLower.includes('dữ liệu') || catLower.includes('data')) &&
+              c.slug === 'data-engineering-analytics') ||
+            ((catLower.includes('nền tảng') || catLower.includes('python')) &&
+              c.slug === 'foundational-programming')
         );
         if (matchedCat) {
           resolvedCategoryId = matchedCat.id;

@@ -45,6 +45,12 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
   const { courses, cohorts, enrolledCohortIds, navigate, role } = useAcademy();
 
   const cleanSlug = slug.split('?')[0];
+  const requestedCohortCode = React.useMemo(() => {
+    const queryPart = slug.split('?')[1] || '';
+    const params = new URLSearchParams(queryPart);
+    return params.get('cohort') || '';
+  }, [slug]);
+
   const { data: detailData } = useAsyncData(
     () => catalogApi.getCourseBySlug(cleanSlug),
     [cleanSlug]
@@ -56,7 +62,7 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
       id: '',
       slug: cleanSlug,
       title: 'Đang tải khóa học...',
-      category: 'AI & Dữ liệu' as const,
+      category: 'Trí tuệ nhân tạo & AI' as const,
       shortDescription: '',
       descriptionMd: '',
       difficultyLevel: 3 as const,
@@ -73,27 +79,47 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
       }
     : fallbackCourse;
 
-  const courseCohorts =
-    detailData?.cohorts && detailData.cohorts.length > 0
-      ? detailData.cohorts
-      : cohorts.filter((c) => c.courseId === course.id);
+  const courseCohorts = React.useMemo(() => {
+    const raw =
+      detailData?.cohorts && detailData.cohorts.length > 0
+        ? detailData.cohorts
+        : cohorts.filter((c) => c.courseId === course.id);
+    return [...raw].sort((a, b) => {
+      const order = (s: string) =>
+        s === 'OPENING' ? 1 : s === 'ONGOING' ? 2 : s === 'DRAFT' ? 3 : 4;
+      return order(a.status) - order(b.status);
+    });
+  }, [detailData?.cohorts, cohorts, course.id]);
+
   const [selectedCohortId, setSelectedCohortId] = useState<string>(
     courseCohorts[0]?.id ?? cohorts[0]?.id ?? ''
   );
 
   React.useEffect(() => {
     if (courseCohorts.length === 0) return;
+    if (requestedCohortCode) {
+      const matchedByCode = courseCohorts.find(
+        (c) => c.code.toLowerCase() === requestedCohortCode.toLowerCase()
+      );
+      if (matchedByCode && String(matchedByCode.id) !== String(selectedCohortId)) {
+        setSelectedCohortId(matchedByCode.id);
+        return;
+      }
+    }
     if (!courseCohorts.some((c) => String(c.id) === String(selectedCohortId))) {
       const preferred =
-        courseCohorts.find((c) => c.status === 'OPENING') ?? courseCohorts[0];
+        courseCohorts.find((c) => c.status === 'OPENING') ??
+        courseCohorts.find((c) => c.status === 'ONGOING') ??
+        courseCohorts[0];
       if (preferred) {
         setSelectedCohortId(preferred.id);
       }
     }
-  }, [courseCohorts, selectedCohortId]);
+  }, [courseCohorts, selectedCohortId, requestedCohortCode]);
 
   const selectedCohort =
-    courseCohorts.find((c) => c.id === selectedCohortId) ??
+    courseCohorts.find((c) => String(c.id) === String(selectedCohortId)) ??
+    courseCohorts.find((c) => c.status === 'OPENING') ??
     courseCohorts[0] ??
     cohorts[0] ?? {
       id: selectedCohortId,
@@ -287,8 +313,24 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
                         <span className="font-mono font-bold text-sm text-[#059669] dark:text-[#34D399]">
                           {ch.code}
                         </span>
-                        <span className="text-xs font-semibold text-[#065F46] dark:text-emerald-300">
-                          {ch.status === 'OPENING' ? 'Đang mở ghi danh' : 'Đang học'}
+                        <span
+                          className={`text-xs font-semibold ${
+                            ch.status === 'COMPLETED' ||
+                            ch.status === 'CLOSED' ||
+                            ch.status === 'ARCHIVED'
+                              ? 'text-[#64748B] dark:text-[#94A3B8]'
+                              : 'text-[#065F46] dark:text-emerald-300'
+                          }`}
+                        >
+                          {ch.status === 'OPENING'
+                            ? 'Đang mở đăng ký'
+                            : ch.status === 'ONGOING'
+                              ? 'Đang học'
+                              : ch.status === 'COMPLETED'
+                                ? 'Đã kết thúc'
+                                : ch.status === 'DRAFT'
+                                  ? 'Sắp mở đăng ký'
+                                  : 'Đã đóng'}
                         </span>
                       </div>
 
@@ -518,13 +560,15 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
                   Tính năng ghi danh khóa học chỉ áp dụng cho tài khoản Học viên.
                 </p>
               </div>
-            ) : selectedCohort.status === 'CLOSED' ? (
+            ) : selectedCohort.status === 'CLOSED' ||
+              selectedCohort.status === 'COMPLETED' ||
+              selectedCohort.status === 'ARCHIVED' ? (
               <button
                 type="button"
                 disabled
                 className="w-full py-3 px-4 rounded-xl bg-slate-200 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8] text-sm font-semibold cursor-not-allowed whitespace-nowrap"
               >
-                Đợt học đã kết thúc ghi danh ({selectedCohort.code})
+                Đợt học đã kết thúc ({selectedCohort.code})
               </button>
             ) : (
               <button

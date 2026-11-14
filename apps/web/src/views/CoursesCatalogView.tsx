@@ -75,40 +75,74 @@ export const CoursesCatalogView: React.FC = () => {
   const [sortBy, setSortBy] = useState<'POPULAR' | 'PRICE_ASC' | 'DIFFICULTY'>('POPULAR');
 
   const { data: apiCategories } = useAsyncData(() => catalogApi.getCategories(), []);
-  const { data: apiCourses } = useAsyncData(
-    () =>
-      catalogApi.getCourses({
-        category: selectedCategory === 'ALL' ? '' : selectedCategory,
-        query: searchQueryGlobal,
-      }),
-    [selectedCategory, searchQueryGlobal]
-  );
+  const { data: apiAllCourses } = useAsyncData(() => catalogApi.getCourses(), []);
 
-  const courses = apiCourses ?? contextCourses;
+  const courses = apiAllCourses && apiAllCourses.length > 0 ? apiAllCourses : contextCourses;
   const rawCategoryList =
     apiCategories && apiCategories.length > 0 ? apiCategories : contextCategories;
-
-  const allCategoryEntry = useMemo(
-    () => rawCategoryList.find((cat) => isAllCategoryItem(cat)),
-    [rawCategoryList]
-  );
 
   const realCategories = useMemo(
     () => rawCategoryList.filter((cat) => !isAllCategoryItem(cat)),
     [rawCategoryList]
   );
 
-  const totalCourseCount = useMemo(() => {
-    if (allCategoryEntry) {
-      const c = allCategoryEntry.courseCount ?? allCategoryEntry.count;
-      if (typeof c === 'number' && c >= 0) return c;
+  const getCourseCohorts = React.useCallback(
+    (course: (typeof courses)[number]) => {
+      const embeddedCohorts = course.cohorts;
+      const list =
+        embeddedCohorts && embeddedCohorts.length > 0
+          ? embeddedCohorts
+          : cohorts.filter((ch) => ch.courseId === course.id);
+      return [...list].sort((a, b) => {
+        const order = (s: string) =>
+          s === 'OPENING' ? 1 : s === 'ONGOING' ? 2 : s === 'DRAFT' ? 3 : 4;
+        return order(a.status) - order(b.status);
+      });
+    },
+    [cohorts]
+  );
+
+  const courseMatchesOpeningFilter = React.useCallback(
+    (course: (typeof courses)[number]) => {
+      if (!onlyOpeningCohorts) return true;
+      const courseCohorts = getCourseCohorts(course);
+      return courseCohorts.some((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING');
+    },
+    [onlyOpeningCohorts, getCourseCohorts]
+  );
+
+  const courseMatchesCategory = React.useCallback(
+    (course: (typeof courses)[number], cat: CourseCategoryItem) => {
+      if (
+        course.categoryId !== undefined &&
+        String(course.categoryId) === String(cat.id)
+      ) {
+        return true;
+      }
+      const courseCatLower = (course.category || '').trim().toLowerCase();
+      const catNameLower = (cat.name || '').trim().toLowerCase();
+      const catSlugLower = (cat.slug || '').trim().toLowerCase();
+      return (
+        courseCatLower === catNameLower ||
+        (catSlugLower.length > 0 && courseCatLower === catSlugLower)
+      );
+    },
+    []
+  );
+
+  const categoryCountsMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const eligibleCourses = courses.filter(courseMatchesOpeningFilter);
+    for (const cat of realCategories) {
+      const count = eligibleCourses.filter((c) => courseMatchesCategory(c, cat)).length;
+      map.set(String(cat.id), count);
     }
-    const sum = realCategories.reduce(
-      (acc, cat) => acc + (cat.courseCount ?? cat.count ?? 0),
-      0
-    );
-    return sum > 0 ? sum : contextCourses.length;
-  }, [allCategoryEntry, realCategories, contextCourses.length]);
+    return map;
+  }, [courses, realCategories, courseMatchesOpeningFilter, courseMatchesCategory]);
+
+  const totalCourseCount = useMemo(() => {
+    return courses.filter(courseMatchesOpeningFilter).length;
+  }, [courses, courseMatchesOpeningFilter]);
 
   const filteredCourses = useMemo(() => {
     const q = searchQueryGlobal.trim().toLowerCase();
@@ -116,12 +150,18 @@ export const CoursesCatalogView: React.FC = () => {
     const list = courses.filter((course) => {
       if (selectedCategory !== 'ALL') {
         const matchedCat = realCategories.find(
-          (c) => c.slug === selectedCategory || c.name === selectedCategory
+          (c) =>
+            c.slug === selectedCategory ||
+            c.name === selectedCategory ||
+            String(c.id) === selectedCategory
         );
-        const courseCatLower = (course.category || '').trim().toLowerCase();
-        const targetNameLower = (matchedCat?.name || selectedCategory).trim().toLowerCase();
-        if (courseCatLower !== targetNameLower && courseCatLower !== selectedCategory.toLowerCase()) {
-          return false;
+        if (matchedCat) {
+          if (!courseMatchesCategory(course, matchedCat)) return false;
+        } else {
+          const courseCatLower = (course.category || '').trim().toLowerCase();
+          if (courseCatLower !== selectedCategory.trim().toLowerCase()) {
+            return false;
+          }
         }
       }
       if (selectedDifficulty !== null && course.difficultyLevel !== selectedDifficulty) {
@@ -133,17 +173,10 @@ export const CoursesCatalogView: React.FC = () => {
       ) {
         return false;
       }
-      const embeddedCohorts = (course as { cohorts?: typeof cohorts }).cohorts;
-      const courseCohorts =
-        embeddedCohorts && embeddedCohorts.length > 0
-          ? embeddedCohorts
-          : cohorts.filter((ch) => ch.courseId === course.id);
-      if (
-        onlyOpeningCohorts &&
-        !courseCohorts.some((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING')
-      ) {
+      if (!courseMatchesOpeningFilter(course)) {
         return false;
       }
+      const courseCohorts = getCourseCohorts(course);
       if (q) {
         const matchTitle = course.title.toLowerCase().includes(q);
         const matchDesc = course.shortDescription.toLowerCase().includes(q);
@@ -164,8 +197,8 @@ export const CoursesCatalogView: React.FC = () => {
         return b.difficultyLevel - a.difficultyLevel;
       }
       if (sortBy === 'PRICE_ASC') {
-        const cohortsA = cohorts.filter((c) => c.courseId === a.id).map((c) => c.tuitionVnd);
-        const cohortsB = cohorts.filter((c) => c.courseId === b.id).map((c) => c.tuitionVnd);
+        const cohortsA = getCourseCohorts(a).map((c) => c.tuitionVnd);
+        const cohortsB = getCourseCohorts(b).map((c) => c.tuitionVnd);
         const minA = cohortsA.length > 0 ? Math.min(...cohortsA) : 0;
         const minB = cohortsB.length > 0 ? Math.min(...cohortsB) : 0;
         return minA - minB;
@@ -174,14 +207,15 @@ export const CoursesCatalogView: React.FC = () => {
     });
   }, [
     courses,
-    cohorts,
     realCategories,
     selectedCategory,
     selectedDifficulty,
     selectedSkill,
-    onlyOpeningCohorts,
     searchQueryGlobal,
     sortBy,
+    courseMatchesCategory,
+    courseMatchesOpeningFilter,
+    getCourseCohorts,
   ]);
 
   const handleResetFilters = () => {
@@ -257,7 +291,8 @@ export const CoursesCatalogView: React.FC = () => {
               </button>
               {realCategories.map((cat) => {
                 const CatIcon = getCategoryFallbackIcon(cat);
-                const countVal = cat.courseCount ?? cat.count;
+                const countVal =
+                  categoryCountsMap.get(String(cat.id)) ?? cat.courseCount ?? cat.count ?? 0;
                 const isSelected = selectedCategory === cat.name || selectedCategory === cat.slug;
                 return (
                   <button
@@ -274,11 +309,9 @@ export const CoursesCatalogView: React.FC = () => {
                       <CatIcon className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
                       <span className="truncate">{cat.name}</span>
                     </span>
-                    {countVal !== undefined && (
-                      <span className="font-mono text-[11px] opacity-80 tabular-nums shrink-0">
-                        {countVal}
-                      </span>
-                    )}
+                    <span className="font-mono text-[11px] opacity-80 tabular-nums shrink-0">
+                      {countVal}
+                    </span>
                   </button>
                 );
               })}
@@ -398,12 +431,14 @@ export const CoursesCatalogView: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredCourses.map((course) => {
-                const embeddedCohorts = (course as { cohorts?: typeof cohorts }).cohorts;
-                const courseCohorts =
-                  embeddedCohorts && embeddedCohorts.length > 0
-                    ? embeddedCohorts
-                    : cohorts.filter((c) => c.courseId === course.id);
-                const primaryCohort = courseCohorts[0];
+                const courseCohorts = getCourseCohorts(course);
+                const openCohorts = courseCohorts.filter(
+                  (c) => c.status === 'OPENING' || c.status === 'ONGOING'
+                );
+                const primaryCohort =
+                  courseCohorts.find((c) => c.status === 'OPENING') ??
+                  courseCohorts.find((c) => c.status === 'ONGOING') ??
+                  courseCohorts[0];
                 const diffInfo = DIFFICULTY_LABELS[course.difficultyLevel];
 
                 return (
@@ -443,13 +478,18 @@ export const CoursesCatalogView: React.FC = () => {
 
                       {primaryCohort && (
                         <div className="pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-1.5 text-xs text-[#475569] dark:text-[#94A3B8]">
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between gap-2">
                             <span className="font-mono font-semibold text-[#059669] dark:text-[#34D399]">
                               {primaryCohort.code}
                             </span>
                             <span className="inline-flex items-center gap-1 tabular-nums">
                               <Users className="w-3.5 h-3.5 text-[#10B981]" />
                               {primaryCohort.enrolledCount} học viên
+                              {openCohorts.length > 1 && (
+                                <span className="text-[#059669] dark:text-[#34D399] font-semibold">
+                                  · {openCohorts.length} đợt mở
+                                </span>
+                              )}
                             </span>
                           </div>
                           <div className="flex items-center gap-1.5">

@@ -56,6 +56,7 @@ export interface Course {
   shortDescription: string;
   descriptionMd: string;
   category: CourseCategory;
+  categoryId?: number;
   difficultyLevel: 1 | 2 | 3 | 4 | 5;
   level?: string;
   durationWeeks?: number;
@@ -68,9 +69,13 @@ export interface Course {
   rating?: number;
   reviewCount: number;
   reviewsCount?: number;
+  startingPriceVnd?: number;
+  nextCohortStartDate?: string;
+  openCohortsCount?: number;
+  cohorts?: Cohort[];
 }
 
-export type CohortStatus = 'OPENING' | 'ONGOING' | 'COMPLETED' | 'CLOSED';
+export type CohortStatus = 'OPENING' | 'ONGOING' | 'COMPLETED' | 'CLOSED' | 'DRAFT' | 'ARCHIVED';
 
 // Chỉ có vai trò INSTRUCTOR cho giảng viên phụ trách lớp (Đã bỏ hoàn toàn vai trò TA)
 export type StaffRole = 'INSTRUCTOR';

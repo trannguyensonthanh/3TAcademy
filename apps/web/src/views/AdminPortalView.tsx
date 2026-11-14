@@ -134,7 +134,7 @@ export const AdminPortalView: React.FC = () => {
 
   const [showCreateCourseForm, setShowCreateCourseForm] = useState(false);
   const [courseFormTitle, setCourseFormTitle] = useState('');
-  const [courseFormCategory, setCourseFormCategory] = useState<CourseCategory>('AI & Dữ liệu');
+  const [courseFormCategory, setCourseFormCategory] = useState<CourseCategory>('Trí tuệ nhân tạo & AI');
   const [courseFormDesc, setCourseFormDesc] = useState('');
   const [courseFormSkills, setCourseFormSkills] = useState(
     'Xây dựng ứng dụng AI, Thiết kế cơ sở dữ liệu tìm kiếm, Triển khai thực tế'
@@ -225,7 +225,7 @@ export const AdminPortalView: React.FC = () => {
       id: selectedCourseForVersionId,
       slug: '',
       title: 'Chưa có khóa học',
-      category: 'AI & Dữ liệu' as const,
+      category: 'Trí tuệ nhân tạo & AI' as const,
       shortDescription: '',
       descriptionMd: '',
       difficultyLevel: 3 as const,
@@ -1324,11 +1324,12 @@ export const AdminPortalView: React.FC = () => {
                       onChange={(e) => setCourseFormCategory(e.target.value as CourseCategory)}
                       className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm"
                     >
-                      <option value="AI & Dữ liệu">AI &amp; Dữ liệu</option>
-                      <option value="Kỹ thuật Phần mềm & Cloud">
-                        Kỹ thuật Phần mềm &amp; Cloud
+                      <option value="Trí tuệ nhân tạo & AI">Trí tuệ nhân tạo &amp; AI</option>
+                      <option value="Lập trình Backend & Hệ thống">
+                        Lập trình Backend &amp; Hệ thống
                       </option>
-                      <option value="Phân tích Dữ liệu">Phân tích Dữ liệu</option>
+                      <option value="Kỹ thuật Dữ liệu">Kỹ thuật Dữ liệu</option>
+                      <option value="Lập trình Nền tảng">Lập trình Nền tảng</option>
                     </select>
                   </div>
                 </div>

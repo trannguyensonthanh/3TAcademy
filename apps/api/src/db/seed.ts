@@ -1204,7 +1204,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
   ]);
 
   // =========================================================================
-  // 7. COHORTS (5 Cohorts across ONGOING, OPENING, DRAFT, COMPLETED)
+  // 7. COHORTS (6 Cohorts across ONGOING, OPENING, COMPLETED)
   // =========================================================================
   const [cohortAiK01, cohortAiK02, cohortSweK01, cohortDataK01, cohortPyK04] = await db
     .insert(cohorts)
@@ -1269,12 +1269,12 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         instructorId: instHaAcc!.id,
         code: 'DATA-PIPE-2026-K01',
         name: 'Đợt K01 — Kỹ sư Data Streaming & Lakehouse (Thứ 7 & Chủ Nhật)',
-        status: 'DRAFT',
+        status: 'OPENING',
         curriculumVersion: 'v1.2-2026',
         techStackNotes: 'Python 3.11 · Apache Spark 3.5 · Apache Kafka · dbt Core · PostgreSQL · Docker',
         tuitionVnd: 7200000,
         enrolledCount: 0,
-        enrollmentOpenAt: new Date('2026-05-20T00:00:00Z'),
+        enrollmentOpenAt: new Date('2026-04-15T00:00:00Z'),
         startDate: '2026-06-13',
         endDate: '2026-08-02',
         scheduleSlots: [
@@ -1295,6 +1295,24 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         enrollmentOpenAt: new Date('2025-12-01T00:00:00Z'),
         startDate: '2026-01-05',
         endDate: '2026-02-25',
+        scheduleSlots: [
+          { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
+          { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
+        ],
+      },
+      {
+        courseId: coursePython!.id,
+        instructorId: instHaAcc!.id,
+        code: 'PY-SQL-2026-K05',
+        name: 'Đợt K05 — Mùa Hè 2026 (Tối Thứ 2 & Thứ 5)',
+        status: 'OPENING',
+        curriculumVersion: 'v3.1-2026',
+        techStackNotes: 'Python 3.12 · AsyncIO · Pytest · PostgreSQL 16 · CTE & Window Functions',
+        tuitionVnd: 4200000,
+        enrolledCount: 0,
+        enrollmentOpenAt: new Date('2026-04-01T00:00:00Z'),
+        startDate: '2026-05-18',
+        endDate: '2026-07-02',
         scheduleSlots: [
           { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
           { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },

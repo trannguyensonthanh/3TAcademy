@@ -96,6 +96,21 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
       return;
     }
 
+    if (cohort.status === 'COMPLETED' || cohort.status === 'ARCHIVED') {
+      const message = 'Đợt học này đã kết thúc ghi danh. Vui lòng chọn đợt khai giảng đang mở.';
+      res.status(400).json({
+        success: false,
+        status: 400,
+        code: 'COHORT_CLOSED',
+        message,
+        error: {
+          code: 'COHORT_CLOSED',
+          message,
+        },
+      });
+      return;
+    }
+
     const [course] = await db
       .select()
       .from(courses)

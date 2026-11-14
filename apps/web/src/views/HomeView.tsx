@@ -255,15 +255,15 @@ export const HomeView: React.FC = () => {
         </div>
       </section>
 
-      {/* 3. CÁC ĐỢT KHAI GIẢNG ĐANG MỞ ĐĂNG KÝ */}
+      {/* 3. CÁC KHÓA HỌC & ĐỢT KHAI GIẢNG ĐANG MỞ ĐĂNG KÝ */}
       <section className="max-w-[1320px] mx-auto px-6 space-y-8">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="space-y-2">
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5]">
-              Các Đợt Học Đang Mở Đăng Ký
+              Các Khóa Học &amp; Đợt Khai Giảng Đang Mở
             </h2>
             <p className="text-sm text-[#475569] dark:text-[#94A3B8]">
-              Mỗi lớp đều giới hạn sĩ số vừa phải để giảng viên và trợ giảng theo sát hỗ trợ từng bạn trong suốt khóa học.
+              Mỗi khóa học đều có lịch khai giảng trực tiếp hàng tuần và giới hạn sĩ số vừa phải để giảng viên theo sát hỗ trợ từng bạn.
             </p>
           </div>
           <button
@@ -271,25 +271,37 @@ export const HomeView: React.FC = () => {
             onClick={() => navigate('/courses')}
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#059669] dark:text-[#34D399] hover:underline whitespace-nowrap cursor-pointer"
           >
-            <span>Xem toàn bộ các khóa học</span>
+            <span>Xem toàn bộ {courses.length} khóa học</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {cohorts.map((cohort) => {
-            const course = courses.find((c) => c.id === cohort.courseId);
-            if (!course) return null;
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {courses.map((course) => {
+            const embeddedCohorts = course.cohorts;
+            const courseCohorts =
+              embeddedCohorts && embeddedCohorts.length > 0
+                ? embeddedCohorts
+                : cohorts.filter((c) => c.courseId === course.id);
+            const activeCohorts = courseCohorts.filter(
+              (c) => c.status === 'OPENING' || c.status === 'ONGOING'
+            );
+            const cohort =
+              activeCohorts.find((c) => c.status === 'OPENING') ??
+              activeCohorts[0] ??
+              courseCohorts[0];
+            if (!cohort) return null;
 
             return (
               <article
-                key={cohort.id}
+                key={course.id}
                 className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-5 hover:border-[#10B981] transition-colors"
               >
                 <div className="space-y-3.5">
                   <div className="flex items-center justify-between gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
                     <span className="font-mono font-semibold text-[#059669] dark:text-[#34D399]">
                       {cohort.code}
+                      {activeCohorts.length > 1 ? ` (+${activeCohorts.length - 1} đợt khác)` : ''}
                     </span>
                     <span>
                       {course.category} · Trình độ {course.difficultyLevel}/5
@@ -305,7 +317,7 @@ export const HomeView: React.FC = () => {
                       }}
                       className="hover:text-[#059669] dark:hover:text-[#34D399] transition-colors"
                     >
-                      {cohort.name}
+                      {course.title}
                     </a>
                   </h3>
 
@@ -317,7 +329,7 @@ export const HomeView: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <Calendar className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
                       <span>
-                        Khai giảng:{' '}
+                        Đợt gần nhất ({cohort.name.split('—')[0]?.trim() || cohort.code}):{' '}
                         <strong className="font-mono text-[#0F172A] dark:text-[#ECFDF5]">
                           {cohort.startDate}
                         </strong>
@@ -332,32 +344,34 @@ export const HomeView: React.FC = () => {
                       <span className="tabular-nums">
                         Đã đăng ký:{' '}
                         <strong className="font-mono text-[#0F172A] dark:text-[#ECFDF5]">
-                          {cohort.enrolledCount} bạn học cùng lớp
+                          {cohort.enrolledCount} học viên
                         </strong>
                       </span>
                     </div>
                   </div>
 
-                  <div className="pt-2 space-y-2 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
-                    {cohort.staff.map((st) => (
-                      <div key={st.id} className="flex items-center gap-2.5">
-                        <AvatarWithFallback
-                          src={st.avatarUrl}
-                          name={st.fullName}
-                          className="w-7 h-7 rounded-full"
-                        />
-                        <div className="min-w-0 text-xs">
-                          <span className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-                            {st.fullName}
-                          </span>
-                          <span className="text-[#475569] dark:text-[#94A3B8]">
-                            {' '}
-                            · Giảng viên phụ trách chính
-                          </span>
+                  {cohort.staff && cohort.staff.length > 0 && (
+                    <div className="pt-2 space-y-2 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
+                      {cohort.staff.map((st) => (
+                        <div key={st.id} className="flex items-center gap-2.5">
+                          <AvatarWithFallback
+                            src={st.avatarUrl}
+                            name={st.fullName}
+                            className="w-7 h-7 rounded-full"
+                          />
+                          <div className="min-w-0 text-xs">
+                            <span className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+                              {st.fullName}
+                            </span>
+                            <span className="text-[#475569] dark:text-[#94A3B8]">
+                              {' '}
+                              · Giảng viên phụ trách chính
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3">

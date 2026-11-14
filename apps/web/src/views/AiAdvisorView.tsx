@@ -19,7 +19,7 @@ interface AdvisorChatTurn {
 const QUICK_PROMPTS = [
   'Mình biết Python cơ bản, muốn chuyển sang AI Engineer trong 4 tháng thì học đợt nào?',
   'Mình chỉ rảnh tối Thứ 4 & Chủ Nhật thì có đợt học Data hoặc AI nào không bị trùng lịch?',
-  'So sánh giúp mình đợt AI-ENG-2026-K01 và khóa Kỹ thuật Hệ thống Phân tán SWE-CLOUD-2026-K01?',
+  'So sánh giúp mình đợt AI-ENG-2026-K02 và khóa Kiến trúc Backend Chuyên sâu SWE-ARCH-2026-K01?',
 ];
 
 export const AiAdvisorView: React.FC = () => {
@@ -30,8 +30,11 @@ export const AiAdvisorView: React.FC = () => {
     {
       id: 'welcome-ai',
       sender: 'AI',
-      text: 'Chào bạn! Mình là Trợ lý tư vấn lộ trình học của 3T Academy. Bạn đang làm việc ở vị trí nào và mong muốn làm chủ nhóm kỹ năng thực tế nào (Kỹ sư AI ứng dụng, Lập trình Hệ thống Backend & Cloud hay Phân tích Dữ liệu)?',
-      recommendedCohortCodes: cohorts.slice(0, 2).map((c) => c.code),
+      text: 'Chào bạn! Mình là Trợ lý tư vấn lộ trình học của 3T Academy. Bạn đang làm việc ở vị trí nào và mong muốn làm chủ nhóm kỹ năng thực tế nào (Trí tuệ nhân tạo & AI, Lập trình Backend & Hệ thống, Kỹ thuật Dữ liệu hay Lập trình Nền tảng)?',
+      recommendedCohortCodes: cohorts
+        .filter((c) => c.status === 'OPENING' || c.status === 'ONGOING')
+        .slice(0, 2)
+        .map((c) => c.code),
       timestamp: 'Vừa xong',
     },
   ]);

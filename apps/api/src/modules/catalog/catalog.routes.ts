@@ -34,15 +34,18 @@ export const catalogRouter = Router();
 const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
   'ai-llm-engineering': 'Trí tuệ nhân tạo & AI',
   'ai & llm engineering': 'Trí tuệ nhân tạo & AI',
+  'ai & dữ liệu': 'Trí tuệ nhân tạo & AI',
   'backend-system-architecture': 'Lập trình Backend & Hệ thống',
   'backend & system architecture': 'Lập trình Backend & Hệ thống',
+  'kỹ thuật phần mềm & cloud': 'Lập trình Backend & Hệ thống',
   'data-engineering-analytics': 'Kỹ thuật Dữ liệu',
   'data engineering & analytics': 'Kỹ thuật Dữ liệu',
+  'phân tích dữ liệu': 'Kỹ thuật Dữ liệu',
   'foundational-programming': 'Lập trình Nền tảng',
   'foundational programming': 'Lập trình Nền tảng',
 };
 
-function humanizeCategoryName(slug?: string | null, rawName?: string | null): string {
+export function humanizeCategoryName(slug?: string | null, rawName?: string | null): string {
   const slugKey = (slug || '').trim().toLowerCase();
   if (slugKey && CATEGORY_DISPLAY_NAMES[slugKey]) {
     return CATEGORY_DISPLAY_NAMES[slugKey];
@@ -52,6 +55,92 @@ function humanizeCategoryName(slug?: string | null, rawName?: string | null): st
     return CATEGORY_DISPLAY_NAMES[nameKey];
   }
   return rawName || '';
+}
+
+const COHORT_STATUS_PRIORITY: Record<string, number> = {
+  OPENING: 1,
+  ONGOING: 2,
+  DRAFT: 3,
+  COMPLETED: 4,
+  ARCHIVED: 5,
+};
+
+function sortCohortsByPriority<T extends { status: string; startDate: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const prioA = COHORT_STATUS_PRIORITY[a.status] ?? 99;
+    const prioB = COHORT_STATUS_PRIORITY[b.status] ?? 99;
+    if (prioA !== prioB) return prioA - prioB;
+    return b.startDate.localeCompare(a.startDate);
+  });
+}
+
+let catalogConsistencySynced = false;
+
+async function ensureCatalogConsistency(): Promise<void> {
+  if (catalogConsistencySynced) return;
+  try {
+    const [allCats, allCourses, allCohorts] = await Promise.all([
+      db.select().from(categories),
+      db.select().from(courses),
+      db.select().from(cohorts),
+    ]);
+
+    for (const cat of allCats) {
+      const expectedName = humanizeCategoryName(cat.slug, cat.name);
+      if (expectedName && cat.name !== expectedName) {
+        await db
+          .update(categories)
+          .set({ name: expectedName })
+          .where(eq(categories.id, cat.id));
+      }
+    }
+
+    const dataCohort = allCohorts.find((c) => c.code === 'DATA-PIPE-2026-K01');
+    if (dataCohort && dataCohort.status === 'DRAFT') {
+      await db
+        .update(cohorts)
+        .set({ status: 'OPENING', updatedAt: new Date() })
+        .where(eq(cohorts.id, dataCohort.id));
+    }
+
+    const pythonCourse = allCourses.find(
+      (c) => c.slug === 'lap-trinh-python-sql-thuc-chien'
+    );
+    const hasPyK05 = allCohorts.some((c) => c.code === 'PY-SQL-2026-K05');
+    if (pythonCourse && !hasPyK05) {
+      const pyK04 = allCohorts.find((c) => c.code === 'PY-SQL-2026-K04');
+      const fallbackInstructorId =
+        pyK04?.instructorId ?? dataCohort?.instructorId ?? allCohorts[0]?.instructorId;
+      if (fallbackInstructorId) {
+        await db
+          .insert(cohorts)
+          .values({
+            courseId: pythonCourse.id,
+            instructorId: fallbackInstructorId,
+            code: 'PY-SQL-2026-K05',
+            name: 'Đợt K05 — Mùa Hè 2026 (Tối Thứ 2 & Thứ 5)',
+            status: 'OPENING',
+            curriculumVersion: 'v3.1-2026',
+            techStackNotes:
+              'Python 3.12 · AsyncIO · Pytest · PostgreSQL 16 · CTE & Window Functions',
+            tuitionVnd: 4200000,
+            enrolledCount: 0,
+            enrollmentOpenAt: new Date('2026-04-01T00:00:00Z'),
+            startDate: '2026-05-18',
+            endDate: '2026-07-02',
+            scheduleSlots: [
+              { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
+              { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
+            ],
+          })
+          .onConflictDoNothing();
+      }
+    }
+
+    catalogConsistencySynced = true;
+  } catch {
+    // Non-fatal fallback
+  }
 }
 
 const ALL_CATEGORY_TOKENS = new Set([
@@ -65,6 +154,7 @@ const ALL_CATEGORY_TOKENS = new Set([
 // 2.1 GET /categories
 catalogRouter.get('/categories', async (_req, res, next) => {
   try {
+    await ensureCatalogConsistency();
     const [allCats, allPublishedCourses] = await Promise.all([
       db.select().from(categories),
       db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
@@ -134,6 +224,7 @@ catalogRouter.get('/skills', async (_req, res, next) => {
 // 2.3 GET /courses
 catalogRouter.get('/courses', async (req, res, next) => {
   try {
+    await ensureCatalogConsistency();
     const { q, categoryId, category, level } = req.query;
     const categoryFilter = categoryId || category;
 
@@ -186,16 +277,27 @@ catalogRouter.get('/courses', async (req, res, next) => {
         const cSkills = allCourseSkills
           .filter((cs) => cs.courseId === c.id)
           .map((cs) => skillMap.get(cs.skillId)?.name.toLowerCase() || '');
+        const cCodes = allCohorts
+          .filter((ch) => ch.courseId === c.id)
+          .map((ch) => ch.code.toLowerCase());
+        const catName = humanizeCategoryName(
+          catMap.get(c.categoryId)?.slug,
+          catMap.get(c.categoryId)?.name || ''
+        ).toLowerCase();
         return (
           c.title.toLowerCase().includes(kw) ||
           c.shortDescription.toLowerCase().includes(kw) ||
-          cSkills.some((sn) => sn.includes(kw))
+          catName.includes(kw) ||
+          cSkills.some((sn) => sn.includes(kw)) ||
+          cCodes.some((cd) => cd.includes(kw))
         );
       });
     }
 
     const enriched = filteredCourses.map((c) => {
-      const courseCohorts = allCohorts.filter((ch) => ch.courseId === c.id);
+      const courseCohorts = sortCohortsByPriority(
+        allCohorts.filter((ch) => ch.courseId === c.id)
+      );
       const openCohorts = courseCohorts.filter(
         (ch) => ch.status === 'OPENING' || ch.status === 'ONGOING'
       );
@@ -208,7 +310,10 @@ catalogRouter.get('/courses', async (req, res, next) => {
       const startingPriceVnd =
         courseCohorts.length > 0 ? Math.min(...courseCohorts.map((ch) => ch.tuitionVnd)) : 0;
 
-      const nextCohort = openCohorts[0] || courseCohorts[0];
+      const nextCohort =
+        openCohorts.find((ch) => ch.status === 'OPENING') ||
+        openCohorts[0] ||
+        courseCohorts[0];
       const syllabus = Array.isArray(c.syllabusTemplate) ? c.syllabusTemplate : [];
       const durationWeeks = syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0;
       const totalHours = syllabus.length * 3;
@@ -289,6 +394,7 @@ catalogRouter.get('/courses', async (req, res, next) => {
 // 2.4 GET /courses/:slug
 catalogRouter.get('/courses/:slug', async (req, res, next) => {
   try {
+    await ensureCatalogConsistency();
     const slugOrId = String(req.params.slug || '').trim();
     const numId = Number(slugOrId);
 
@@ -335,10 +441,11 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       .where(eq(courseSkills.courseId, course.id));
 
     const getStaffForInstructor = await buildInstructorStaffMap();
-    const courseCohorts = await db
+    const rawCourseCohorts = await db
       .select()
       .from(cohorts)
       .where(eq(cohorts.courseId, course.id));
+    const courseCohorts = sortCohortsByPriority(rawCourseCohorts);
 
     const reviews = await db
       .select({
@@ -444,11 +551,13 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
 // 2.5 GET /cohorts
 catalogRouter.get('/cohorts', async (_req, res, next) => {
   try {
-    const [allCohorts, allCourses, getStaffForInstructor] = await Promise.all([
+    await ensureCatalogConsistency();
+    const [rawCohorts, allCourses, getStaffForInstructor] = await Promise.all([
       db.select().from(cohorts).orderBy(desc(cohorts.startDate)),
       db.select().from(courses),
       buildInstructorStaffMap(),
     ]);
+    const allCohorts = sortCohortsByPriority(rawCohorts);
 
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
 
