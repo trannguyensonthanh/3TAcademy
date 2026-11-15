@@ -55,11 +55,13 @@ const FALLBACK_MP4_STREAMS = [
 
 function normalizeInitialSource(rawSrc: string): string {
   const trimmed = (rawSrc || '').trim();
+  if (!trimmed) {
+    return '';
+  }
   if (
-    !trimmed ||
     trimmed.includes('media.yourdomain.com') ||
     trimmed.includes('cdn.3t.edu.vn') ||
-    /recordings\/(ai|fs|de|do|sec|cloud|data|ml)-/i.test(trimmed)
+    /recordings\/(ai|fs|de|do|sec|cloud|data|ml|swe)-/i.test(trimmed)
   ) {
     return FALLBACK_MP4_STREAMS[0]!;
   }
@@ -72,6 +74,8 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
   posterUrl,
   initialPositionSec = 0,
   watermarkText,
+  emptyTitle,
+  emptyDescription,
   chapters = [],
   activeSubtitle,
   seekRequest,
@@ -88,7 +92,7 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
 
   const [activeSrc, setActiveSrc] = useState<string>(() => normalizeInitialSource(src));
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [isBuffering, setIsBuffering] = useState<boolean>(true);
+  const [isBuffering, setIsBuffering] = useState<boolean>(Boolean(normalizeInitialSource(src)));
   const [currentSec, setCurrentSec] = useState<number>(initialPositionSec);
   const [durationSec, setDurationSec] = useState<number>(30);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
@@ -101,8 +105,9 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
     hasRestoredPositionRef.current = false;
     fallbackIndexRef.current = 0;
     setMediaError(null);
-    setIsBuffering(true);
-    setActiveSrc(normalizeInitialSource(src));
+    const nextSrc = normalizeInitialSource(src);
+    setIsBuffering(Boolean(nextSrc));
+    setActiveSrc(nextSrc);
   }, [src]);
 
   // Attach hls.js for .m3u8 streams or native progressive MP4/WebM streaming
@@ -338,6 +343,25 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
 
   const progressPct =
     durationSec > 0 ? Math.min(100, Math.round((currentSec / durationSec) * 100)) : 0;
+
+  if (!activeSrc) {
+    return (
+      <div className="rounded-2xl overflow-hidden bg-[#0F172A] border border-[#1E293B] shadow-md text-white select-none">
+        <div className="aspect-video bg-[#090F0C] flex flex-col items-center justify-center p-8 text-center space-y-3">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-300">
+            Chưa có video bài giảng
+          </div>
+          <h3 className="text-base sm:text-lg font-bold text-white max-w-lg">
+            {emptyTitle || title || 'Buổi học chưa có bản ghi video'}
+          </h3>
+          <p className="text-xs sm:text-sm text-slate-400 max-w-md leading-relaxed">
+            {emptyDescription ||
+              'Video bài giảng sẽ được cập nhật tự động ngay sau khi buổi học trực tuyến kết thúc.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

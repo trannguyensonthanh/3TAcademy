@@ -73,7 +73,10 @@ export const StudentDashboardView: React.FC = () => {
   const [expandedCertCode, setExpandedCertCode] = useState<string | null>(null);
 
   const fallbackLive = sessions.find((s) => s.status === 'LIVE') ?? null;
-  const fallbackResume = sessions.find((s) => !s.isCompleted) ?? sessions[0];
+  const fallbackResume =
+    sessions.find((s) => s.status === 'REPLAY_READY' && !s.isCompleted) ??
+    sessions.find((s) => s.status === 'REPLAY_READY') ??
+    null;
   const authQueryKey = `${role}:${currentUser?.id || ''}`;
 
   const { data: dashboardSummary } = useAsyncQuery(
@@ -179,9 +182,14 @@ export const StudentDashboardView: React.FC = () => {
         ? dashboardSummary.liveSession
         : null
       : fallbackLive;
-  const resumeSession = dashboardSummary.resumeSession ?? fallbackResume;
+  const rawResume =
+    dashboardSummary.resumeSession !== undefined
+      ? dashboardSummary.resumeSession
+      : fallbackResume;
+  const resumeSession =
+    rawResume && rawResume.status === 'REPLAY_READY' ? rawResume : null;
   const effectiveUpcomingTasks =
-    dashboardSummary.upcomingTasks && dashboardSummary.upcomingTasks.length > 0
+    dashboardSummary.upcomingTasks !== undefined
       ? dashboardSummary.upcomingTasks
       : upcomingTasks;
   const effectiveEnrolledIds = Array.isArray(enrollmentsData?.enrolledCohortIds)
@@ -203,6 +211,10 @@ export const StudentDashboardView: React.FC = () => {
     return Array.from(byId.values());
   })();
   const primaryCohort = myEnrolledCohorts[0];
+  const resumeCohort =
+    (resumeSession
+      ? myEnrolledCohorts.find((c) => String(c.id) === String(resumeSession.cohortId))
+      : undefined) || primaryCohort;
   const liveCohort =
     (liveSession
       ? myEnrolledCohorts.find((c) => String(c.id) === String(liveSession.cohortId))
@@ -393,8 +405,10 @@ export const StudentDashboardView: React.FC = () => {
                       : `Chào ${studentShortName}, chào mừng bạn đến với Góc Học Tập 3T Academy!`}
                   </h1>
                   <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
-                    {myEnrolledCohorts.length > 0
+                    {myEnrolledCohorts.length > 0 && resumeSession
                       ? 'Bạn chỉ cần làm xong bài tập ngắn (10 câu) bên dưới là hoàn thành buổi học hôm nay rồi nhé.'
+                      : myEnrolledCohorts.length > 0 && primaryCohort
+                      ? `Bạn đã ghi danh đợt học ${primaryCohort.code}. Hãy xem lộ trình các buổi học và tài liệu chuẩn bị trước giờ mở lớp nhé.`
                       : 'Bạn hiện chưa ghi danh vào đợt khai giảng nào. Hãy khám phá danh mục khóa học hoặc nhờ Cố vấn AI gợi ý lộ trình phù hợp nhất.'}
                   </p>
                 </div>
@@ -520,7 +534,7 @@ export const StudentDashboardView: React.FC = () => {
               )}
 
               {/* BLOCK 2: CONTINUE LEARNING & 7-DAY STREAK */}
-              {resumeSession && primaryCohort && (
+              {resumeSession && resumeCohort && (
                 <section
                   aria-label="Tiếp tục bài học gần nhất và chuỗi ngày học tập"
                   className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch"
@@ -529,7 +543,7 @@ export const StudentDashboardView: React.FC = () => {
                     <div className="space-y-2.5">
                       <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
                         <span className="font-semibold text-[#059669] dark:text-[#34D399]">
-                          HỌC TIẾP BÀI GẦN NHẤT · {primaryCohort.name.toUpperCase()}
+                          HỌC TIẾP BÀI GẦN NHẤT · {resumeCohort.name.toUpperCase()}
                         </span>
                         <span className="font-mono font-semibold">
                           Đã xem tới phút {formatTimestamp(resumeSession.lastPositionSec)} /{' '}
@@ -538,8 +552,11 @@ export const StudentDashboardView: React.FC = () => {
                       </div>
 
                       <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Buổi {resumeSession.sessionOrder}: {resumeSession.title} — Đã xem tới phút{' '}
-                        {formatTimestamp(resumeSession.lastPositionSec)}
+                        Buổi {resumeSession.sessionOrder}:{' '}
+                        {(resumeSession.title || '')
+                          .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
+                          .trim() || resumeSession.title}{' '}
+                        — Đã xem tới phút {formatTimestamp(resumeSession.lastPositionSec)}
                       </h2>
 
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
@@ -585,7 +602,7 @@ export const StudentDashboardView: React.FC = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
+                            onClick={() => navigate(`/app/cohorts/${resumeCohort.id}`)}
                             className="px-3.5 py-2 rounded-lg border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
                           >
                             Xem lộ trình lớp học
@@ -623,6 +640,32 @@ export const StudentDashboardView: React.FC = () => {
                       ))}
                     </div>
                   </div>
+                </section>
+              )}
+
+              {!resumeSession && primaryCohort && (
+                <section
+                  aria-label="Thông tin đợt học sắp khai giảng"
+                  className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
+                      ĐỢT HỌC ĐÃ GHI DANH · {primaryCohort.code}
+                    </div>
+                    <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      {primaryCohort.name} — Khai giảng dự kiến: {primaryCohort.startDate}
+                    </h2>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                      Các buổi học của đợt này chưa tới giờ mở lớp. Video bài giảng và bài tập 10 câu sẽ được mở tự động sau từng buổi học.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
+                    className="px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+                  >
+                    Xem lộ trình lớp học →
+                  </button>
                 </section>
               )}
 

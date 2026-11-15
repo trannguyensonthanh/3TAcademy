@@ -12,7 +12,7 @@ import { QuizEvaluationOutput } from '../utils/academyLogic';
 
 export interface StudentDashboardSummaryResponse {
   liveSession: ClassSession | null;
-  resumeSession: ClassSession;
+  resumeSession: ClassSession | null;
   upcomingTasks: UpcomingTaskItem[];
   streakDays: number;
   attemptTrend?: {

@@ -406,6 +406,52 @@ export const SessionVideoRoomView: React.FC<{
     );
   }
 
+  const cleanSessionTitle = (session.title || '')
+    .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
+    .trim() || session.title;
+
+  if (session.status === 'SCHEDULED' && !videoUrl) {
+    const formattedStart = (() => {
+      if (!session.scheduledStart) return 'Theo lịch khai giảng của đợt học';
+      const d = new Date(session.scheduledStart);
+      if (Number.isNaN(d.getTime())) return session.scheduledStart;
+      return d.toLocaleString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
+    })();
+
+    return (
+      <div className="min-h-screen bg-[#F7FBF9] dark:bg-[#090F0C] text-[#0F172A] dark:text-[#ECFDF5] py-16 px-6">
+        <div className="max-w-xl mx-auto rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-8 text-center space-y-5 shadow-xs">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8] text-xs font-semibold">
+            Buổi {session.sessionOrder.toString().padStart(2, '0')} · Chưa tới giờ mở lớp
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+            Buổi {session.sessionOrder}: {cleanSessionTitle}
+          </h1>
+          <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+            Buổi học này dự kiến diễn ra vào lúc <strong>{formattedStart}</strong>. Video bài giảng và bài kiểm tra 10 câu cuối buổi sẽ được mở ngay sau khi buổi học kết thúc.
+          </p>
+          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => navigate(`/app/cohorts/${cohort.id}`)}
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Quay lại Lộ trình lớp {cohort.code}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F7FBF9] dark:bg-[#090F0C] text-[#0F172A] dark:text-[#ECFDF5] pb-24">
       {/* Slim Top Navigation Bar */}
@@ -420,7 +466,7 @@ export const SessionVideoRoomView: React.FC<{
             <span>Quay lại Lộ trình lớp {cohort.code}</span>
           </button>
           <div className="truncate text-xs sm:text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-            Buổi {session.sessionOrder.toString().padStart(2, '0')}: {session.title}
+            Buổi {session.sessionOrder.toString().padStart(2, '0')}: {cleanSessionTitle}
           </div>
         </div>
 

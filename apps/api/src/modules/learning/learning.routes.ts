@@ -194,11 +194,13 @@ function mapClassSessionDto(
       ? 'PENDING'
       : 'NOT_STARTED';
 
+  const cleanTitle = (s.title || '').replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '').trim() || s.title;
+
   return {
     id: String(s.id),
     cohortId: String(s.cohortId),
     sessionOrder: s.sessionOrder,
-    title: s.title,
+    title: cleanTitle,
     descriptionMd: s.descriptionMd || '',
     activityTags: (s.activityTags || ['THEORY', 'LIVE_CODING']) as Array<
       'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
@@ -371,13 +373,26 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
     const liveSession =
       mappedSessions.find((s) => s.status === 'LIVE') || null;
 
+    const replayReadySessions = mappedSessions.filter((s) => s.status === 'REPLAY_READY');
     const resumeSession =
-      mappedSessions.find((s) => !s.isCompleted && s.lastPositionSec > 0) ||
-      mappedSessions.find((s) => !s.isCompleted) ||
-      mappedSessions[0] ||
+      replayReadySessions.find((s) => !s.isCompleted && s.lastPositionSec > 0) ||
+      replayReadySessions.find((s) => !s.isCompleted) ||
+      replayReadySessions[0] ||
       null;
 
-    const upcomingTasks = allAss.map((a) => {
+    const sessionStatusById = new Map(
+      mappedSessions.map((s) => [String(s.id), s.status])
+    );
+    const activeAssessments = allAss.filter((a) => {
+      if (a.sessionId) {
+        return sessionStatusById.get(String(a.sessionId)) === 'REPLAY_READY';
+      }
+      return mappedSessions.some(
+        (s) => String(s.cohortId) === String(a.cohortId) && s.status === 'REPLAY_READY'
+      );
+    });
+
+    const upcomingTasks = activeAssessments.map((a) => {
       const cohort = cohortMap.get(a.cohortId);
       const bestAttempt = myAttempts.find((att) => att.assessmentId === a.id);
       const scoreNum = bestAttempt?.scorePct ? Math.round(Number(bestAttempt.scorePct)) : null;
@@ -385,7 +400,7 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
 
       return {
         id: String(a.id),
-        sessionId: a.sessionId ? String(a.sessionId) : String(mappedSessions[0]?.id || ''),
+        sessionId: a.sessionId ? String(a.sessionId) : String(replayReadySessions[0]?.id || mappedSessions[0]?.id || ''),
         cohortId: String(a.cohortId),
         cohortCode: cohort?.code || '',
         title: a.title,
@@ -658,7 +673,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
 
     const [
       [course],
-      sessions,
+      initialSessions,
       cohortAssessments,
       getStaffForInstructor,
       allCats,
@@ -688,6 +703,67 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
         .where(eq(assessmentAttempts.accountId, studentAccountId))
         .orderBy(desc(assessmentAttempts.submittedAt)),
     ]);
+
+    let sessions = initialSessions;
+    if (sessions.length === 0 && course && Array.isArray(course.syllabusTemplate) && course.syllabusTemplate.length > 0) {
+      const rawSlots = Array.isArray(cohort.scheduleSlots) && cohort.scheduleSlots.length > 0
+        ? cohort.scheduleSlots
+        : [{ dayOfWeek: 2, startTime: '19:30', endTime: '21:30' }, { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' }];
+      const baseStart = cohort.startDate ? new Date(`${cohort.startDate}T00:00:00Z`) : new Date('2026-05-11T00:00:00Z');
+      const cursor = new Date(Number.isNaN(baseStart.getTime()) ? Date.now() : baseStart.getTime());
+
+      const toInsert = (course.syllabusTemplate as Array<{
+        sessionOrder?: number;
+        order?: number;
+        title?: string;
+        summary?: string;
+        description?: string;
+        activityTags?: string[];
+        durationMinutes?: number;
+      }>).map((item, idx) => {
+        const order = item.sessionOrder ?? item.order ?? idx + 1;
+        let matchedSlot = rawSlots[idx % rawSlots.length]!;
+        for (let step = 0; step < 14; step++) {
+          const day = cursor.getUTCDay();
+          const slot = rawSlots.find((sl) => Number(sl.dayOfWeek) === day);
+          if (slot) {
+            matchedSlot = slot;
+            break;
+          }
+          cursor.setUTCDate(cursor.getUTCDate() + 1);
+        }
+        const [sh = 19, sm = 30] = (matchedSlot.startTime || '19:30').split(':').map(Number);
+        const [eh = 21, em = 30] = (matchedSlot.endTime || '21:30').split(':').map(Number);
+        const startUtc = new Date(cursor.getTime());
+        startUtc.setUTCHours(Math.max(0, sh - 7), sm || 0, 0, 0);
+        const endUtc = new Date(cursor.getTime());
+        endUtc.setUTCHours(Math.max(0, eh - 7), em || 0, 0, 0);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+
+        const cleanItemTitle = (item.title || `Buổi ${order}`)
+          .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
+          .trim();
+
+        return {
+          cohortId: cohort.id,
+          instructorId: cohort.instructorId,
+          sessionOrder: order,
+          title: cleanItemTitle,
+          descriptionMd: item.summary || item.description || '',
+          activityTags: Array.isArray(item.activityTags) ? item.activityTags : ['THEORY', 'LIVE_CODING'],
+          scheduledStart: startUtc,
+          scheduledEnd: endUtc,
+          status: 'SCHEDULED' as const,
+          livekitRoomName: `room-${cohort.code.toLowerCase()}-s0${order}`,
+          videoProvider: 'R2_HLS_AES128' as const,
+          videoR2Key: null,
+          durationSeconds: (item.durationMinutes || 90) * 60,
+          aiSummaryMd: item.summary || item.description || `Tài liệu chuẩn bị cho Buổi ${order}.`,
+        };
+      });
+
+      sessions = await db.insert(classSessions).values(toInsert).returning();
+    }
 
     const sessionIds = sessions.map((s) => s.id);
     const [attachments, allAssessmentItems, allChunks] = await Promise.all([
@@ -1101,10 +1177,10 @@ learningRouter.get(
         }));
       }
 
-      const videoSource = resolvePlayableVideoSource(
-        session.videoR2Key,
-        session.sessionOrder
-      );
+      const videoSource =
+        session.status === 'SCHEDULED'
+          ? { videoUrl: '', playbackType: 'NONE' as const, storageKey: '' }
+          : resolvePlayableVideoSource(session.videoR2Key, session.sessionOrder);
 
       res.json({
         session: mapClassSessionDto(session, {

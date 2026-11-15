@@ -400,6 +400,62 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                 Math.round((sess.lastPositionSec / sess.durationSeconds) * 100)
               );
 
+              const cleanSessTitle = (sess.title || '')
+                .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
+                .trim() || sess.title;
+
+              const formatDateTimeShort = (iso: string) => {
+                if (!iso) return '';
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return iso;
+                const timePart = d.toLocaleTimeString('vi-VN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                  timeZone: 'Asia/Ho_Chi_Minh',
+                });
+                const datePart = d.toLocaleDateString('vi-VN', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric',
+                  timeZone: 'Asia/Ho_Chi_Minh',
+                });
+                return `${timePart}, ${datePart}`;
+              };
+
+              const formatTimeRange = (startIso: string, endIso: string) => {
+                const sd = new Date(startIso);
+                const ed = new Date(endIso);
+                if (Number.isNaN(sd.getTime())) {
+                  return endIso ? `${startIso} – ${endIso}` : startIso;
+                }
+                const startTime = sd.toLocaleTimeString('vi-VN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                  timeZone: 'Asia/Ho_Chi_Minh',
+                });
+                const dateStr = sd.toLocaleDateString('vi-VN', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric',
+                  timeZone: 'Asia/Ho_Chi_Minh',
+                });
+                if (Number.isNaN(ed.getTime())) {
+                  return `${startTime} · ${dateStr}`;
+                }
+                const endTime = ed.toLocaleTimeString('vi-VN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                  timeZone: 'Asia/Ho_Chi_Minh',
+                });
+                return `${startTime} – ${endTime} · ${dateStr}`;
+              };
+
+              const startLabel = formatDateTimeShort(sess.scheduledStart);
+              const rangeLabel = formatTimeRange(sess.scheduledStart, sess.scheduledEnd);
+
               return (
                 <article
                   key={sess.id}
@@ -435,7 +491,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                         {sess.status === 'SCHEDULED' && (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8] font-medium">
                             <Lock className="w-3.5 h-3.5" />
-                            <span>Chưa tới giờ mở lớp ({sess.scheduledStart})</span>
+                            <span>Chưa tới giờ mở lớp ({startLabel})</span>
                           </span>
                         )}
 
@@ -453,7 +509,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                       </div>
 
                       <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        {sess.title}
+                        {cleanSessTitle}
                       </h2>
 
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
@@ -466,9 +522,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                       <div className="flex flex-wrap items-center gap-4 text-[11px] text-[#475569] dark:text-[#94A3B8] pt-1">
                         <span className="inline-flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5 text-[#10B981]" />
-                          <span>
-                            {sess.scheduledStart} – {sess.scheduledEnd}
-                          </span>
+                          <span>{rangeLabel}</span>
                         </span>
                         <span>·</span>
                         <span>Giảng viên: {sess.hostInstructorName}</span>
@@ -528,7 +582,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
 
                       {sess.status === 'SCHEDULED' && (
                         <span className="px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold text-[#475569] dark:text-[#94A3B8]">
-                          Mở phòng lúc {sess.scheduledStart}
+                          Mở phòng lúc {startLabel}
                         </span>
                       )}
                     </div>
