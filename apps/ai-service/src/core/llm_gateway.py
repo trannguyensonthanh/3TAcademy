@@ -13,7 +13,10 @@ vllm_cooldown_until: float = 0.0
 def get_gemini_client() -> genai.Client | None:
     global gemini_client
     if gemini_client is None and settings.GEMINI_API_KEY:
-        gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        gemini_client = genai.Client(
+            api_key=settings.GEMINI_API_KEY,
+            http_options={"headers": {"User-Agent": "aistudio-build"}},
+        )
     return gemini_client
 
 
@@ -37,7 +40,7 @@ class LLMGateway:
         if gemini:
             try:
                 response = gemini.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-4-hydrogen",
                     contents=prompt,
                     config={"system_instruction": system_instruction} if system_instruction else None,
                 )

@@ -5,6 +5,7 @@ from .core.config import settings
 from .core.logging import setup_logging, logger
 from .core.security import verify_internal_api_key
 from .api.routes.grading_ai import grading_router
+from .api.routes.rag_chat import rag_chat_router
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ app.add_middleware(
 )
 
 app.include_router(grading_router)
+app.include_router(rag_chat_router)
 
 
 @app.get("/health/live")

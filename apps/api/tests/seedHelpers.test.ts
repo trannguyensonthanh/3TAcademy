@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAttemptDraftAndAnswerBuilders,
   buildSessionQuizItems,
+  computeSemanticEmbedding1024,
   findSeedConsistencyViolations,
   makeDeterministicVector,
   type SeedAuditInput,
 } from '../src/db/seedHelpers.js';
+import {
+  classifyAdvisorIntent,
+  classifyCourseTutorIntent,
+  cosineSimilarity1024,
+} from '../src/integrations/ragAi.service.js';
 
 function createValidAuditFixture(): SeedAuditInput {
   const s1Start = new Date('2026-03-03T12:30:00Z'); // Tuesday (day 2)
@@ -322,7 +328,7 @@ describe('seedHelpers', () => {
     expect(violations.some((v) => v.includes('interviewCredits=2'))).toBe(true);
   });
 
-  it('executes full seed.ts dataset in-memory with zero cross-table consistency violations', async () => {
+  it('executes full seed.ts minimal dataset in-memory with zero cross-table consistency violations', async () => {
     process.env.NODE_ENV = 'test';
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://test:test@localhost:5432/test';
     process.env.INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || 'test-internal-api-key-123456';
@@ -363,37 +369,71 @@ describe('seedHelpers', () => {
     await expect(runSeed(mockDb as never)).resolves.toBeUndefined();
 
     const accountsRows = store.get(schema.accounts) ?? [];
+    expect(accountsRows).toHaveLength(5);
     const anAcc = accountsRows.find((a) => a.email === 'an.student@3t.edu.vn');
     expect(anAcc).toBeDefined();
 
-    const enrollmentsRows = store.get(schema.enrollments) ?? [];
+    const coursesRows = store.get(schema.courses) ?? [];
+    expect(coursesRows).toHaveLength(4);
+
     const cohortsRows = store.get(schema.cohorts) ?? [];
-    const aiK01 = cohortsRows.find((c) => c.code === 'AI-ENG-2026-K01');
-    const sweK01 = cohortsRows.find((c) => c.code === 'SWE-ARCH-2026-K01');
-    expect(aiK01).toBeDefined();
-    expect(sweK01).toBeDefined();
+    expect(cohortsRows).toHaveLength(4);
+    expect(cohortsRows.every((c) => c.tuitionVnd === 10000 && c.enrolledCount === 0)).toBe(true);
 
-    const anAiEnrollment = enrollmentsRows.find(
-      (e) => e.accountId === anAcc!.id && e.cohortId === aiK01!.id
-    );
-    expect(anAiEnrollment?.status).toBe('COMPLETED');
-    expect(anAiEnrollment?.finalExamPassed).toBe(true);
+    const enrollmentsRows = store.get(schema.enrollments) ?? [];
+    expect(enrollmentsRows).toHaveLength(0);
 
-    const anSweEnrollment = enrollmentsRows.find(
-      (e) => e.accountId === anAcc!.id && e.cohortId === sweK01!.id
-    );
-    expect(anSweEnrollment?.status).toBe('ACTIVE');
-
-    const skillStatesRows = store.get(schema.studentSkillStates) ?? [];
-    const skillsRows = store.get(schema.skills) ?? [];
-    const langGraphSkill = skillsRows.find((s) => s.code === 'LANGGRAPH_AGENT');
-    expect(langGraphSkill).toBeDefined();
-    const anHasLangGraph = skillStatesRows.some(
-      (st) => st.accountId === anAcc!.id && st.skillId === langGraphSkill!.id
-    );
-    expect(anHasLangGraph).toBe(true);
+    const certificatesRows = store.get(schema.certificates) ?? [];
+    expect(certificatesRows).toHaveLength(0);
 
     const sessionsRows = store.get(schema.classSessions) ?? [];
     expect(sessionsRows).toHaveLength(24);
+
+    const chunksRows = store.get(schema.knowledgeChunks) ?? [];
+    expect(chunksRows.length).toBeGreaterThanOrEqual(15);
+    expect(
+      chunksRows.every(
+        (ch) => Array.isArray(ch.embedding) && (ch.embedding as number[]).length === 1024
+      )
+    ).toBe(true);
+  });
+
+  it('enforces RAG Career Advisor and Course Tutor guardrails and semantic vector similarity', () => {
+    // 1. Semantic 1024-dim embedding similarity
+    const ragVec = computeSemanticEmbedding1024('Kiến trúc Hybrid RAG với pgvector HNSW và RRF');
+    const ragQueryVec = computeSemanticEmbedding1024('Hỏi về Hybrid RAG và pgvector HNSW');
+    const unrelatedVec = computeSemanticEmbedding1024('Công thức nấu món phở bò truyền thống');
+    expect(cosineSimilarity1024(ragVec, ragQueryVec)).toBeGreaterThan(
+      cosineSimilarity1024(ragVec, unrelatedVec)
+    );
+
+    // 2. Advisor guardrails: blocks out-of-system & blocks deep lecture knowledge
+    expect(classifyAdvisorIntent('Tư vấn giúp mình về kế toán thuế và thương mại điện tử Shopee')).toBe(
+      'OUT_OF_SYSTEM'
+    );
+    expect(classifyAdvisorIntent('Giải thích chi tiết công thức RRF và viết code mẫu HNSW')).toBe(
+      'PAID_LECTURE_DEEP_DIVE'
+    );
+    expect(
+      classifyAdvisorIntent('Mình mới học Python cơ bản thì nên chọn lộ trình nào ở 3T Academy?')
+    ).toBe('VALID_ADVISOR_QUERY');
+
+    // 3. Course Tutor guardrails: isolates each course's topics from other courses & unrelated topics
+    const aiCourseSlug = 'ky-su-ai-thuc-chien-rag-agents-llmops';
+    expect(classifyCourseTutorIntent('Giải thích về RAG và pgvector', aiCourseSlug)).toEqual({
+      type: 'IN_COURSE_SCOPE',
+    });
+    expect(classifyCourseTutorIntent('Hỏi về kế toán doanh nghiệp', aiCourseSlug)).toEqual({
+      type: 'OUT_OF_DOMAIN',
+    });
+    expect(
+      classifyCourseTutorIntent(
+        'Cách dùng Apache Spark và Kafka trong kiến trúc Lakehouse Iceberg?',
+        aiCourseSlug
+      )
+    ).toEqual({
+      type: 'OTHER_COURSE_TOPIC',
+      otherCourseTitle: 'Kỹ thuật Dữ liệu: Streaming Pipeline & Lakehouse',
+    });
   });
 });

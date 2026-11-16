@@ -71,6 +71,69 @@ export function makeDeterministicVector(seedNum: number, dims: number): number[]
   return vec.map((v) => Number((v / norm).toFixed(6)));
 }
 
+/**
+ * Computes a deterministic 1024-dimensional L2-normalized semantic feature-hashing vector
+ * from Vietnamese/English text so pgvector Cosine Similarity (`1 - (embedding <=> query_vec)`)
+ * accurately ranks relevant knowledge chunks.
+ */
+export function computeSemanticEmbedding1024(text: string, dims = 1024): number[] {
+  const vec = new Float64Array(dims);
+  const cleaned = (text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_+-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) {
+    return makeDeterministicVector(1, dims);
+  }
+
+  const tokens = cleaned.split(' ').filter((t) => t.length >= 2);
+  const features: Array<{ token: string; weight: number }> = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tk = tokens[i]!;
+    features.push({ token: `u:${tk}`, weight: 1.5 });
+    if (i + 1 < tokens.length) {
+      features.push({ token: `b:${tk}_${tokens[i + 1]!}`, weight: 2.0 });
+    }
+    if (tk.length >= 4) {
+      for (let j = 0; j <= tk.length - 4; j++) {
+        features.push({ token: `c:${tk.slice(j, j + 4)}`, weight: 0.6 });
+      }
+    }
+  }
+
+  for (const { token, weight } of features) {
+    let h1 = 2166136261;
+    let h2 = 16777619;
+    for (let i = 0; i < token.length; i++) {
+      const code = token.charCodeAt(i);
+      h1 ^= code;
+      h1 = Math.imul(h1, 16777619);
+      h2 ^= code;
+      h2 = Math.imul(h2, 1099511627);
+    }
+    const idx1 = Math.abs(h1) % dims;
+    const idx2 = Math.abs(h2) % dims;
+    const sign1 = (h1 & 1) === 0 ? 1 : -1;
+    const sign2 = (h2 & 1) === 0 ? 1 : -1;
+    vec[idx1] = (vec[idx1] ?? 0) + sign1 * weight;
+    vec[idx2] = (vec[idx2] ?? 0) + sign2 * (weight * 0.5);
+  }
+
+  let normSq = 0;
+  for (let i = 0; i < dims; i++) {
+    normSq += vec[i]! * vec[i]!;
+  }
+  if (normSq === 0) {
+    return makeDeterministicVector(1, dims);
+  }
+  const norm = Math.sqrt(normSq);
+  return Array.from(vec, (v) => Number((v / norm).toFixed(6)));
+}
+
+
 function formatMmSs(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const mm = String(Math.floor(s / 60)).padStart(2, '0');

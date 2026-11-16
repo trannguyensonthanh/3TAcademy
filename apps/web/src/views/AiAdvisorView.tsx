@@ -17,9 +17,9 @@ interface AdvisorChatTurn {
 }
 
 const QUICK_PROMPTS = [
-  'Mình biết Python cơ bản, muốn chuyển sang AI Engineer trong 4 tháng thì học đợt nào?',
-  'Mình chỉ rảnh tối Thứ 4 & Chủ Nhật thì có đợt học Data hoặc AI nào không bị trùng lịch?',
-  'So sánh giúp mình đợt AI-ENG-2026-K02 và khóa Kiến trúc Backend Chuyên sâu SWE-ARCH-2026-K01?',
+  'Mình mới bắt đầu học lập trình thì nên chọn lộ trình nào tại 3T Academy?',
+  'Mình biết Python cơ bản, muốn chuyển sang làm AI Engineer thì nên đăng ký lớp nào?',
+  'So sánh giúp mình khóa Kỹ sư AI Thực chiến (AI-ENG-2026-K01) và Kiến trúc Backend Chuyên sâu (SWE-ARCH-2026-K01)?',
 ];
 
 export const AiAdvisorView: React.FC = () => {

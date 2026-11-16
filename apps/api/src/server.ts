@@ -1,44 +1,37 @@
-import { eq } from 'drizzle-orm';
 import { app } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { db, pool } from './db/index.js';
-import { cohorts, classSessions, courses } from './db/schema/index.js';
+import { cohorts, courses, certificates, knowledgeChunks } from './db/schema/index.js';
 import { runSeed } from './db/seed.js';
 import { redis } from './config/redis.js';
 import { getConfiguredSepayWebhookUrls } from './modules/order/order.routes.js';
 
 async function ensureFreshDatabaseSeed() {
   try {
-    const [allCourses, sweCohorts] = await Promise.all([
+    const [allCourses, allCohorts, allCerts, allChunks] = await Promise.all([
       db.select({ id: courses.id }).from(courses),
-      db.select().from(cohorts).where(eq(cohorts.code, 'SWE-ARCH-2026-K01')).limit(1),
+      db.select().from(cohorts),
+      db.select({ id: certificates.id }).from(certificates),
+      db.select().from(knowledgeChunks),
     ]);
 
-    const sweCohort = sweCohorts[0];
-    let needsReseed = allCourses.length < 4 || !sweCohort || sweCohort.startDate === '2026-05-06';
+    const hasLegacyCohorts =
+      allCohorts.length !== 4 ||
+      allCohorts.some((c) => c.tuitionVnd !== 10000) ||
+      allCohorts.some((c) => c.code === 'AI-ENG-2026-K02' || c.code === 'PY-SQL-2026-K04' || c.code === 'PY-SQL-2026-K05');
 
-    if (!needsReseed && sweCohort) {
-      const sweSessions = await db
-        .select({
-          id: classSessions.id,
-          livekitRoomName: classSessions.livekitRoomName,
-        })
-        .from(classSessions)
-        .where(eq(classSessions.cohortId, sweCohort.id));
+    const hasMissingEmbeddings =
+      allChunks.length < 10 ||
+      allChunks.some((ch) => !Array.isArray(ch.embedding) || ch.embedding.length !== 1024);
 
-      if (
-        sweSessions.length < 6 ||
-        sweSessions.some((s) => s.livekitRoomName === 'room-swe-k01-s04-live')
-      ) {
-        needsReseed = true;
-      }
-    }
+    // Also re-seed if legacy duplicate certificates CERT-3T-2026-8892/8893 exist
+    const hasLegacySeedCerts = allCerts.length >= 3;
 
-    if (needsReseed) {
-      logger.info('Detected stale or incomplete database seed — running automatic re-seed...');
+    if (allCourses.length < 4 || hasLegacyCohorts || hasMissingEmbeddings || hasLegacySeedCerts) {
+      logger.info('Detected legacy or incomplete database seed — running clean minimal 10.000đ + RAG vector re-seed...');
       await runSeed(db);
-      logger.info('Automatic database re-seed completed successfully.');
+      logger.info('Clean minimal database re-seed completed successfully.');
     }
   } catch (err) {
     logger.warn({ err }, 'Skipped automatic database seed check on startup');

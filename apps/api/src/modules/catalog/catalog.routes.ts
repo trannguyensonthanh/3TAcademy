@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, ilike, or, and, desc } from 'drizzle-orm';
+import { eq, or, desc } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db/index.js';
 import {
@@ -22,7 +22,7 @@ import {
 } from '../../db/schema/index.js';
 import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/auth.js';
-import { aiServiceClient } from '../../integrations/aiService.client.js';
+import { askCareerAdvisorRag } from '../../integrations/ragAi.service.js';
 import {
   formatScheduleLabels,
   buildInstructorStaffMap,
@@ -79,11 +79,7 @@ let catalogConsistencySynced = false;
 async function ensureCatalogConsistency(): Promise<void> {
   if (catalogConsistencySynced) return;
   try {
-    const [allCats, allCourses, allCohorts] = await Promise.all([
-      db.select().from(categories),
-      db.select().from(courses),
-      db.select().from(cohorts),
-    ]);
+    const allCats = await db.select().from(categories);
 
     for (const cat of allCats) {
       const expectedName = humanizeCategoryName(cat.slug, cat.name);
@@ -92,48 +88,6 @@ async function ensureCatalogConsistency(): Promise<void> {
           .update(categories)
           .set({ name: expectedName })
           .where(eq(categories.id, cat.id));
-      }
-    }
-
-    const dataCohort = allCohorts.find((c) => c.code === 'DATA-PIPE-2026-K01');
-    if (dataCohort && dataCohort.status === 'DRAFT') {
-      await db
-        .update(cohorts)
-        .set({ status: 'OPENING', updatedAt: new Date() })
-        .where(eq(cohorts.id, dataCohort.id));
-    }
-
-    const pythonCourse = allCourses.find(
-      (c) => c.slug === 'lap-trinh-python-sql-thuc-chien'
-    );
-    const hasPyK05 = allCohorts.some((c) => c.code === 'PY-SQL-2026-K05');
-    if (pythonCourse && !hasPyK05) {
-      const pyK04 = allCohorts.find((c) => c.code === 'PY-SQL-2026-K04');
-      const fallbackInstructorId =
-        pyK04?.instructorId ?? dataCohort?.instructorId ?? allCohorts[0]?.instructorId;
-      if (fallbackInstructorId) {
-        await db
-          .insert(cohorts)
-          .values({
-            courseId: pythonCourse.id,
-            instructorId: fallbackInstructorId,
-            code: 'PY-SQL-2026-K05',
-            name: 'Đợt K05 — Mùa Hè 2026 (Tối Thứ 2 & Thứ 5)',
-            status: 'OPENING',
-            curriculumVersion: 'v3.1-2026',
-            techStackNotes:
-              'Python 3.12 · AsyncIO · Pytest · PostgreSQL 16 · CTE & Window Functions',
-            tuitionVnd: 4200000,
-            enrolledCount: 0,
-            enrollmentOpenAt: new Date('2026-04-01T00:00:00Z'),
-            startDate: '2026-05-18',
-            endDate: '2026-07-02',
-            scheduleSlots: [
-              { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
-              { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
-            ],
-          })
-          .onConflictDoNothing();
       }
     }
 
@@ -697,9 +651,11 @@ export async function buildCertificateRecords(filterAccountId?: number) {
         )
       : allAttempts.find((att) => att.accountId === cert.accountId);
 
-    const finalScoreNum = finalAttempt?.scorePct
-      ? Number((Number(finalAttempt.scorePct) / 10).toFixed(1))
-      : 0;
+    const rawScorePct = finalAttempt?.scorePct ? Number(finalAttempt.scorePct) : 0;
+    const finalScoreNum =
+      rawScorePct > 10
+        ? Number(rawScorePct.toFixed(1))
+        : Number((rawScorePct * 10).toFixed(1));
 
     const userSkills = allSkillStates
       .filter((ss) => ss.accountId === cert.accountId)
@@ -838,76 +794,8 @@ catalogRouter.post('/advisor/ask', validate(advisorAskSchema), async (req, res, 
     const background = req.body.background ? ` (Nền tảng: ${req.body.background})` : '';
     const fullQuestion = `${rawQuestion}${background}`.trim();
 
-    const [openCohorts, allCourses] = await Promise.all([
-      db.select().from(cohorts).orderBy(desc(cohorts.startDate)),
-      db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
-    ]);
-
-    const courseMap = new Map(allCourses.map((c) => [c.id, c]));
-    const recommendedCohort =
-      openCohorts.find((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING') ||
-      openCohorts[0];
-    const recommendedCourse = recommendedCohort
-      ? courseMap.get(recommendedCohort.courseId) || allCourses[0]
-      : allCourses[0];
-
-    const recommendedCohortCodes = openCohorts
-      .filter((ch) => ch.status === 'OPENING' || ch.status === 'ONGOING')
-      .map((ch) => ch.code);
-
-    try {
-      const aiResp = await aiServiceClient.askAdvisor(fullQuestion);
-      res.json({
-        replyText: aiResp.answerMd,
-        answerMd: aiResp.answerMd,
-        recommendedCourseSlug: recommendedCourse?.slug || '',
-        recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
-        recommendedCohortCodes,
-        citations: aiResp.citations || [],
-      });
-      return;
-    } catch {
-      const keyword = rawQuestion.split(' ')[0] || '';
-      const publicChunks = await db
-        .select()
-        .from(knowledgeChunks)
-        .where(
-          and(
-            eq(knowledgeChunks.visibility, 'PUBLIC'),
-            keyword
-              ? or(
-                  ilike(knowledgeChunks.content, `%${keyword}%`),
-                  eq(knowledgeChunks.sourceType, 'FAQ')
-                )
-              : eq(knowledgeChunks.sourceType, 'FAQ')
-          )
-        )
-        .limit(3);
-
-      const contextText =
-        publicChunks.length > 0
-          ? publicChunks.map((c) => c.content).join('\n\n')
-          : recommendedCourse
-            ? `Khóa **${recommendedCourse.title}** (${recommendedCohort?.code || ''}) hiện đang tuyển sinh với học phí ${(recommendedCohort?.tuitionVnd || 0).toLocaleString('vi-VN')}đ.`
-            : '';
-
-      const replyText = contextText
-        ? `Dựa trên lộ trình đào tạo chính thức của **3T AI Academy**:\n\n${contextText}`
-        : 'Hiện tại hệ thống chưa tìm thấy lộ trình phù hợp với từ khóa của bạn.';
-
-      res.json({
-        replyText,
-        answerMd: replyText,
-        recommendedCourseSlug: recommendedCourse?.slug || '',
-        recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
-        recommendedCohortCodes,
-        citations: publicChunks.map((c) => ({
-          chunkId: c.id,
-          sourceType: c.sourceType,
-          snippet: c.content.slice(0, 120),
-        })),
-      });
-    }
+    const result = await askCareerAdvisorRag(fullQuestion);
+    res.json(result);
   } catch (err) {
     next(err);
   }

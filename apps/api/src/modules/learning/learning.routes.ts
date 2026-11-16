@@ -30,7 +30,7 @@ import {
 } from '../../db/schema/index.js';
 import { requireAuth, optionalAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
-import { aiServiceClient } from '../../integrations/aiService.client.js';
+import { askCourseTutorRag } from '../../integrations/ragAi.service.js';
 import { env } from '../../config/env.js';
 import {
   resolveCohort,
@@ -1458,7 +1458,10 @@ learningRouter.post(
         currentTimestampSec,
       } = req.body;
       const accountId = req.user!.id;
+      const userRole = req.user!.role;
       const videoSec = currentVideoSec ?? currentTimestampSec ?? 0;
+
+      await ensureEnrollmentsForPaidOrders(accountId);
 
       const cohort = rawCohortId ? await resolveCohort(rawCohortId) : undefined;
       const session = await resolveSession(rawSessionId, cohort?.id);
@@ -1479,48 +1482,39 @@ learningRouter.post(
       const resolvedCohortId = session.cohortId;
       const resolvedSessionId = session.id;
 
-      let answerMd = '';
-      let detectedTopic = 'RAG & Vector Search';
-      let citations: Array<{ label: string; jumpSec: number; slideLabel: string }> = [];
+      let tutorResult: {
+        answerMd: string;
+        detectedTopic: string;
+        citations: Array<{ label: string; jumpSec: number; slideLabel: string }>;
+      };
 
       try {
-        const aiResp = await aiServiceClient.askSessionTutor({
+        tutorResult = await askCourseTutorRag({
+          accountId,
+          userRole,
           cohortId: resolvedCohortId,
           sessionId: resolvedSessionId,
           question,
           currentVideoSec: videoSec,
         });
-        answerMd = aiResp.answerMd;
-        detectedTopic = aiResp.detectedTopic || detectedTopic;
-        if (Array.isArray(aiResp.citations) && aiResp.citations.length > 0) {
-          citations = aiResp.citations.map((c, idx) => ({
-            label: `[${formatSecondsToMmSs(c.startSec ?? (idx + 1) * 15)}]`,
-            jumpSec: c.startSec ?? (idx + 1) * 15,
-            slideLabel: c.pageNumber ? `Slide Trang ${c.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
-          }));
+      } catch (err: any) {
+        if (err?.statusCode === 403) {
+          res.status(403).json({
+            success: false,
+            status: 403,
+            code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
+            message: err.message,
+            error: {
+              code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
+              message: err.message,
+            },
+          });
+          return;
         }
-      } catch {
-        const chunks = await db
-          .select()
-          .from(knowledgeChunks)
-          .where(eq(knowledgeChunks.sessionId, resolvedSessionId))
-          .orderBy(asc(knowledgeChunks.chunkIndex))
-          .limit(3);
-
-        citations = chunks.map((ch, idx) => {
-          const sec = ch.startSec ?? (idx + 1) * 15;
-          return {
-            label: `[${formatSecondsToMmSs(sec)}]`,
-            jumpSec: sec,
-            slideLabel: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
-          };
-        });
-
-        const snippet = chunks.map((c) => c.content).join('\n\n');
-        answerMd = snippet
-          ? `Dựa trên nội dung bài giảng tại mốc **[${formatSecondsToMmSs(videoSec)}]**:\n\n${snippet}`
-          : `Câu hỏi của bạn tại mốc **[${formatSecondsToMmSs(videoSec)}]** đã được ghi nhận.`;
+        throw err;
       }
+
+      const { answerMd, detectedTopic, citations } = tutorResult;
 
       let [chatSess] = await db
         .select()
@@ -1562,7 +1556,7 @@ learningRouter.post(
             content: answerMd,
             citations,
             llmProvider: 'gemini',
-            llmModel: 'gemini-2.5-flash',
+            llmModel: 'gemini-4-hydrogen',
           },
         ]);
       }
