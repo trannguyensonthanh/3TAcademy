@@ -109,6 +109,67 @@ export function formatTimestamp(seconds: number): string {
 }
 
 /**
+ * Định dạng chuỗi thời gian ISO (hoặc nhãn lịch học) sang định dạng Tiếng Việt dễ đọc:
+ * VD: "2026-03-03T12:30:00.000Z" -> "Thứ 3, 03/03/2026 · 19:30"
+ */
+export function formatSessionDateTimeVi(isoOrText?: string | null): string {
+  if (!isoOrText) return 'Theo lịch cố định của lớp';
+  const trimmed = isoOrText.trim();
+  if (!trimmed) return 'Theo lịch cố định của lớp';
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+    return trimmed;
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return trimmed;
+  }
+  try {
+    const weekday = new Intl.DateTimeFormat('vi-VN', {
+      weekday: 'short',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }).format(date);
+    const dayMonthYear = new Intl.DateTimeFormat('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }).format(date);
+    const timeStr = new Intl.DateTimeFormat('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }).format(date);
+    const normalizedWeekday = weekday
+      .replace(/^Th\s*(\d)$/i, 'Thứ $1')
+      .replace(/^CN$/i, 'Chủ Nhật');
+    return `${normalizedWeekday}, ${dayMonthYear} · ${timeStr}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+/**
+ * Làm sạch chuỗi tóm tắt buổi học để không hiển thị ký tự Markdown thô (###, **, `, $...$) trên giao diện.
+ */
+export function formatCleanSummaryText(rawMd?: string | null): string {
+  if (!rawMd) return 'Tóm tắt trọng tâm và ghi chú thực hành của buổi học.';
+  const cleaned = rawMd
+    .replace(/^#{1,6}\s*Tóm tắt trọng tâm Buổi\s*\d+\s*:?\s*/gim, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\$[^$]+\$/g, (math) => {
+      if (math.includes('RRF')) return '1 / (k + rank)';
+      return math.replace(/[$\\_{}]/g, '');
+    })
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s*\n+\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return cleaned || 'Tóm tắt trọng tâm và ghi chú thực hành của buổi học.';
+}
+
+/**
  * Evaluates password strength on a 0-3 scale (WEAK / MEDIUM / STRONG) for Auth view.
  */
 export interface PasswordStrengthResult {

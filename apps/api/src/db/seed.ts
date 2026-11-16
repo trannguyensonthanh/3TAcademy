@@ -862,7 +862,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
   const insertedSessions = await db
     .insert(classSessions)
     .values([
-      // --- AI-ENG-2026-K01 (Sessions 1-5 REPLAY_READY, Session 6 SCHEDULED for testing Live/Exam) ---
+      // --- AI-ENG-2026-K01 (Sessions 1-5 REPLAY_READY, Session 6 SCHEDULED for live teaching & final review) ---
       {
         cohortId: cohortAiK01!.id,
         instructorId: instKhoaAcc!.id,
@@ -878,10 +878,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s01/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 1
-1. **Sự khác biệt giữa Notebook Prototype và Production AI**: Hệ thống thực tế đòi hỏi kiểm soát độ trễ (p95 latency), giới hạn tốc độ (Rate Limit) và khả năng chịu lỗi khi nhà cung cấp LLM gặp sự cố.
-2. **AsyncIO & FastAPI**: Tuyệt đối không gọi SDK đồng bộ (\`requests\`, \`time.sleep\`) bên trong hàm \`async def\` vì sẽ làm nghẽn toàn bộ Event Loop.
-3. **Streaming SSE**: Giúp giảm thời gian phản hồi token đầu tiên (TTFT - Time To First Token) xuống dưới 400ms.`,
+        aiSummaryMd:
+          'Trọng tâm buổi 1: Phân biệt kiến trúc thử nghiệm trên Notebook và hệ thống AI Production (kiểm soát độ trễ p95, giới hạn tốc độ gọi API và xử lý lỗi tự động). Sử dụng httpx bất đồng bộ cùng FastAPI và truyền phát phản hồi qua Server-Sent Events (SSE) để giảm thời gian nhận từ đầu tiên xuống dưới 400ms.',
       },
       {
         cohortId: cohortAiK01!.id,
@@ -898,9 +896,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s02/master.m3u8',
         durationSeconds: 5700,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 2
-1. **Markdown Header + Recursive Chunking**: Giữ nguyên ngữ cảnh tiêu đề cha-con và thiết lập \`chunk_overlap\` từ 10%–15% để không cắt đứt ý nghĩa giữa hai đoạn liên tiếp.
-2. **Chỉ mục HNSW trên pgvector**: Sử dụng toán tử \`vector_cosine_ops\` (\`<=>\`) với tham số \`m = 16, ef_construction = 64\` để cân bằng giữa tốc độ truy vấn ANN và dung lượng RAM.`,
+        aiSummaryMd:
+          'Trọng tâm buổi 2: Kết hợp tách tài liệu theo tiêu đề Markdown và đệ quy với độ gối đầu (chunk overlap) 10%–15% để giữ trọn ngữ cảnh đoạn văn. Thiết lập chỉ mục HNSW trên PostgreSQL pgvector với khoảng cách Cosine (m = 16, ef_construction = 64) giúp cân bằng tốc độ truy vấn và dung lượng bộ nhớ.',
       },
       {
         cohortId: cohortAiK01!.id,
@@ -917,10 +914,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s03/master.m3u8',
         durationSeconds: 6000,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 3
-1. **Tại sao cần Hybrid Search**: Dense Vector hiểu ngữ nghĩa tổng quát nhưng thường bỏ sót mã sản phẩm, mã lỗi kỹ thuật hoặc điều khoản chính xác.
-2. **Công thức RRF**: $RRF\\_Score(d) = \\frac{1}{k + rank_{dense}(d)} + \\frac{1}{k + rank_{bm25}(d)}$ với $k = 60$ giúp hợp nhất hai danh sách mà không cần chuẩn hóa thang điểm khác biệt.
-3. **Pre-filtering RBAC**: Luôn lọc quyền truy cập (\`WHERE visibility = ...\`) ở tầng SQL trước khi đưa ngữ cảnh vào LLM.`,
+        aiSummaryMd:
+          'Trọng tâm buổi 3: Khắc phục hạn chế của tìm kiếm vector đối với mã sản phẩm và thuật ngữ chuyên ngành bằng cách kết hợp tìm kiếm toàn văn BM25. Hợp nhất thứ hạng bằng thuật toán Reciprocal Rank Fusion (RRF với k = 60), chấm điểm lại với Cross-Encoder Reranker và lọc phân quyền truy cập tài liệu ngay ở tầng SQL.',
       },
       {
         cohortId: cohortAiK01!.id,
@@ -937,9 +932,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s04/master.m3u8',
         durationSeconds: 5850,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 4
-1. **Pydantic v2 Schema**: Dùng \`Field(description=...)\` rõ ràng để LLM hiểu chính xác ngữ nghĩa từng tham số khi sinh lời gọi hàm.
-2. **Kiểm soát vòng lặp Agent**: Luôn đặt \`max_iterations\` (thường từ 3–5 bước) và bắt lỗi \`ValidationError\` để phản hồi ngược cho mô hình tự sửa tham số.`,
+        aiSummaryMd:
+          'Trọng tâm buổi 4: Định nghĩa lược đồ tham số rõ ràng bằng Pydantic v2 để mô hình sinh lời gọi hàm chính xác. Kiểm soát vòng lặp suy luận ReAct (giới hạn tối đa 3–5 bước) và tự động phản hồi lỗi kiểm tra kiểu để Agent tự hiệu chỉnh tham số đầu vào.',
       },
       {
         cohortId: cohortAiK01!.id,
@@ -956,9 +950,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/ai-k01/s05/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 5
-1. **Bộ tứ chỉ số Ragas**: Context Precision, Context Recall (đánh giá tầng Retrieval) và Faithfulness, Answer Relevancy (đánh giá tầng Generation).
-2. **Semantic Caching**: Lưu trữ cặp vector câu hỏi - câu trả lời trên Redis giúp tiết kiệm 35%–50% chi phí gọi API cho các câu hỏi lặp lại.`,
+        aiSummaryMd:
+          'Trọng tâm buổi 5: Đo lường chất lượng hệ thống RAG qua 4 chỉ số Ragas (Context Precision, Context Recall, Faithfulness và Answer Relevancy). Thiết lập bộ nhớ đệm ngữ nghĩa (Semantic Cache) trên Redis giúp tiết kiệm 35%–50% chi phí gọi mô hình cho các truy vấn tương tự.',
       },
       {
         cohortId: cohortAiK01!.id,
@@ -970,17 +963,16 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
         scheduledStart: new Date('2026-03-19T12:30:00Z'),
         scheduledEnd: new Date('2026-03-19T14:30:00Z'),
-        status: 'REPLAY_READY',
+        status: 'SCHEDULED',
         livekitRoomName: 'room-ai-k01-s06',
         videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s06/master.m3u8',
+        videoR2Key: null,
         durationSeconds: 5400,
-        aiSummaryMd: `### Tóm tắt trọng tâm Buổi 6
-1. **Danh mục nghiệm thu đồ án Production AI**: Đảm bảo đầy đủ Docker Compose, migration pgvector, kiểm thử Ragas đạt Faithfulness >= 0.85 và xử lý lỗi an toàn.
-2. **Quy chế phòng thi sát hạch**: Mở khóa sau khi hoàn tất 6/6 buổi học và bài kiểm tra củng cố.`,
+        aiSummaryMd:
+          'Tài liệu chuẩn bị cho Buổi 6: Danh mục nghiệm thu đồ án Production AI (Docker Compose, chỉ mục pgvector, kiểm thử Ragas đạt Faithfulness >= 0.85) và hướng dẫn quy chế thi sát hạch cuối khóa.',
       },
 
-      // --- PY-SQL-2026-K01 (Sessions 1-6 REPLAY_READY so user can test full course or live) ---
+      // --- PY-SQL-2026-K01 (Sessions 1-5 REPLAY_READY, Session 6 SCHEDULED) ---
       {
         cohortId: cohortPyK01!.id,
         instructorId: instKhoaAcc!.id,
@@ -996,7 +988,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k01/s01/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt cấu trúc dữ liệu Python, Generator (yield) và Type Hints chuẩn 3.11.',
+        aiSummaryMd:
+          'Trọng tâm buổi 1: Tối ưu bộ nhớ với Generator (yield), cấu trúc bảng băm dict/set đạt tốc độ tra cứu O(1) và chuẩn khai báo kiểu tĩnh Type Hints trên Python 3.11.',
       },
       {
         cohortId: cohortPyK01!.id,
@@ -1013,7 +1006,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k01/s02/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt OOP, `@pytest.mark.parametrize` và kiểm thử trường hợp biên.',
+        aiSummaryMd:
+          'Trọng tâm buổi 2: Thiết kế lớp đối tượng dễ bảo trì, quản lý tài nguyên an toàn với Context Manager và viết kiểm thử tự động nhiều bộ dữ liệu biên bằng Pytest.',
       },
       {
         cohortId: cohortPyK01!.id,
@@ -1021,7 +1015,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         sessionOrder: 3,
         title: 'Lập trình Bất đồng bộ (AsyncIO) & Thu thập Dữ liệu qua HTTP API',
         descriptionMd:
-          'Hiểu rõ Event Loop, `async with` quản lý Connection Pool và httpx bất đồng bộ.',
+          'Hiểu rõ Event Loop, quản lý Connection Pool và httpx bất đồng bộ.',
         activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
         scheduledStart: new Date('2026-01-12T12:30:00Z'),
         scheduledEnd: new Date('2026-01-12T14:30:00Z'),
@@ -1030,7 +1024,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k01/s03/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt `asyncio.gather`, `async with` và kiểm soát đồng thời.',
+        aiSummaryMd:
+          'Trọng tâm buổi 3: Cơ chế hoạt động của Event Loop, chạy tác vụ mạng đồng thời bằng asyncio.gather và kiểm soát giới hạn kết nối với Semaphore.',
       },
       {
         cohortId: cohortPyK01!.id,
@@ -1047,7 +1042,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k01/s04/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt thiết kế 3NF, phân tích `EXPLAIN ANALYZE` và chỉ mục B-Tree.',
+        aiSummaryMd:
+          'Trọng tâm buổi 4: Chuẩn hóa lược đồ quan hệ 3NF, đọc hiểu kế hoạch thực thi EXPLAIN ANALYZE và thiết kế chỉ mục B-Tree trên PostgreSQL.',
       },
       {
         cohortId: cohortPyK01!.id,
@@ -1055,7 +1051,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         sessionOrder: 5,
         title: 'SQL Phân tích Nâng cao: CTE, Window Functions & Truy vấn JSONB',
         descriptionMd:
-          'Giải quyết các bài toán xếp hạng, tính tổng lũy kế, phân tích cohort và toán tử `@>` trên JSONB + GIN.',
+          'Giải quyết các bài toán xếp hạng, tính tổng lũy kế, phân tích cohort và truy vấn JSONB + GIN.',
         activityTags: ['LIVE_CODING', 'WORKSHOP'],
         scheduledStart: new Date('2026-01-19T12:30:00Z'),
         scheduledEnd: new Date('2026-01-19T14:30:00Z'),
@@ -1064,7 +1060,8 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/py-k01/s05/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt CTE, `RANK()`, `DENSE_RANK()`, `LAG()` và truy vấn JSONB.',
+        aiSummaryMd:
+          'Trọng tâm buổi 5: Ứng dụng bảng tạm CTE, các hàm cửa sổ (RANK, DENSE_RANK, LAG) để phân tích dữ liệu chuỗi thời gian và đánh chỉ mục GIN cho cột JSONB.',
       },
       {
         cohortId: cohortPyK01!.id,
@@ -1076,12 +1073,13 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
         scheduledStart: new Date('2026-01-22T12:30:00Z'),
         scheduledEnd: new Date('2026-01-22T14:30:00Z'),
-        status: 'REPLAY_READY',
+        status: 'SCHEDULED',
         livekitRoomName: 'room-py-k01-s06',
         videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s06/master.m3u8',
+        videoR2Key: null,
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt Keyset Pagination và tổng duyệt dự án Python + PostgreSQL.',
+        aiSummaryMd:
+          'Tài liệu chuẩn bị cho Buổi 6: Kỹ thuật phân trang Keyset Pagination với AsyncPG và tổng duyệt kiến trúc dự án Python + PostgreSQL.',
       },
 
       // --- SWE-ARCH-2026-K01 (s01-s03 REPLAY_READY, s04-s06 SCHEDULED) ---
@@ -1100,7 +1098,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/swe-k01/s01/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt kiến trúc 3 tầng Routes -> Services -> Repositories, Zod validation và Correlation ID.',
+        aiSummaryMd: 'Trọng tâm buổi 1: Kiến trúc 3 tầng Routes - Services - Repositories, kiểm tra dữ liệu đầu vào với Zod và gắn mã truy vết Correlation ID.',
       },
       {
         cohortId: cohortSweK01!.id,
@@ -1117,7 +1115,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/swe-k01/s02/master.m3u8',
         durationSeconds: 5550,
-        aiSummaryMd: 'Tóm tắt cách đọc `EXPLAIN (ANALYZE, BUFFERS)` và thiết kế Composite / Partial Index.',
+        aiSummaryMd: 'Trọng tâm buổi 2: Cách đọc kế hoạch thực thi EXPLAIN (ANALYZE, BUFFERS) và thiết kế chỉ mục kết hợp (Composite / Partial Index).',
       },
       {
         cohortId: cohortSweK01!.id,
@@ -1134,7 +1132,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
         videoProvider: 'R2_HLS_AES128',
         videoR2Key: 'recordings/swe-k01/s03/master.m3u8',
         durationSeconds: 5400,
-        aiSummaryMd: 'Tóm tắt `SELECT ... FOR UPDATE`, Idempotency Key và xử lý SePay Webhook an toàn.',
+        aiSummaryMd: 'Trọng tâm buổi 3: Khóa dòng dữ liệu với SELECT FOR UPDATE, đảm bảo tính bất biến (Idempotency) và xử lý SePay Webhook an toàn.',
       },
       {
         cohortId: cohortSweK01!.id,
@@ -1418,13 +1416,11 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     { sessionId: sess3!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s03/vi.vtt', isAutoGenerated: true },
     { sessionId: sess4!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s04/vi.vtt', isAutoGenerated: true },
     { sessionId: sess5!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s05/vi.vtt', isAutoGenerated: true },
-    { sessionId: sess6!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s06/vi.vtt', isAutoGenerated: true },
     { sessionId: sessPy1!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s01/vi.vtt', isAutoGenerated: true },
     { sessionId: sessPy2!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s02/vi.vtt', isAutoGenerated: true },
     { sessionId: sessPy3!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s03/vi.vtt', isAutoGenerated: true },
     { sessionId: sessPy4!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s04/vi.vtt', isAutoGenerated: true },
     { sessionId: sessPy5!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s05/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy6!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s06/vi.vtt', isAutoGenerated: true },
     { sessionId: sessSwe1!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s01/vi.vtt', isAutoGenerated: true },
     { sessionId: sessSwe2!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s02/vi.vtt', isAutoGenerated: true },
     { sessionId: sessSwe3!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s03/vi.vtt', isAutoGenerated: true },

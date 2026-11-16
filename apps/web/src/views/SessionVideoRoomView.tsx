@@ -12,7 +12,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { useAcademy } from '../context/AcademyContext';
-import { formatTimestamp } from '../utils/academyLogic';
+import { formatTimestamp, formatCleanSummaryText } from '../utils/academyLogic';
 import { AiTutorCompanionSticker } from '../components/BotanicalStickers';
 import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import {
@@ -611,7 +611,7 @@ export const SessionVideoRoomView: React.FC<{
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed whitespace-pre-line">
-                {session.aiSummaryMd || 'Nội dung tóm tắt buổi học đang được giảng viên cập nhật.'}
+                {formatCleanSummaryText(session.aiSummaryMd)}
               </p>
               {videoChapters.length > 0 && (
                 <ul className="space-y-2 text-xs sm:text-sm text-[#0F172A] dark:text-[#ECFDF5] pt-1">

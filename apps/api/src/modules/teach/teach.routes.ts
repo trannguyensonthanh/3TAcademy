@@ -312,9 +312,16 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
     ]);
 
     const sessions =
-      allSessionsRaw.length > 0
+      allSessionsRaw.length > 0 || req.user!.role !== 'ADMIN'
         ? allSessionsRaw
         : await db.select().from(classSessions).orderBy(asc(classSessions.sessionOrder));
+    const instructorCohortIds = Array.from(
+      new Set(
+        allCohorts
+          .filter((c) => req.user!.role === 'ADMIN' || c.instructorId === instructorId)
+          .map((c) => c.id)
+      )
+    );
 
     const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
@@ -413,7 +420,12 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       };
     });
 
-    const formattedEnrollments = await buildFormattedEnrollments();
+    const formattedEnrollments =
+      req.user!.role === 'ADMIN'
+        ? await buildFormattedEnrollments()
+        : instructorCohortIds.length > 0
+        ? await buildFormattedEnrollments(instructorCohortIds)
+        : [];
     const formattedDiscussions = await buildFormattedDiscussionsForSessions(sessions);
 
     const formattedMaterials = allAttachments.map((att) => {
@@ -511,7 +523,9 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
     ]);
 
     const list =
-      allCohortsRaw.length > 0 ? allCohortsRaw : await db.select().from(cohorts);
+      allCohortsRaw.length > 0 || req.user!.role !== 'ADMIN'
+        ? allCohortsRaw
+        : await db.select().from(cohorts);
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
 
     res.json(

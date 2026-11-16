@@ -360,7 +360,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => {
       isMounted = false;
     };
-  }, [role]);
+  }, [role, currentUser?.id]);
 
   const refreshEnrollments = useCallback(async () => {
     try {

@@ -2,32 +2,55 @@ import { app } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { db, pool } from './db/index.js';
-import { cohorts, courses, certificates, knowledgeChunks, userProfiles } from './db/schema/index.js';
+import { cohorts, courses, certificates, knowledgeChunks, userProfiles, classSessions, enrollments, sessionSubtitles } from './db/schema/index.js';
 import { runSeed } from './db/seed.js';
 import { redis } from './config/redis.js';
 import { getConfiguredSepayWebhookUrls } from './modules/order/order.routes.js';
+import { eq } from 'drizzle-orm';
 
 async function ensureFreshDatabaseSeed() {
   try {
-    const [allCourses, allCohorts, allCerts, allChunks, allProfiles] = await Promise.all([
-      db.select({ id: courses.id }).from(courses),
-      db.select().from(cohorts),
-      db.select({ id: certificates.id }).from(certificates),
-      db.select().from(knowledgeChunks),
-      db.select({ cvParsedData: userProfiles.cvParsedData }).from(userProfiles),
-    ]);
+    const [allCourses, allCohorts, allCerts, allChunks, allProfiles, allSessions, allEnrollments] =
+      await Promise.all([
+        db.select({ id: courses.id }).from(courses),
+        db.select().from(cohorts),
+        db.select({ id: certificates.id }).from(certificates),
+        db.select().from(knowledgeChunks),
+        db.select({ cvParsedData: userProfiles.cvParsedData }).from(userProfiles),
+        db.select().from(classSessions),
+        db.select({ id: enrollments.id }).from(enrollments),
+      ]);
 
     const hasLegacyCohorts =
       allCohorts.length !== 4 ||
       allCohorts.some((c) => c.tuitionVnd !== 10000) ||
-      allCohorts.some((c) => c.code === 'AI-ENG-2026-K02' || c.code === 'PY-SQL-2026-K04' || c.code === 'PY-SQL-2026-K05');
+      allCohorts.some(
+        (c) =>
+          c.code === 'AI-ENG-2026-K02' ||
+          c.code === 'PY-SQL-2026-K04' ||
+          c.code === 'PY-SQL-2026-K05'
+      );
 
     const hasMissingEmbeddings =
       allChunks.length < 10 ||
       allChunks.some((ch) => !Array.isArray(ch.embedding) || ch.embedding.length !== 1024) ||
       allChunks.some((ch) => ch.content.includes('học phí ưu đãi thử nghiệm'));
 
-    // Also re-seed if legacy duplicate certificates CERT-3T-2026-8892/8893 or legacy pre-baked CV files exist
+    const hasRawMarkdownSessionSummaries = allSessions.some(
+      (s) =>
+        (s.aiSummaryMd || '').includes('### Tóm tắt trọng tâm') ||
+        (s.aiSummaryMd || '').includes('$RRF')
+    );
+
+    const aiCohort = allCohorts.find((c) => c.code === 'AI-ENG-2026-K01');
+    const pyCohort = allCohorts.find((c) => c.code === 'PY-SQL-2026-K01');
+    const hasAllSixReplayReadyInAiOrPy = allSessions.some(
+      (s) =>
+        s.sessionOrder === 6 &&
+        s.status === 'REPLAY_READY' &&
+        (s.cohortId === aiCohort?.id || s.cohortId === pyCohort?.id)
+    );
+
     const hasLegacySeedCerts = allCerts.length >= 3;
     const hasLegacyPrebakedStudentCv = allProfiles.some((p) => {
       const cv = (p.cvParsedData ?? {}) as Record<string, unknown>;
@@ -42,11 +65,45 @@ async function ensureFreshDatabaseSeed() {
       hasLegacyCohorts ||
       hasMissingEmbeddings ||
       hasLegacySeedCerts ||
-      hasLegacyPrebakedStudentCv
+      hasLegacyPrebakedStudentCv ||
+      ((hasRawMarkdownSessionSummaries || hasAllSixReplayReadyInAiOrPy) &&
+        allEnrollments.length === 0)
     ) {
-      logger.info('Detected legacy or incomplete database seed — running clean minimal database re-seed...');
+      logger.info(
+        'Detected legacy or unformatted database seed — running clean minimal database re-seed...'
+      );
       await runSeed(db);
       logger.info('Clean minimal database re-seed completed successfully.');
+    } else if (hasRawMarkdownSessionSummaries || hasAllSixReplayReadyInAiOrPy) {
+      for (const s of allSessions) {
+        if ((s.aiSummaryMd || '').includes('###') || (s.aiSummaryMd || '').includes('$')) {
+          const cleaned = (s.aiSummaryMd || '')
+            .replace(/^#{1,6}\s*Tóm tắt trọng tâm Buổi\s*\d+\s*:?\s*/gim, '')
+            .replace(/^#+\s*/gm, '')
+            .replace(/\*\*([^*]+)\*\*/g, '$1')
+            .replace(/`([^`]+)`/g, '$1')
+            .replace(/\$[^$]+\$/g, 'RRF_Score(d) = 1/(k + rank_dense) + 1/(k + rank_bm25)')
+            .replace(/\s*\n\s*/g, ' ')
+            .trim();
+          await db
+            .update(classSessions)
+            .set({ aiSummaryMd: cleaned })
+            .where(eq(classSessions.id, s.id));
+        }
+        if (
+          s.sessionOrder === 6 &&
+          s.status === 'REPLAY_READY' &&
+          (s.cohortId === aiCohort?.id || s.cohortId === pyCohort?.id)
+        ) {
+          await db
+            .delete(sessionSubtitles)
+            .where(eq(sessionSubtitles.sessionId, s.id));
+          await db
+            .update(classSessions)
+            .set({ status: 'SCHEDULED', videoR2Key: null })
+            .where(eq(classSessions.id, s.id));
+        }
+      }
     }
   } catch (err) {
     logger.warn({ err }, 'Skipped automatic database seed check on startup');

@@ -29,8 +29,12 @@ import {
   LogOut,
 } from 'lucide-react';
 import { useAcademy, InstructorSidebarTab } from '../context/AcademyContext';
-import { Enrollment, Notification, ChatMessage } from '../types/domain';
-import { formatScheduleSlots } from '../utils/academyLogic';
+import { Enrollment, Notification, ChatMessage, ClassSession } from '../types/domain';
+import {
+  formatScheduleSlots,
+  formatSessionDateTimeVi,
+  formatCleanSummaryText,
+} from '../utils/academyLogic';
 import { AVATAR_MINH_KHOA, AvatarWithFallback } from '../components/BotanicalStickers';
 import {
   StackedBarChart,
@@ -141,14 +145,14 @@ export const InstructorPortalView: React.FC = () => {
 
   const { data: scheduleData, refetch: refetchSchedule } = useAsyncData(
     () => teachApi.getInstructorSchedule(),
-    []
+    [currentUser?.id]
   );
   const { data: instructorCohortsData } = useAsyncData(
     () => teachApi.getInstructorCohorts(),
-    []
+    [currentUser?.id]
   );
 
-  const [analyticsCohortId, setAnalyticsCohortId] = useState<string>('cohort-ai-k01');
+  const [analyticsCohortId, setAnalyticsCohortId] = useState<string>('1');
   const [enrollmentsState, setEnrollmentsState] = useState<Enrollment[]>([]);
   const [notificationsState, setNotificationsState] = useState<Notification[]>([]);
   const [chatMessagesState, setChatMessagesState] = useState<ChatMessage[]>([]);
@@ -177,13 +181,41 @@ export const InstructorPortalView: React.FC = () => {
   const [cohortFlowLevel, setCohortFlowLevel] = useState<
     'LEVEL_1_COHORTS' | 'LEVEL_2_COHORT_DETAIL' | 'LEVEL_3_SESSION_DETAIL'
   >('LEVEL_1_COHORTS');
-  const [selectedCohortId, setSelectedCohortId] = useState<string>('cohort-ai-k01');
-  const effectiveCohorts =
-    instructorCohortsData && instructorCohortsData.length > 0
-      ? instructorCohortsData
-      : cohorts;
+  const [selectedCohortId, setSelectedCohortId] = useState<string>('1');
+  const [cohortDetailSessions, setCohortDetailSessions] = useState<ClassSession[]>([]);
+
+  const effectiveCohorts = (() => {
+    if (instructorCohortsData && instructorCohortsData.length > 0) {
+      return instructorCohortsData;
+    }
+    if (currentUser?.role === 'INSTRUCTOR') {
+      const matched = cohorts.filter(
+        (c) =>
+          String(c.instructorId) === String(currentUser.id) ||
+          c.staff?.some(
+            (s) =>
+              s.role === 'INSTRUCTOR' &&
+              (String(s.id) === String(currentUser.id) ||
+                s.fullName === currentUser.fullName)
+          )
+      );
+      if (matched.length > 0) return matched;
+    }
+    return cohorts;
+  })();
+
+  useEffect(() => {
+    if (effectiveCohorts.length === 0) return;
+    if (!effectiveCohorts.some((c) => String(c.id) === String(selectedCohortId))) {
+      setSelectedCohortId(String(effectiveCohorts[0].id));
+    }
+    if (!effectiveCohorts.some((c) => String(c.id) === String(analyticsCohortId))) {
+      setAnalyticsCohortId(String(effectiveCohorts[0].id));
+    }
+  }, [effectiveCohorts, selectedCohortId, analyticsCohortId]);
+
   const selectedCohort =
-    effectiveCohorts.find((c) => c.id === selectedCohortId) ??
+    effectiveCohorts.find((c) => String(c.id) === String(selectedCohortId)) ??
     effectiveCohorts[0] ?? {
       id: selectedCohortId,
       courseId: '',
@@ -201,14 +233,34 @@ export const InstructorPortalView: React.FC = () => {
       staff: [],
     };
 
-  const cohortSessions = sessions
-    .filter((s) => s.cohortId === selectedCohortId)
-    .sort((a, b) => a.sessionOrder - b.sessionOrder);
-  const displayCohortSessions = cohortSessions.length > 0 ? cohortSessions : sessions;
+  const allInstructorSessions =
+    scheduleData?.allSessions && scheduleData.allSessions.length > 0
+      ? scheduleData.allSessions
+      : sessions;
 
-  const [selectedSessionId, setSelectedSessionId] = useState<string>('sess-k01-05');
+  const cohortSessions = allInstructorSessions
+    .filter((s) => String(s.cohortId) === String(selectedCohort.id))
+    .sort((a, b) => a.sessionOrder - b.sessionOrder);
+
+  const detailMatchesSelectedCohort =
+    cohortDetailSessions.length > 0 &&
+    cohortDetailSessions.every((s) => String(s.cohortId) === String(selectedCohort.id));
+
+  const displayCohortSessions = detailMatchesSelectedCohort
+    ? [...cohortDetailSessions].sort((a, b) => a.sessionOrder - b.sessionOrder)
+    : cohortSessions;
+
+  const [selectedSessionId, setSelectedSessionId] = useState<string>('1');
+
+  useEffect(() => {
+    if (displayCohortSessions.length === 0) return;
+    if (!displayCohortSessions.some((s) => String(s.id) === String(selectedSessionId))) {
+      setSelectedSessionId(String(displayCohortSessions[0].id));
+    }
+  }, [displayCohortSessions, selectedSessionId]);
+
   const activeSession =
-    displayCohortSessions.find((s) => s.id === selectedSessionId) ??
+    displayCohortSessions.find((s) => String(s.id) === String(selectedSessionId)) ??
     displayCohortSessions[0] ?? {
       id: selectedSessionId,
       cohortId: selectedCohort.id,
@@ -218,7 +270,7 @@ export const InstructorPortalView: React.FC = () => {
       hostInstructorName: currentUser?.fullName ?? 'Giảng viên',
       scheduledStart: '',
       scheduledEnd: '',
-      status: 'UPCOMING' as const,
+      status: 'SCHEDULED' as const,
       videoR2Key: '',
       videoProvider: 'R2_HLS_AES128' as const,
       durationSeconds: 7200,
@@ -317,11 +369,15 @@ export const InstructorPortalView: React.FC = () => {
   const [cohortDetailEnrollments, setCohortDetailEnrollments] = useState<Enrollment[]>([]);
 
   useEffect(() => {
+    if (!selectedCohort.id) return;
     let cancelled = false;
     teachApi
-      .getInstructorCohortDetail(selectedCohortId)
+      .getInstructorCohortDetail(selectedCohort.id)
       .then((detail) => {
         if (cancelled) return;
+        if (detail.sessions && detail.sessions.length > 0) {
+          setCohortDetailSessions(detail.sessions);
+        }
         if (detail.finalExamAssessmentId) {
           setFinalExamAssessmentId(detail.finalExamAssessmentId);
         }
@@ -339,12 +395,13 @@ export const InstructorPortalView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedCohortId]);
+  }, [selectedCohort.id]);
 
   useEffect(() => {
+    if (!selectedCohort.id || !selectedSessionId) return;
     let cancelled = false;
     teachApi
-      .getInstructorSessionDetail(selectedCohortId, selectedSessionId)
+      .getInstructorSessionDetail(selectedCohort.id, selectedSessionId)
       .then((detail) => {
         if (cancelled) return;
         if (detail.assessmentId) {
@@ -376,18 +433,42 @@ export const InstructorPortalView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedCohortId, selectedSessionId]);
+  }, [selectedCohort.id, selectedSessionId]);
+
+  const instructorCohortIds = new Set(effectiveCohorts.map((c) => String(c.id)));
+
+  const scopedInstructorSessions = allInstructorSessions.filter(
+    (s) => instructorCohortIds.size === 0 || instructorCohortIds.has(String(s.cohortId))
+  );
 
   const activeLiveSession =
     scheduleData?.liveSession?.status === 'LIVE'
       ? scheduleData.liveSession
-      : sessions.find((s) => s.status === 'LIVE') ?? null;
+      : scopedInstructorSessions.find((s) => s.status === 'LIVE') ?? null;
+
+  const upcomingScheduledSessions = (
+    scheduleData?.upcomingSessions && scheduleData.upcomingSessions.length > 0
+      ? scheduleData.upcomingSessions.filter((s) => s.status === 'SCHEDULED')
+      : scopedInstructorSessions.filter((s) => s.status === 'SCHEDULED')
+  ).sort((a, b) => {
+    const tA = new Date(a.scheduledStart).getTime();
+    const tB = new Date(b.scheduledStart).getTime();
+    if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+    return a.sessionOrder - b.sessionOrder;
+  });
+
+  const nextScheduledSession = upcomingScheduledSessions[0] ?? null;
 
   const liveSession =
     activeLiveSession ??
-    scheduleData?.upcomingSessions?.[0] ??
-    sessions.find((s) => s.status === 'SCHEDULED') ??
+    nextScheduledSession ??
+    displayCohortSessions[displayCohortSessions.length - 1] ??
     activeSession;
+
+  const liveSessionCohort =
+    effectiveCohorts.find((c) => String(c.id) === String(liveSession.cohortId)) ??
+    cohorts.find((c) => String(c.id) === String(liveSession.cohortId)) ??
+    selectedCohort;
 
   // Mở Cấp 2 (Chi tiết 1 lớp)
   const handleOpenCohortLevel2 = async (cohortId: string) => {
@@ -395,6 +476,9 @@ export const InstructorPortalView: React.FC = () => {
     setCohortFlowLevel('LEVEL_2_COHORT_DETAIL');
     setFinalExamSavedNotice(null);
     const detail = await teachApi.getInstructorCohortDetail(cohortId);
+    if (detail.sessions && detail.sessions.length > 0) {
+      setCohortDetailSessions(detail.sessions);
+    }
     if (detail.finalExamAssessmentId) {
       setFinalExamAssessmentId(detail.finalExamAssessmentId);
     }
@@ -410,11 +494,17 @@ export const InstructorPortalView: React.FC = () => {
   };
 
   // Mở Cấp 3 (Chi tiết 1 buổi học cụ thể trong lớp)
-  const handleOpenSessionLevel3 = async (sessId: string) => {
+  const handleOpenSessionLevel3 = async (sessId: string, overrideCohortId?: string) => {
+    const targetCohortId = overrideCohortId || selectedCohort.id;
+    if (overrideCohortId && overrideCohortId !== selectedCohortId) {
+      setSelectedCohortId(overrideCohortId);
+    }
     setSelectedSessionId(sessId);
-    const found = displayCohortSessions.find((s) => s.id === sessId);
+    const found =
+      displayCohortSessions.find((s) => String(s.id) === String(sessId)) ??
+      scopedInstructorSessions.find((s) => String(s.id) === String(sessId));
     if (found) {
-      setEditSessionSummary(found.aiSummaryMd);
+      setEditSessionSummary(formatCleanSummaryText(found.aiSummaryMd));
       setVideoInputUrl(found.videoR2Key || '');
     }
     setIsPlayingReplayPreview(false);
@@ -425,7 +515,10 @@ export const InstructorPortalView: React.FC = () => {
     setEditingQuestionIdx(null);
     setShowAddSessionQForm(false);
     setCohortFlowLevel('LEVEL_3_SESSION_DETAIL');
-    const detail = await teachApi.getInstructorSessionDetail(selectedCohortId, sessId);
+    const detail = await teachApi.getInstructorSessionDetail(targetCohortId, sessId);
+    if (detail.session?.aiSummaryMd !== undefined) {
+      setEditSessionSummary(formatCleanSummaryText(detail.session.aiSummaryMd));
+    }
     if (detail.session?.videoR2Key !== undefined) {
       setVideoInputUrl(detail.session.videoR2Key || '');
     }
@@ -469,6 +562,18 @@ export const InstructorPortalView: React.FC = () => {
         videoR2Key: videoInputUrl.trim(),
         ...(res.session?.status ? { status: res.session.status } : {}),
       });
+      setCohortDetailSessions((prev) =>
+        prev.map((s) =>
+          String(s.id) === String(activeSession.id)
+            ? {
+                ...s,
+                videoR2Key: videoInputUrl.trim(),
+                ...(res.session?.status ? { status: res.session.status } : {}),
+              }
+            : s
+        )
+      );
+      await refetchSchedule();
       setVideoSaveMsg(
         `Đã lưu nguồn video & cập nhật trạng thái Buổi ${activeSession.sessionOrder} lên hệ thống.`
       );
@@ -488,6 +593,11 @@ export const InstructorPortalView: React.FC = () => {
     try {
       await teachApi.updateSessionLiveStatus(targetSessionId, { status: 'LIVE' });
       updateSessionDetails(targetSessionId, { status: 'LIVE' });
+      setCohortDetailSessions((prev) =>
+        prev.map((s) =>
+          String(s.id) === String(targetSessionId) ? { ...s, status: 'LIVE' } : s
+        )
+      );
       await refetchSchedule();
     } catch {
       // Proceed to room where host can also toggle status
@@ -499,6 +609,11 @@ export const InstructorPortalView: React.FC = () => {
     try {
       await teachApi.updateSessionLiveStatus(targetSessionId, { status: 'REPLAY_READY' });
       updateSessionDetails(targetSessionId, { status: 'REPLAY_READY' });
+      setCohortDetailSessions((prev) =>
+        prev.map((s) =>
+          String(s.id) === String(targetSessionId) ? { ...s, status: 'REPLAY_READY' } : s
+        )
+      );
       await refetchSchedule();
     } catch {
       // Ignore error
@@ -530,7 +645,7 @@ export const InstructorPortalView: React.FC = () => {
   // Lưu tóm tắt kiến thức trọng tâm & tải tài liệu cho buổi học (Cấp 3 - Khối 2)
   const handleSaveSessionSummaryAndMaterials = async (e: React.FormEvent) => {
     e.preventDefault();
-    const summaryMd = editSessionSummary.trim() || activeSession.aiSummaryMd;
+    const summaryMd = formatCleanSummaryText(editSessionSummary.trim() || activeSession.aiSummaryMd);
     const matTitle = newMatTitle.trim();
     await teachApi.updateSessionMaterials(activeSession.id, {
       aiSummaryMd: summaryMd,
@@ -539,9 +654,14 @@ export const InstructorPortalView: React.FC = () => {
     updateSessionDetails(activeSession.id, {
       aiSummaryMd: summaryMd,
     });
+    setCohortDetailSessions((prev) =>
+      prev.map((s) =>
+        String(s.id) === String(activeSession.id) ? { ...s, aiSummaryMd: summaryMd } : s
+      )
+    );
     if (matTitle) {
       addCohortMaterial(
-        selectedCohortId,
+        selectedCohort.id,
         activeSession.sessionOrder,
         matTitle,
         newMatType
@@ -899,7 +1019,7 @@ export const InstructorPortalView: React.FC = () => {
               </p>
             </div>
 
-            {/* Thẻ Trạng thái Phòng học Trực tuyến hôm nay (Đồng bộ trạng thái LIVE thật từ Backend) */}
+            {/* Thẻ Trạng thái Phòng học Trực tuyến hôm nay (Đồng bộ trạng thái LIVE & SCHEDULED thật từ Backend) */}
             <div className="bg-white dark:bg-[#111A15] rounded-2xl border-2 border-[#10B981] p-6 space-y-5 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-1.5">
@@ -907,25 +1027,37 @@ export const InstructorPortalView: React.FC = () => {
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#EF4444]/10 text-[#EF4444] text-xs font-bold">
                       <span className="w-2 h-2 rounded-full bg-[#EF4444] animate-pulse" />
                       <span>
-                        ĐANG MỞ PHÒNG TRỰC TUYẾN · BUỔI {activeLiveSession.sessionOrder}
+                        ĐANG MỞ PHÒNG TRỰC TUYẾN · {liveSessionCohort.code} · BUỔI{' '}
+                        {activeLiveSession.sessionOrder}
+                      </span>
+                    </div>
+                  ) : nextScheduledSession ? (
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-xs font-bold">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      <span>
+                        CA DẠY TRỰC TUYẾN SẮP TỚI · {liveSessionCohort.code} · CHƯA DIỄN RA (CHƯA CÓ BẢN GHI)
                       </span>
                     </div>
                   ) : (
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399] text-xs font-bold">
                       <span className="w-2 h-2 rounded-full bg-emerald-500" />
                       <span>
-                        PHÒNG HỌC ĐANG TẮT · SẴN SÀNG MỞ CA DẠY TRỰC TUYẾN
+                        ĐÃ HOÀN THÀNH CÁC CA DẠY TRONG LỊCH · ĐÃ CÓ BẢN GHI VIDEO
                       </span>
                     </div>
                   )}
                   <h2 className="text-lg sm:text-xl font-bold">
-                    Buổi {liveSession.sessionOrder}: {liveSession.title}
+                    {liveSessionCohort.code ? `[${liveSessionCohort.code}] ` : ''}Buổi{' '}
+                    {liveSession.sessionOrder}: {liveSession.title}
                   </h2>
                   <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
-                    Giảng viên phụ trách: {liveSession.hostInstructorName || currentUser?.fullName || 'Giảng viên'} ·{' '}
+                    Lớp: <strong>{liveSessionCohort.name}</strong> · Lịch dự kiến:{' '}
+                    <strong>{formatSessionDateTimeVi(liveSession.scheduledStart)}</strong> ·{' '}
                     {activeLiveSession
-                      ? 'Học viên trong lớp đang thấy phòng Live và có thể vào học ngay'
-                      : 'Khi bấm Bắt đầu buổi học trực tuyến, phòng học sẽ mở cho học viên vào lớp'}
+                      ? 'Học viên trong lớp đang thấy phòng Live và có thể vào học ngay.'
+                      : nextScheduledSession
+                      ? 'Buổi học này chưa diễn ra và chưa có bản ghi video. Khi đến giờ lên lớp, bấm Bắt đầu buổi học trực tuyến để mở phòng.'
+                      : 'Tất cả các buổi học trước đó đã có bản ghi video. Bạn có thể mở lại phòng trực tuyến bổ trợ nếu cần.'}
                   </p>
                 </div>
 
@@ -940,7 +1072,9 @@ export const InstructorPortalView: React.FC = () => {
                     <span>
                       {activeLiveSession
                         ? 'Vào phòng dạy trực tuyến'
-                        : 'Bắt đầu buổi học trực tuyến'}
+                        : nextScheduledSession
+                        ? `Bắt đầu dạy trực tuyến (Buổi ${liveSession.sessionOrder})`
+                        : 'Mở phòng trực tuyến bổ trợ'}
                     </span>
                   </button>
 
@@ -996,41 +1130,102 @@ export const InstructorPortalView: React.FC = () => {
                 </div>
               )}
 
-              {/* Các ca dạy tiếp theo trong tuần */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
-                <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3">
-                  <div className="space-y-1 text-xs">
-                    <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                      Tối Thứ 5 tuần này · 19:30 - 21:30
-                    </div>
-                    <div className="font-bold text-sm">
-                      Lớp Kỹ Sư AI Thực Chiến — Khóa K01 (Buổi 6)
-                    </div>
-                    <div className="text-[#475569] dark:text-[#94A3B8]">
-                      Chủ đề: Xây dựng quy trình tự động kiểm tra chất lượng câu trả lời
-                    </div>
-                  </div>
-                  <span className="px-2.5 py-1 rounded bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold shrink-0">
-                    Sắp tới
+              {/* Các ca dạy sắp tới (đồng bộ 100% từ danh sách buổi học trạng thái SCHEDULED của giảng viên) */}
+              <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                    Danh sách các buổi học sắp diễn ra (Chưa có bản ghi video):
+                  </span>
+                  <span className="text-[#475569] dark:text-[#94A3B8]">
+                    Đồng bộ trực tiếp với tiến độ từng lớp học bên mục Lớp đang phụ trách
                   </span>
                 </div>
 
-                <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3">
-                  <div className="space-y-1 text-xs">
-                    <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                      Tối Thứ 7 tuần này · 19:30 - 21:30
-                    </div>
-                    <div className="font-bold text-sm">
-                      Lớp Kỹ Sư AI Thực Chiến — Khóa K02 (Buổi 2)
-                    </div>
-                    <div className="text-[#475569] dark:text-[#94A3B8]">
-                      Chủ đề: Thiết kế cơ sở dữ liệu phục vụ tìm kiếm tài liệu nội bộ
-                    </div>
+                {upcomingScheduledSessions.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {upcomingScheduledSessions.slice(0, 4).map((upcomingSess) => {
+                      const sessCohort =
+                        effectiveCohorts.find(
+                          (c) => String(c.id) === String(upcomingSess.cohortId)
+                        ) ??
+                        cohorts.find(
+                          (c) => String(c.id) === String(upcomingSess.cohortId)
+                        );
+                      return (
+                        <div
+                          key={upcomingSess.id}
+                          className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 text-xs min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono font-bold px-2 py-0.5 rounded bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399]">
+                                {sessCohort?.code || 'LỚP HỌC'}
+                              </span>
+                              <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                {formatSessionDateTimeVi(upcomingSess.scheduledStart)}
+                              </span>
+                            </div>
+                            <div className="font-bold text-sm text-[#0F172A] dark:text-[#ECFDF5]">
+                              {sessCohort?.name || 'Lớp phụ trách'} — Buổi{' '}
+                              {upcomingSess.sessionOrder}
+                            </div>
+                            <div className="text-[#475569] dark:text-[#94A3B8] line-clamp-1">
+                              Chủ đề: {upcomingSess.title}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="px-2.5 py-1 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px] font-bold">
+                              Chưa diễn ra
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInstructorSidebarTab('MANAGE_COHORTS');
+                                void handleOpenSessionLevel3(
+                                  upcomingSess.id,
+                                  String(upcomingSess.cohortId)
+                                );
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-bold text-[#059669] dark:text-[#34D399] cursor-pointer"
+                            >
+                              Chi tiết →
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <span className="px-2.5 py-1 rounded bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold shrink-0">
-                    Sắp tới
-                  </span>
-                </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {effectiveCohorts.map((c) => {
+                      const cSessions = scopedInstructorSessions.filter(
+                        (s) => String(s.cohortId) === String(c.id)
+                      );
+                      const completedCount = cSessions.filter(
+                        (s) => s.status === 'REPLAY_READY'
+                      ).length;
+                      return (
+                        <div
+                          key={c.id}
+                          className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 text-xs">
+                            <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                              {c.code} · {formatScheduleSlots(c.scheduleSlots)}
+                            </div>
+                            <div className="font-bold text-sm">{c.name}</div>
+                            <div className="text-[#475569] dark:text-[#94A3B8]">
+                              Đã hoàn thành {completedCount}/{cSessions.length || 6} buổi học · Có đầy đủ bản ghi video
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 rounded bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399] text-xs font-bold shrink-0">
+                            Đã có bản ghi
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1136,12 +1331,34 @@ export const InstructorPortalView: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {cohorts.map((cohort) => {
-                    const countSessions =
-                      sessions.filter((s) => s.cohortId === cohort.id).length || 6;
+                  {effectiveCohorts.map((cohort) => {
+                    const cohortSessList = allInstructorSessions.filter(
+                      (s) => String(s.cohortId) === String(cohort.id)
+                    );
+                    const countSessions = cohortSessList.length || 6;
+                    const replayCount = cohortSessList.filter(
+                      (s) => s.status === 'REPLAY_READY'
+                    ).length;
+                    const liveCount = cohortSessList.filter(
+                      (s) => s.status === 'LIVE'
+                    ).length;
+                    const scheduledCount = cohortSessList.filter(
+                      (s) => s.status === 'SCHEDULED'
+                    ).length;
                     const instructorName =
-                      cohort.staff.find((s) => s.role === 'INSTRUCTOR')?.fullName ??
-                      'TS. Trần Minh Khoa';
+                      cohort.staff?.find((s) => s.role === 'INSTRUCTOR')?.fullName ??
+                      currentUser?.fullName ??
+                      'TS. Lê Minh Khoa';
+
+                    const statusDisplay =
+                      liveCount > 0
+                        ? `● Đang mở phòng trực tuyến (${replayCount}/${countSessions} buổi có bản ghi)`
+                        : replayCount > 0 && scheduledCount > 0
+                        ? `● Đang giảng dạy (${replayCount}/${countSessions} buổi có bản ghi · ${scheduledCount} buổi sắp tới)`
+                        : replayCount > 0 && scheduledCount === 0
+                        ? `● Đã hoàn thành (${replayCount}/${countSessions} buổi có bản ghi)`
+                        : `● Sắp khai giảng (${countSessions} buổi chưa diễn ra)`;
+
                     return (
                       <div
                         key={cohort.id}
@@ -1163,7 +1380,10 @@ export const InstructorPortalView: React.FC = () => {
 
                           <div className="space-y-1.5 text-xs text-[#475569] dark:text-[#94A3B8]">
                             <div>
-                              Lịch học cố định: <strong className="text-[#0F172A] dark:text-white">{formatScheduleSlots(cohort.scheduleSlots)}</strong>
+                              Lịch học cố định:{' '}
+                              <strong className="text-[#0F172A] dark:text-white">
+                                {formatScheduleSlots(cohort.scheduleSlots)}
+                              </strong>
                             </div>
                             <div>
                               Khai giảng: <strong>{cohort.startDate}</strong> · Sĩ số:{' '}
@@ -1171,22 +1391,19 @@ export const InstructorPortalView: React.FC = () => {
                               <strong>{countSessions} buổi học</strong>
                             </div>
                             <div>
-                              Giảng viên phụ trách: <strong>{instructorName}</strong> · Hỗ trợ học viên: <strong>Trợ giảng AI 24/7</strong>
+                              Giảng viên phụ trách: <strong>{instructorName}</strong> · Hỗ trợ học viên:{' '}
+                              <strong>Trợ giảng AI 24/7</strong>
                             </div>
                           </div>
                         </div>
 
-                        <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3">
+                        <div className="pt-4 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-3">
                           <span className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
-                            {cohort.status === 'ONGOING'
-                              ? '● Đang giảng dạy'
-                              : cohort.status === 'OPENING'
-                              ? '● Sắp khai giảng'
-                              : '● Đã hoàn thành'}
+                            {statusDisplay}
                           </span>
                           <button
                             type="button"
-                            onClick={() => handleOpenCohortLevel2(cohort.id)}
+                            onClick={() => void handleOpenCohortLevel2(cohort.id)}
                             className="px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer transition-colors"
                           >
                             Vào quản lý lớp học này →
@@ -1216,13 +1433,13 @@ export const InstructorPortalView: React.FC = () => {
                   </button>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {cohorts.map((c) => (
+                    {effectiveCohorts.map((c) => (
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setSelectedCohortId(c.id)}
+                        onClick={() => void handleOpenCohortLevel2(c.id)}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
-                          selectedCohortId === c.id
+                          String(selectedCohort.id) === String(c.id)
                             ? 'bg-[#10B981] text-white'
                             : 'bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24]'
                         }`}
@@ -1248,7 +1465,8 @@ export const InstructorPortalView: React.FC = () => {
                       {selectedCohort.name}
                     </h1>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Lịch học chuẩn của lớp: <strong>{formatScheduleSlots(selectedCohort.scheduleSlots)}</strong> · Sĩ số:{' '}
+                      Lịch học chuẩn của lớp:{' '}
+                      <strong>{formatScheduleSlots(selectedCohort.scheduleSlots)}</strong> · Sĩ số:{' '}
                       <strong>{selectedCohort.enrolledCount} học viên</strong>
                     </p>
                   </div>
@@ -1281,12 +1499,12 @@ export const InstructorPortalView: React.FC = () => {
                             }
                           : sess.status === 'LIVE'
                           ? {
-                              label: 'Hôm nay dạy trực tuyến',
+                              label: 'Đang dạy trực tuyến',
                               cls: 'bg-[#EF4444]/15 text-[#EF4444]',
                             }
                           : {
-                              label: 'Sắp tới',
-                              cls: 'bg-slate-200/70 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8]',
+                              label: 'Sắp tới - Chưa có bản ghi',
+                              cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
                             };
 
                       return (
@@ -1295,9 +1513,10 @@ export const InstructorPortalView: React.FC = () => {
                           className="p-5 rounded-2xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] flex flex-col justify-between gap-4 transition-all"
                         >
                           <div className="space-y-2">
-                            <div className="flex items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                               <span className="font-mono text-xs font-bold text-[#059669] dark:text-[#34D399]">
-                                Buổi {sess.sessionOrder.toString().padStart(2, '0')} · {sess.scheduledStart}
+                                Buổi {sess.sessionOrder.toString().padStart(2, '0')} ·{' '}
+                                {formatSessionDateTimeVi(sess.scheduledStart)}
                               </span>
                               <span
                                 className={`text-[11px] font-bold px-2.5 py-0.5 rounded-md ${statusBadge.cls}`}
@@ -1310,8 +1529,8 @@ export const InstructorPortalView: React.FC = () => {
                               {sess.title}
                             </h3>
 
-                            <p className="text-xs text-[#475569] dark:text-[#94A3B8] line-clamp-2">
-                              {sess.aiSummaryMd}
+                            <p className="text-xs text-[#475569] dark:text-[#94A3B8] line-clamp-2 leading-relaxed">
+                              {formatCleanSummaryText(sess.aiSummaryMd)}
                             </p>
                           </div>
 
@@ -1321,7 +1540,7 @@ export const InstructorPortalView: React.FC = () => {
                             </span>
                             <button
                               type="button"
-                              onClick={() => handleOpenSessionLevel3(sess.id)}
+                              onClick={() => void handleOpenSessionLevel3(sess.id)}
                               className="px-3.5 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white font-bold cursor-pointer transition-colors"
                             >
                               Quản lý chi tiết Buổi {sess.sessionOrder} →
@@ -1653,7 +1872,7 @@ export const InstructorPortalView: React.FC = () => {
                         {selectedCohort.code} · Buổi {activeSession.sessionOrder}
                       </span>
                       <span className="text-xs font-mono text-[#475569] dark:text-[#94A3B8]">
-                        Lịch học cố định: {activeSession.scheduledStart}
+                        Lịch học cố định: {formatSessionDateTimeVi(activeSession.scheduledStart)}
                       </span>
                     </div>
                     <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8] px-2.5 py-1 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
@@ -1796,7 +2015,7 @@ export const InstructorPortalView: React.FC = () => {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="space-y-1">
                           <div className="text-sm font-bold">
-                            Buổi học chưa diễn ra ({activeSession.scheduledStart})
+                            Buổi học chưa diễn ra ({formatSessionDateTimeVi(activeSession.scheduledStart)})
                           </div>
                           <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                             Khi đến giờ lên lớp, bấm nút bên phải để mở phòng học trực tuyến cho học viên tham gia.
@@ -2232,7 +2451,7 @@ export const InstructorPortalView: React.FC = () => {
                 >
                   Tất cả các lớp
                 </button>
-                {cohorts.map((c) => (
+                {effectiveCohorts.map((c) => (
                   <button
                     key={c.id}
                     type="button"
@@ -2356,16 +2575,15 @@ export const InstructorPortalView: React.FC = () => {
            ================================================================== */}
         {instructorSidebarTab === 'CLASS_ANALYTICS' && (() => {
           const currentAnalyticsCohort =
-            cohorts.find((c) => c.id === analyticsCohortId) ??
-            cohorts[0] ??
+            effectiveCohorts.find((c) => String(c.id) === String(analyticsCohortId)) ??
+            effectiveCohorts[0] ??
             selectedCohort;
 
           // 1. Lấy dữ liệu enrollments theo lớp và nhóm riskLevel (LOW / MEDIUM / HIGH)
           const cohortEnrollments = enrollmentsState.filter(
-            (e) => e.cohortId === currentAnalyticsCohort.id
+            (e) => String(e.cohortId) === String(currentAnalyticsCohort.id)
           );
-          const effectiveEnrollments =
-            cohortEnrollments.length > 0 ? cohortEnrollments : enrollmentsState;
+          const effectiveEnrollments = cohortEnrollments;
           const highRiskEnrollments = effectiveEnrollments.filter(
             (e) => e.riskLevel === 'HIGH'
           );
@@ -2375,8 +2593,8 @@ export const InstructorPortalView: React.FC = () => {
           ).length;
           const highRiskCount = highRiskEnrollments.length;
 
-          const analyticsSessions = sessions
-            .filter((s) => s.cohortId === currentAnalyticsCohort.id)
+          const analyticsSessions = allInstructorSessions
+            .filter((s) => String(s.cohortId) === String(currentAnalyticsCohort.id))
             .sort((a, b) => a.sessionOrder - b.sessionOrder);
           const effectiveAnalyticsSessions =
             analyticsSessions.length > 0 ? analyticsSessions : displayCohortSessions;
@@ -2610,7 +2828,7 @@ export const InstructorPortalView: React.FC = () => {
                   <span className="text-xs font-semibold text-[#475569] dark:text-[#94A3B8] mr-1">
                     Chọn lớp phụ trách:
                   </span>
-                  {cohorts.map((cohort) => {
+                  {effectiveCohorts.map((cohort) => {
                     const active = cohort.id === currentAnalyticsCohort.id;
                     return (
                       <button
