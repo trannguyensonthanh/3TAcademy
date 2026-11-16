@@ -4,6 +4,7 @@ import { AcademyProvider, useAcademy } from './context/AcademyContext';
 import { TopNavbar } from './components/TopNavbar';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { SessionPlayerQuizModal } from './components/SessionPlayerQuizModal';
+import { FloatingAdvisorChatWidget } from './components/FloatingAdvisorChatWidget';
 import { HomeView } from './views/HomeView';
 import { CoursesCatalogView } from './views/CoursesCatalogView';
 import { CourseDetailView } from './views/CourseDetailView';
@@ -307,6 +308,7 @@ export default function App() {
         </main>
         <SessionPlayerQuizModal />
         <CommandPaletteModal />
+        <FloatingAdvisorChatWidget />
       </div>
     </AcademyProvider>
   );

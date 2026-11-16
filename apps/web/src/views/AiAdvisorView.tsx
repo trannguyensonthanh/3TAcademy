@@ -6,6 +6,7 @@ import {
   AiTutorCompanionSticker,
   AvatarWithFallback,
 } from '../components/BotanicalStickers';
+import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import { catalogApi } from '../services/catalog.api';
 
 interface AdvisorChatTurn {
@@ -169,7 +170,7 @@ export const AiAdvisorView: React.FC = () => {
                     <span className="font-mono">{msg.timestamp}</span>
                   </div>
 
-                  <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
+                  <FormattedChatMessage text={msg.text} isUser={!isAi} />
 
                   {/* Interactive Embedded Cohort Cards inside AI reply */}
                   {isAi && recCohorts.length > 0 && (

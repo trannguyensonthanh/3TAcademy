@@ -1748,13 +1748,13 @@ export const AdminPortalView: React.FC = () => {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                      SCHEDULE SLOTS BUILDER (`cohorts.schedule_slots` JSONB)
+                      THIẾT LẬP LỊCH HỌC TRONG TUẦN
                     </div>
                     <h3 className="text-sm sm:text-base font-bold mt-0.5">
                       Thiết lập các Ca học trong tuần (Hỗ trợ khung giờ khác nhau cho từng Thứ)
                     </h3>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Chọn Thứ trong tuần, Giờ bắt đầu (<code className="font-mono">startTime</code>) và Giờ kết thúc (<code className="font-mono">endTime</code>) riêng biệt cho từng buổi học.
+                      Chọn Thứ trong tuần, Giờ bắt đầu và Giờ kết thúc riêng biệt cho từng buổi học.
                     </p>
                   </div>
 

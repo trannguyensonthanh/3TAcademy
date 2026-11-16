@@ -2,18 +2,19 @@ import { app } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { db, pool } from './db/index.js';
-import { cohorts, courses, certificates, knowledgeChunks } from './db/schema/index.js';
+import { cohorts, courses, certificates, knowledgeChunks, userProfiles } from './db/schema/index.js';
 import { runSeed } from './db/seed.js';
 import { redis } from './config/redis.js';
 import { getConfiguredSepayWebhookUrls } from './modules/order/order.routes.js';
 
 async function ensureFreshDatabaseSeed() {
   try {
-    const [allCourses, allCohorts, allCerts, allChunks] = await Promise.all([
+    const [allCourses, allCohorts, allCerts, allChunks, allProfiles] = await Promise.all([
       db.select({ id: courses.id }).from(courses),
       db.select().from(cohorts),
       db.select({ id: certificates.id }).from(certificates),
       db.select().from(knowledgeChunks),
+      db.select({ cvParsedData: userProfiles.cvParsedData }).from(userProfiles),
     ]);
 
     const hasLegacyCohorts =
@@ -25,10 +26,23 @@ async function ensureFreshDatabaseSeed() {
       allChunks.length < 10 ||
       allChunks.some((ch) => !Array.isArray(ch.embedding) || ch.embedding.length !== 1024);
 
-    // Also re-seed if legacy duplicate certificates CERT-3T-2026-8892/8893 exist
+    // Also re-seed if legacy duplicate certificates CERT-3T-2026-8892/8893 or legacy pre-baked CV files exist
     const hasLegacySeedCerts = allCerts.length >= 3;
+    const hasLegacyPrebakedStudentCv = allProfiles.some((p) => {
+      const cv = (p.cvParsedData ?? {}) as Record<string, unknown>;
+      return (
+        cv.fileName === 'LeHoangMai_Junior_AIEngineer_CV_2026.pdf' ||
+        cv.fileName === 'NguyenVanAn_Fresher_AIEngineer_CV_2026.pdf'
+      );
+    });
 
-    if (allCourses.length < 4 || hasLegacyCohorts || hasMissingEmbeddings || hasLegacySeedCerts) {
+    if (
+      allCourses.length < 4 ||
+      hasLegacyCohorts ||
+      hasMissingEmbeddings ||
+      hasLegacySeedCerts ||
+      hasLegacyPrebakedStudentCv
+    ) {
       logger.info('Detected legacy or incomplete database seed — running clean minimal 10.000đ + RAG vector re-seed...');
       await runSeed(db);
       logger.info('Clean minimal database re-seed completed successfully.');

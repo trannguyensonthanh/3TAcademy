@@ -379,13 +379,24 @@ export const StudentDashboardView: React.FC = () => {
             {showNotifPopover && (
               <div className="absolute right-0 top-12 w-80 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] shadow-xl p-4 space-y-2.5 text-xs z-30">
                 <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  Thông báo mới của bạn (2)
+                  Thông báo học tập của bạn
                 </div>
-                <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
-                  • Lớp Kỹ Sư AI Khóa K01 đang học trực tuyến Buổi 5 (19:30 - 21:30).
-                </div>
-                <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
-                  • Bạn hiện có {interviewCredits} lượt Luyện phỏng vấn giọng nói 1-1 cùng Senior AI.
+                {liveSession && liveSession.status === 'LIVE' && liveCohort && (
+                  <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-300 font-medium">
+                    • Lớp {liveCohort.code} đang diễn ra ca học trực tuyến: {liveSession.title}.
+                  </div>
+                )}
+                {myEnrolledCohorts.length > 0 ? (
+                  <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
+                    • Bạn đang theo học <strong>{myEnrolledCohorts.length} lớp</strong> ({myEnrolledCohorts.map((c) => c.code).join(', ')}).
+                  </div>
+                ) : (
+                  <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
+                    • Hiện có <strong>{cohorts.filter((c) => c.status === 'OPENING').length} đợt học</strong> đang mở đăng ký với học phí trải nghiệm 10.000đ.
+                  </div>
+                )}
+                <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
+                  • Bạn hiện có <strong>{interviewCredits} lượt</strong> Luyện phỏng vấn giọng nói 1-1 cùng AI.
                 </div>
               </div>
             )}
@@ -409,7 +420,7 @@ export const StudentDashboardView: React.FC = () => {
                       ? 'Bạn chỉ cần làm xong bài tập ngắn (10 câu) bên dưới là hoàn thành buổi học hôm nay rồi nhé.'
                       : myEnrolledCohorts.length > 0 && primaryCohort
                       ? `Bạn đã ghi danh đợt học ${primaryCohort.code}. Hãy xem lộ trình các buổi học và tài liệu chuẩn bị trước giờ mở lớp nhé.`
-                      : 'Bạn hiện chưa ghi danh vào đợt khai giảng nào. Hãy khám phá danh mục khóa học hoặc nhờ Cố vấn AI gợi ý lộ trình phù hợp nhất.'}
+                      : 'Theo dõi tổng quan lộ trình học tập, khám phá các khóa học đang mở đăng ký hoặc luyện phỏng vấn thực chiến.'}
                   </p>
                 </div>
 
@@ -434,45 +445,247 @@ export const StudentDashboardView: React.FC = () => {
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 text-xs font-bold hover:opacity-90 cursor-pointer"
                   >
                     <Mic className="w-3.5 h-3.5 text-[#10B981]" />
-                    <span>Luyện phỏng vấn ({interviewCredits} Credits)</span>
+                    <span>Luyện phỏng vấn ({interviewCredits} lượt)</span>
                   </button>
                 </div>
               </div>
 
-              {/* EMPTY STATE BANNER KHI HỌC VIÊN MỚI CHƯA GHI DANH LỚP NÀO */}
-              {myEnrolledCohorts.length === 0 && (
-                <section
-                  aria-label="Thông báo chưa ghi danh đợt học"
-                  className="rounded-xl bg-white dark:bg-[#111A15] border-2 border-dashed border-[#10B981]/60 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+              {/* TỔNG QUAN HỌC TẬP (4 THẺ KPI THỰC TẾ) */}
+              <section
+                aria-label="Chỉ số tổng quan học tập"
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+              >
+                <div
+                  onClick={() => {
+                    setStudentSidebarTab('MY_COHORTS');
+                    navigate('/app/cohorts');
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setStudentSidebarTab('MY_COHORTS');
+                      navigate('/app/cohorts');
+                    }
+                  }}
+                  className="p-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] transition-colors cursor-pointer space-y-1.5"
                 >
-                  <div className="space-y-1">
-                    <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                      CHƯA CÓ ĐỢT HỌC ĐANG THEO HỌC (`enrollments = 0`)
+                  <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
+                    <span className="font-semibold">Lớp đang theo học</span>
+                    <BookOpen className="w-4 h-4 text-[#10B981]" />
+                  </div>
+                  <div className="text-xl font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5] tabular-nums">
+                    {myEnrolledCohorts.length} lớp
+                  </div>
+                  <div className="text-[11px] text-[#059669] dark:text-[#34D399] truncate">
+                    {myEnrolledCohorts[0]
+                      ? `Đang học: ${myEnrolledCohorts[0].code}`
+                      : 'Chưa ghi danh đợt học nào'}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => {
+                    setStudentSidebarTab('SKILL_MAP');
+                    navigate('/app/progress');
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setStudentSidebarTab('SKILL_MAP');
+                      navigate('/app/progress');
+                    }
+                  }}
+                  className="p-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] transition-colors cursor-pointer space-y-1.5"
+                >
+                  <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
+                    <span className="font-semibold">Tiến độ buổi học</span>
+                    <Compass className="w-4 h-4 text-[#10B981]" />
+                  </div>
+                  <div className="text-xl font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5] tabular-nums">
+                    {sessions.filter((s) => s.isCompleted).length}/{sessions.length} buổi
+                  </div>
+                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate">
+                    {sessions.length > 0
+                      ? `${profileAndSkills.studentSkillStates.length} kỹ năng đã chấm điểm`
+                      : 'Mở khóa ngay sau khi ghi danh'}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => {
+                    setStudentSidebarTab('CERTIFICATES_ORDERS');
+                    navigate('/app/certificates');
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setStudentSidebarTab('CERTIFICATES_ORDERS');
+                      navigate('/app/certificates');
+                    }
+                  }}
+                  className="p-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] transition-colors cursor-pointer space-y-1.5"
+                >
+                  <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
+                    <span className="font-semibold">Chứng chỉ tốt nghiệp</span>
+                    <Award className="w-4 h-4 text-[#10B981]" />
+                  </div>
+                  <div className="text-xl font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5] tabular-nums">
+                    {Object.values(certificates).length} văn bằng
+                  </div>
+                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate">
+                    {Object.values(certificates).length > 0
+                      ? 'Đã xác thực số hiệu trên hệ thống'
+                      : 'Cấp khi hoàn thành khóa học'}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => {
+                    setStudentSidebarTab('MOCK_INTERVIEW');
+                    navigate('/app/mock-interview');
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setStudentSidebarTab('MOCK_INTERVIEW');
+                      navigate('/app/mock-interview');
+                    }
+                  }}
+                  className="p-4 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] transition-colors cursor-pointer space-y-1.5"
+                >
+                  <div className="flex items-center justify-between text-xs text-[#475569] dark:text-[#94A3B8]">
+                    <span className="font-semibold">Luyện phỏng vấn 1-1</span>
+                    <Mic className="w-4 h-4 text-[#10B981]" />
+                  </div>
+                  <div className="text-xl font-mono font-bold text-[#059669] dark:text-[#34D399] tabular-nums">
+                    {interviewCredits} lượt
+                  </div>
+                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate">
+                    Phỏng vấn giọng nói cùng AI
+                  </div>
+                </div>
+              </section>
+
+              {/* KHI HỌC VIÊN CHƯA GHI DANH LỚP NÀO: BẢNG ĐIỀU KHIỂN KHỞI ĐẦU & GỢI Ý KHÓA ĐANG MỞ */}
+              {myEnrolledCohorts.length === 0 && (
+                <div className="space-y-6">
+                  <section
+                    aria-label="Thông báo chưa ghi danh đợt học"
+                    className="rounded-2xl bg-gradient-to-br from-[#F7FBF9] to-[#E6F7EF]/60 dark:from-[#111A15] dark:to-[#0D281D]/50 border border-[#10B981]/40 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-5"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#10B981]/15 text-[#059669] dark:text-[#34D399] text-xs font-bold">
+                        <span>Bắt đầu hành trình học tập tại 3T Academy</span>
+                      </div>
+                      <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                        Bạn chưa đăng ký lớp học nào đang diễn ra
+                      </h2>
+                      <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] max-w-2xl leading-relaxed">
+                        Chọn một đợt học phù hợp với lịch cá nhân và hoàn tất học phí qua mã VietQR để mở khóa ngay phòng học trực tuyến, video bài giảng, trợ giảng AI và hệ thống bài tập thực hành.
+                      </p>
                     </div>
-                    <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                      Ghi danh khóa học đầu tiên để mở khóa phòng học Video, Livestream &amp; Bài tập
-                    </h2>
-                    <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Chọn đợt học phù hợp lịch cá nhân và thanh toán học phí qua VietQR để kích hoạt tài khoản học viên chính thức ngay lập tức.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => navigate('/courses')}
-                      className="px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                    >
-                      Khám phá Khóa học &amp; Ghi danh →
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate('/advisor')}
-                      className="px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
-                    >
-                      Nhờ AI Tư vấn Lộ trình
-                    </button>
-                  </div>
-                </section>
+                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => navigate('/courses')}
+                        className="px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer shadow-xs"
+                      >
+                        Khám phá các khóa học →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/advisor')}
+                        className="px-4 py-2.5 rounded-xl bg-white dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
+                      >
+                        Nhờ AI Tư vấn Lộ trình
+                      </button>
+                    </div>
+                  </section>
+
+                  {/* DANH SÁCH ĐỢT HỌC ĐANG MỞ ĐĂNG KÝ NGAY TRÊN DASHBOARD */}
+                  <section
+                    aria-label="Các đợt học đang mở đăng ký"
+                    className="rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Các đợt học đang mở đăng ký ({cohorts.filter((c) => c.status === 'OPENING').length} lớp)
+                        </h2>
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                          Lịch học trực tuyến buổi tối cùng giảng viên thực chiến — Học phí ưu đãi trải nghiệm hệ thống.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/courses')}
+                        className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
+                      >
+                        Xem tất cả khóa học →
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {cohorts
+                        .filter((c) => c.status === 'OPENING')
+                        .slice(0, 4)
+                        .map((ch) => {
+                          const course = courses.find((cr) => String(cr.id) === String(ch.courseId));
+                          return (
+                            <div
+                              key={ch.id}
+                              className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] transition-colors flex flex-col justify-between space-y-3"
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                    {ch.code}
+                                  </span>
+                                  <span className="font-mono font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                    {formatVnd(ch.tuitionVnd)}
+                                  </span>
+                                </div>
+                                <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                  {course?.title ?? ch.name}
+                                </div>
+                                <div className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                                  Khai giảng: {ch.startDate} · Lịch học: {formatScheduleSlots(ch.scheduleSlots)}
+                                </div>
+                              </div>
+
+                              <div className="pt-2.5 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-2">
+                                <span className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate">
+                                  GV: {ch.staff[0]?.fullName || 'Giảng viên 3T Academy'}
+                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {course?.slug && (
+                                    <button
+                                      type="button"
+                                      onClick={() => navigate(`/courses/${course.slug}`)}
+                                      className="px-3 py-1.5 rounded-lg border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
+                                    >
+                                      Chi tiết
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(`/checkout/${ch.code}`)}
+                                    className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+                                  >
+                                    Ghi danh ngay
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </section>
+                </div>
               )}
 
               {/* BLOCK 1: LIVE EVENT BANNER (CHỈ HIỂN THỊ KHI GIẢNG VIÊN ĐANG BẬT LIVE) */}
@@ -683,79 +896,92 @@ export const StudentDashboardView: React.FC = () => {
                       Làm xong bài tập ngắn sau mỗi buổi giúp bạn nắm chắc kiến thức và nhận huy hiệu hoàn thành buổi học.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(primaryCohort ? `/app/cohorts/${primaryCohort.id}` : '/courses')
-                    }
-                    className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
-                  >
-                    Xem toàn bộ bài tập →
-                  </button>
+                  {primaryCohort && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/app/cohorts/${primaryCohort.id}`)}
+                      className="text-xs font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
+                    >
+                      Xem toàn bộ bài tập →
+                    </button>
+                  )}
                 </div>
 
-                <div className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
-                  {effectiveUpcomingTasks.slice(0, 4).map((task) => {
-                    const urgencyStyles =
-                      task.urgency === 'SAFE'
-                        ? {
-                            text: 'text-[#10B981]',
-                            bg: 'bg-[#D1FAE5]/70 dark:bg-emerald-950/80',
-                            icon: CheckCircle2,
-                          }
-                        : task.urgency === 'WARNING'
-                        ? {
-                            text: 'text-[#F59E0B]',
-                            bg: 'bg-amber-500/10',
-                            icon: Clock,
-                          }
-                        : {
-                            text: 'text-[#EF4444]',
-                            bg: 'bg-red-500/10',
-                            icon: AlertTriangle,
-                          };
-                    const StatusIcon = urgencyStyles.icon;
+                {effectiveUpcomingTasks.length === 0 ? (
+                  <div className="p-6 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-1.5">
+                    <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Chưa có bài tập hoặc kỳ thi nào cần làm ngay
+                    </div>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto">
+                      {myEnrolledCohorts.length === 0
+                        ? 'Sau khi bạn đăng ký một lớp học, danh sách bài tập trắc nghiệm cuối mỗi buổi (10 câu) và kỳ thi cuối khóa sẽ hiển thị tại đây.'
+                        : 'Các bài tập trắc nghiệm sẽ tự động mở khóa ngay sau khi buổi học trực tuyến kết thúc hoặc khi có video xem lại.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
+                    {effectiveUpcomingTasks.slice(0, 4).map((task) => {
+                      const urgencyStyles =
+                        task.urgency === 'SAFE'
+                          ? {
+                              text: 'text-[#10B981]',
+                              bg: 'bg-[#D1FAE5]/70 dark:bg-emerald-950/80',
+                              icon: CheckCircle2,
+                            }
+                          : task.urgency === 'WARNING'
+                          ? {
+                              text: 'text-[#F59E0B]',
+                              bg: 'bg-amber-500/10',
+                              icon: Clock,
+                            }
+                          : {
+                              text: 'text-[#EF4444]',
+                              bg: 'bg-red-500/10',
+                              icon: AlertTriangle,
+                            };
+                      const StatusIcon = urgencyStyles.icon;
 
-                    return (
-                      <div
-                        key={task.id}
-                        className="py-4 first:pt-1 last:pb-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1 min-w-0">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="font-semibold text-[#059669] dark:text-[#34D399]">
-                              {task.cohortCode || primaryCohort?.name || 'Lớp đang theo học'}
-                            </span>
-                            <span className="text-[#475569] dark:text-[#94A3B8]">·</span>
-                            <span className="text-[#475569] dark:text-[#94A3B8]">
-                              {task.statusLabel}
-                            </span>
+                      return (
+                        <div
+                          key={task.id}
+                          className="py-4 first:pt-1 last:pb-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="font-semibold text-[#059669] dark:text-[#34D399]">
+                                {task.cohortCode || primaryCohort?.name || 'Lớp đang theo học'}
+                              </span>
+                              <span className="text-[#475569] dark:text-[#94A3B8]">·</span>
+                              <span className="text-[#475569] dark:text-[#94A3B8]">
+                                {task.statusLabel}
+                              </span>
+                            </div>
+                            <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                              {task.title}
+                            </div>
                           </div>
-                          <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                            {task.title}
+
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md font-mono text-xs font-bold ${urgencyStyles.bg} ${urgencyStyles.text}`}
+                            >
+                              <StatusIcon className="w-3.5 h-3.5" />
+                              <span>{task.dueText}</span>
+                            </span>
+
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/app/assessments/${task.sessionId}`)}
+                              className="px-3.5 py-2 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
+                            >
+                              Làm bài ngay
+                            </button>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md font-mono text-xs font-bold ${urgencyStyles.bg} ${urgencyStyles.text}`}
-                          >
-                            <StatusIcon className="w-3.5 h-3.5" />
-                            <span>{task.dueText}</span>
-                          </span>
-
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/app/assessments/${task.sessionId}`)}
-                            className="px-3.5 py-2 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
-                          >
-                            Làm bài ngay
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
             </div>
           )}
@@ -852,21 +1078,29 @@ export const StudentDashboardView: React.FC = () => {
             </div>
           )}
 
-          {/* SIDEBAR SUB-VIEW: SKILL_MAP (/app/progress) — ĐỘC QUYỀN HỆ THỐNG BIỂU ĐỒ PHÂN TÍCH KỸ NĂNG & TIẾN ĐỘ HỌC VIÊN */}
+          {/* SIDEBAR SUB-VIEW: SKILL_MAP (/app/progress) — HỆ THỐNG BIỂU ĐỒ PHÂN TÍCH KỸ NĂNG & TIẾN ĐỘ HỌC VIÊN */}
           {studentSidebarTab === 'SKILL_MAP' && (() => {
             const skillStates = profileAndSkills.studentSkillStates;
-            const lowestSkill =
-              [...skillStates].sort(
-                (a, b) => (a.masteryScore ?? a.score) - (b.masteryScore ?? b.score)
-              )[0] ?? skillStates[0];
-            const lowestScore = lowestSkill ? lowestSkill.masteryScore ?? lowestSkill.score : 76;
-            const lowestEvidence = lowestSkill ? lowestSkill.evidenceCount ?? 3 : 3;
+            const hasEnrolled = myEnrolledCohorts.length > 0;
+            const hasSkills = skillStates.length > 0;
+
+            const lowestSkill = hasSkills
+              ? [...skillStates].sort(
+                  (a, b) => (a.masteryScore ?? a.score) - (b.masteryScore ?? b.score)
+                )[0]
+              : undefined;
+            const lowestScore = lowestSkill ? lowestSkill.masteryScore ?? lowestSkill.score : 0;
+            const lowestEvidence = lowestSkill ? lowestSkill.evidenceCount ?? 1 : 0;
+
+            const scoredSessions = sessions.filter(
+              (s) => typeof s.quizScore === 'number' && s.quizScore > 0
+            );
 
             const sessionAttemptTrend =
               dashboardSummary.attemptTrend && dashboardSummary.attemptTrend.length > 0
                 ? dashboardSummary.attemptTrend
-                : sessions.slice(0, 5).map((s) => {
-                    const val = typeof s.quizScore === 'number' ? s.quizScore : 0;
+                : scoredSessions.map((s) => {
+                    const val = s.quizScore ?? 0;
                     return {
                       label: `Buổi ${s.sessionOrder}`,
                       subLabel: s.title.slice(0, 18),
@@ -875,7 +1109,27 @@ export const StudentDashboardView: React.FC = () => {
                     };
                   });
 
-            const totalSessionsCount = Math.max(1, sessions.length);
+            const hasQuizTrend = sessionAttemptTrend.length > 0;
+            const passedTrendCount = sessionAttemptTrend.filter((d) => d.value >= 70).length;
+            const highestTrendItem = hasQuizTrend
+              ? [...sessionAttemptTrend].sort((a, b) => b.value - a.value)[0]
+              : undefined;
+
+            const avgSkillScore = hasSkills
+              ? Math.round(
+                  skillStates.reduce((acc, s) => acc + (s.masteryScore ?? s.score ?? 0), 0) /
+                    skillStates.length
+                )
+              : null;
+
+            const avgQuizPct = hasQuizTrend
+              ? Math.round(
+                  sessionAttemptTrend.reduce((acc, item) => acc + item.value, 0) /
+                    sessionAttemptTrend.length
+                )
+              : avgSkillScore;
+
+            const totalSessionsCount = sessions.length;
             const completedSessionsCount = sessions.filter((s) => s.isCompleted).length;
             const liveSessionsCount = sessions.filter(
               (s) => s.status === 'LIVE' && !s.isCompleted
@@ -884,30 +1138,37 @@ export const StudentDashboardView: React.FC = () => {
               0,
               totalSessionsCount - completedSessionsCount - liveSessionsCount
             );
+            const completionRatioPct =
+              totalSessionsCount > 0
+                ? Math.round((completedSessionsCount / totalSessionsCount) * 100)
+                : 0;
 
-            const completionSegments = [
-              {
-                label: 'Hoàn thành đúng hạn & Đạt >= 80%',
-                value: completedSessionsCount,
-                countText: `${completedSessionsCount}/${totalSessionsCount} buổi học`,
-                color: '#10B981',
-                description: 'Đã xem hết video bài giảng và vượt qua bài trắc nghiệm mở khóa.',
-              },
-              {
-                label: 'Đang học trực tuyến tối nay',
-                value: liveSessionsCount,
-                countText: `${liveSessionsCount}/${totalSessionsCount} buổi học`,
-                color: '#0EA5E9',
-                description: 'Đang tham gia ca học Live và hoàn thành câu hỏi kiểm tra.',
-              },
-              {
-                label: 'Sắp mở khóa & Thi cuối khóa',
-                value: remainingSessionsCount,
-                countText: `${remainingSessionsCount}/${totalSessionsCount} buổi học`,
-                color: '#F59E0B',
-                description: 'Mở khóa tuần tự ngay sau khi hoàn thành buổi học trước.',
-              },
-            ];
+            const completionSegments =
+              totalSessionsCount > 0
+                ? [
+                    {
+                      label: 'Đã hoàn thành buổi học & Bài tập',
+                      value: completedSessionsCount,
+                      countText: `${completedSessionsCount}/${totalSessionsCount} buổi học`,
+                      color: '#10B981',
+                      description: 'Đã xem video bài giảng và vượt qua bài kiểm tra cuối buổi.',
+                    },
+                    {
+                      label: 'Đang diễn ra trực tuyến',
+                      value: liveSessionsCount,
+                      countText: `${liveSessionsCount}/${totalSessionsCount} buổi học`,
+                      color: '#0EA5E9',
+                      description: 'Đang tham gia ca học trực tuyến cùng giảng viên.',
+                    },
+                    {
+                      label: 'Chưa hoàn thành / Sắp mở lớp',
+                      value: remainingSessionsCount,
+                      countText: `${remainingSessionsCount}/${totalSessionsCount} buổi học`,
+                      color: '#F59E0B',
+                      description: 'Các buổi học tiếp theo trong lộ trình lớp học của bạn.',
+                    },
+                  ]
+                : [];
 
             return (
               <div className="space-y-6">
@@ -918,16 +1179,18 @@ export const StudentDashboardView: React.FC = () => {
                       Kỹ Năng &amp; Tiến Độ Học Tập Của Bạn
                     </h1>
                     <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
-                      Phân tích trực quan mức độ thành thạo kỹ năng (`student_skill_states`) và xu hướng điểm kiểm tra (`assessment_attempts`) qua từng buổi học.
+                      Theo dõi trực quan mức độ thành thạo từng kỹ năng chuyên môn và kết quả làm bài kiểm tra qua các buổi học thực tế.
                     </p>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0 font-mono text-xs">
+                  <div className="flex flex-wrap items-center gap-3 shrink-0 font-mono text-xs">
                     <div className="px-3.5 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
                       <span className="text-[#475569] dark:text-[#94A3B8]">Điểm TB kiểm tra: </span>
-                      <strong className="text-[#059669] dark:text-[#34D399] tabular-nums">84.2%</strong>
+                      <strong className="text-[#059669] dark:text-[#34D399] tabular-nums">
+                        {avgQuizPct !== null ? `${avgQuizPct}%` : 'Chưa có'}
+                      </strong>
                     </div>
                     <div className="px-3.5 py-2 rounded-xl bg-[#D1FAE5]/70 dark:bg-emerald-950/80 text-[#065F46] dark:text-emerald-300 font-bold tabular-nums">
-                      Độ chính xác MCQ: 88%
+                      Kỹ năng đã chấm: {skillStates.length}
                     </div>
                   </div>
                 </div>
@@ -939,17 +1202,19 @@ export const StudentDashboardView: React.FC = () => {
                     <div className="space-y-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                          ĐA GIÁC NĂNG LỰC KỸ NĂNG ĐÀO TẠO
+                          BIỂU ĐỒ NĂNG LỰC CHUYÊN MÔN
                         </span>
-                        <span className="text-[11px] font-mono text-[#475569] dark:text-[#94A3B8]">
-                          Di chuột vào đỉnh để xem chi tiết
-                        </span>
+                        {hasSkills && (
+                          <span className="text-[11px] font-mono text-[#475569] dark:text-[#94A3B8]">
+                            Di chuột vào đỉnh để xem chi tiết
+                          </span>
+                        )}
                       </div>
                       <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
                         Điểm thành thạo kỹ năng thuộc khóa đang học
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        Tổng hợp từ <code className="font-mono">student_skill_states.mastery_score</code> và số bài kiểm tra minh chứng (<code className="font-mono">evidence_count</code>).
+                        Tổng hợp tự động từ điểm số các bài kiểm tra trắc nghiệm cuối buổi học và bài thi cuối khóa của bạn.
                       </p>
                     </div>
 
@@ -957,10 +1222,8 @@ export const StudentDashboardView: React.FC = () => {
                       skills={skillStates.slice(0, 6).map((sk) => ({
                         code: sk.code,
                         name: sk.name,
-                        shortLabel: sk.name,
                         masteryScore: sk.masteryScore ?? sk.score,
-                        evidenceCount: sk.evidenceCount ?? 4,
-                        sourceLabel: sk.sourceLabel,
+                        evidenceCount: sk.evidenceCount ?? 1,
                       }))}
                     />
                   </div>
@@ -977,114 +1240,178 @@ export const StudentDashboardView: React.FC = () => {
                         </span>
                       </div>
                       <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Biểu đồ điểm số qua các buổi học (`score_pct`)
+                        Biểu đồ điểm số qua các buổi học
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                         Theo dõi kết quả làm bài kiểm tra mở khóa cuối mỗi buổi học so với mốc chuẩn 70% của học viện.
                       </p>
                     </div>
 
-                    <SmoothAreaLineChart
-                      data={sessionAttemptTrend}
-                      thresholdValue={70}
-                      thresholdLabel="Mốc đạt chuẩn 70%"
-                      unit="%"
-                      primarySeriesLabel="Điểm kiểm tra (score_pct)"
-                    />
+                    {!hasQuizTrend ? (
+                      <div className="w-full py-10 px-4 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] flex flex-col items-center justify-center text-center space-y-2.5 my-auto">
+                        <div className="w-11 h-11 rounded-full bg-[#E6F7EF] dark:bg-[#0D281D] flex items-center justify-center text-[#059669] dark:text-[#34D399]">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </div>
+                        <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Chưa có lịch sử làm bài kiểm tra
+                        </div>
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-sm leading-relaxed">
+                          Khi bạn hoàn thành bài kiểm tra 10 câu cuối mỗi buổi học, biểu đồ xu hướng điểm số sẽ được cập nhật tại đây.
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <SmoothAreaLineChart
+                          data={sessionAttemptTrend}
+                          thresholdValue={70}
+                          thresholdLabel="Mốc đạt chuẩn 70%"
+                          unit="%"
+                          primarySeriesLabel="Điểm bài kiểm tra"
+                        />
 
-                    <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
-                      <span>Tất cả 5/5 buổi đã làm đều vượt mốc chuẩn 70%.</span>
-                      <span className="font-mono font-bold text-[#059669] dark:text-[#34D399] tabular-nums">
-                        Cao nhất: 90% (Buổi 3 &amp; Buổi 4)
-                      </span>
-                    </div>
+                        <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
+                          <span>
+                            Đã vượt mốc chuẩn 70%: <strong>{passedTrendCount}/{sessionAttemptTrend.length}</strong> bài kiểm tra.
+                          </span>
+                          {highestTrendItem && (
+                            <span className="font-mono font-bold text-[#059669] dark:text-[#34D399] tabular-nums">
+                              Cao nhất: {highestTrendItem.value}% ({highestTrendItem.label})
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 {/* HÀNG 2: BIỂU ĐỒ VÒNG TRÒN TỶ LỆ HOÀN THÀNH + THẺ KHUYẾN NGHỊ ÔN TẬP TỪ AI */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-                  {/* Biểu đồ Vòng tròn Tỷ lệ Hoàn thành Buổi học & Độ chính xác Trắc nghiệm */}
+                  {/* Biểu đồ Vòng tròn Tỷ lệ Hoàn thành Buổi học */}
                   <div className="lg:col-span-7 rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-5">
                     <div className="space-y-1">
                       <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        TỶ LỆ HOÀN THÀNH BUỔI HỌC &amp; ĐỘ CHÍNH XÁC TRẮC NGHIỆM
+                        TỶ LỆ HOÀN THÀNH LỘ TRÌNH LỚP HỌC
                       </div>
                       <h2 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Tiến độ hoàn thành lộ trình Khóa K01
+                        {primaryCohort
+                          ? `Tiến độ hoàn thành lộ trình ${primaryCohort.code}`
+                          : 'Tiến độ hoàn thành các buổi học'}
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        Di chuột vào từng phần trên vòng tròn để xem số buổi học và tỷ lệ hoàn thành tương ứng.
+                        Thống kê số buổi học đã hoàn thành dựa trên tiến độ xem video bài giảng và làm bài kiểm tra thực tế.
                       </p>
                     </div>
 
-                    <DonutGaugeChart
-                      segments={completionSegments}
-                      centerLabel="Độ chính xác MCQ"
-                      centerValue="88%"
-                      centerSubtext="44/50 câu đúng"
-                    />
+                    {!hasEnrolled || totalSessionsCount === 0 ? (
+                      <div className="w-full py-10 px-4 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] flex flex-col items-center justify-center text-center space-y-3 my-auto">
+                        <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Bạn chưa ghi danh vào đợt học nào
+                        </div>
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md leading-relaxed">
+                          Tỷ lệ hoàn thành buổi học và độ chính xác trắc nghiệm chỉ được tính khi bạn đã đăng ký khóa học và bắt đầu tham gia các buổi học.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => navigate('/courses')}
+                          className="px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
+                        >
+                          Xem các khóa học đang mở →
+                        </button>
+                      </div>
+                    ) : (
+                      <DonutGaugeChart
+                        segments={completionSegments}
+                        centerLabel="Hoàn thành"
+                        centerValue={`${completionRatioPct}%`}
+                        centerSubtext={`${completedSessionsCount}/${totalSessionsCount} buổi học`}
+                      />
+                    )}
                   </div>
 
-                  {/* Thẻ Khuyến nghị Ôn tập từ AI (chỉ ra kỹ năng đang có điểm thấp nhất cần củng cố) */}
-                  <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#111A15] border border-[#10B981] p-6 flex flex-col justify-between space-y-4">
+                  {/* Thẻ Khuyến nghị Ôn tập từ AI */}
+                  <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4">
                     <div className="space-y-3">
                       <div className="inline-flex items-center gap-2 text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        <span>KHUYẾN NGHỊ ÔN TẬP TỪ AI · CỦNG CỐ KỸ NĂNG THẤP NHẤT</span>
+                        <span>KHUYẾN NGHỊ ÔN TẬP TỪ HỆ THỐNG</span>
                       </div>
 
-                      <h3 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Cần ưu tiên củng cố: {lowestSkill?.name} ({lowestScore}/100)
-                      </h3>
-
-                      <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                        Hệ thống nhận thấy kỹ năng <strong>{lowestSkill?.name}</strong> (<code className="font-mono">{lowestSkill?.code}</code>) hiện có điểm thấp nhất trong nhóm kỹ năng khóa học ({lowestScore}/100 qua {lowestEvidence} bài kiểm tra). Ở bài kiểm tra gần nhất, bạn chọn nhầm phương án xử lý phân quyền truy cập tài liệu theo phòng ban trước khi trả kết quả tìm kiếm.
-                      </p>
-
-                      <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-1.5 text-xs">
-                        <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                          Lộ trình ôn tập 15 phút được đề xuất:
+                      {!lowestSkill ? (
+                        <div className="py-8 px-4 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-2.5">
+                          <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                            Chưa có khuyến nghị ôn tập cá nhân hóa
+                          </div>
+                          <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                            Hệ thống sẽ phân tích các câu trả lời trắc nghiệm của bạn sau từng buổi học để chỉ ra kỹ năng cần ưu tiên củng cố và đoạn video bài giảng nên xem lại.
+                          </p>
+                          <div className="pt-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                navigate(
+                                  primaryCohort ? `/app/cohorts/${primaryCohort.id}` : '/courses'
+                                )
+                              }
+                              className="px-4 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
+                            >
+                              {primaryCohort ? 'Mở không gian lớp học →' : 'Tìm hiểu lộ trình học →'}
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-[#475569] dark:text-[#94A3B8]">
-                          1. Xem lại <strong>Buổi 4 — Phút 14:20 đến 18:45</strong> (Slide Trang 12: Kiểm soát phân quyền SQL).
-                        </div>
-                        <div className="text-[#475569] dark:text-[#94A3B8]">
-                          2. Làm lại bài tập trắc nghiệm Buổi 4 để nâng điểm kỹ năng này lên trên <strong>85/100</strong> trước kỳ thi cuối khóa.
-                        </div>
-                      </div>
-                    </div>
+                      ) : (
+                        <>
+                          <h3 className="text-base sm:text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                            Cần ưu tiên củng cố: {lowestSkill.name} ({lowestScore}/100)
+                          </h3>
 
-                    <div className="flex flex-wrap items-center gap-2.5 pt-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate(
-                            primaryCohort && resumeSession
-                              ? `/app/cohorts/${resumeSession.cohortId || primaryCohort.id}/sessions/${resumeSession.id}`
-                              : primaryCohort
-                              ? `/app/cohorts/${primaryCohort.id}`
-                              : '/courses'
-                          )
-                        }
-                        className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer transition-colors"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Ôn lại đoạn video Buổi {resumeSession?.sessionOrder ?? 1} ngay</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate(
-                            resumeSession
-                              ? `/app/assessments/${resumeSession.id}`
-                              : primaryCohort
-                              ? `/app/cohorts/${primaryCohort.id}`
-                              : '/courses'
-                          )
-                        }
-                        className="px-3.5 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
-                      >
-                        Làm lại bài kiểm tra
-                      </button>
+                          <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                            Hệ thống ghi nhận kỹ năng <strong>{lowestSkill.name}</strong> hiện có điểm thành thạo <strong>{lowestScore}/100</strong> (qua {lowestEvidence} bài kiểm tra minh chứng). Bạn nên ôn tập lại kiến thức trọng tâm của kỹ năng này để nâng điểm số lên mốc chuẩn tốt nghiệp 80/100.
+                          </p>
+
+                          <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-1.5 text-xs">
+                            <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                              Gợi ý hành động tiếp theo:
+                            </div>
+                            <div className="text-[#475569] dark:text-[#94A3B8]">
+                              1. Xem lại video bài giảng và tài liệu đính kèm của buổi học liên quan đến kỹ năng <strong>{lowestSkill.name}</strong>.
+                            </div>
+                            <div className="text-[#475569] dark:text-[#94A3B8]">
+                              2. Thực hiện lại bài kiểm tra trắc nghiệm cuối buổi để cải thiện mức độ thành thạo.
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2.5 pt-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                navigate(
+                                  primaryCohort && resumeSession
+                                    ? `/app/cohorts/${resumeSession.cohortId || primaryCohort.id}/sessions/${resumeSession.id}`
+                                    : primaryCohort
+                                    ? `/app/cohorts/${primaryCohort.id}`
+                                    : '/courses'
+                                )
+                              }
+                              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer transition-colors"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>
+                                {resumeSession
+                                  ? `Ôn lại bài giảng Buổi ${resumeSession.sessionOrder}`
+                                  : 'Vào lớp học ôn tập'}
+                              </span>
+                            </button>
+                            {resumeSession && (
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/app/assessments/${resumeSession.id}`)}
+                                className="px-3.5 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
+                              >
+                                Làm lại bài kiểm tra
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1095,82 +1422,114 @@ export const StudentDashboardView: React.FC = () => {
                   <div className="lg:col-span-7 rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
                     <div className="space-y-1">
                       <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        CHI TIẾT ĐIỂM KỸ NĂNG KHÓA HỌC ĐÃ ĐĂNG KÝ (KHÓA K01 &amp; KHÓA K04)
+                        CHI TIẾT ĐIỂM KỸ NĂNG ĐÀO TẠO TẠI HỌC VIỆN
                       </div>
                       <h2 className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
                         Bảng điểm kỹ năng đào tạo tại Học viện ({skillStates.length} kỹ năng)
                       </h2>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                      {skillStates.map((sk) => {
-                        const sc = sk.masteryScore ?? sk.score;
-                        const ev = sk.evidenceCount ?? 4;
-                        return (
-                          <div
-                            key={sk.code}
-                            className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs sm:text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                                {sk.name}
-                              </span>
-                              <span className="font-mono text-xs font-bold tabular-nums text-[#059669] dark:text-[#34D399]">
-                                {sc}/100
-                              </span>
+                    {skillStates.length === 0 ? (
+                      <div className="p-6 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-2">
+                        <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Chưa có kỹ năng nào được chấm điểm
+                        </div>
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto leading-relaxed">
+                          Điểm kỹ năng đào tạo sẽ tự động xuất hiện tại đây sau khi bạn đăng ký khóa học và hoàn thành các bài kiểm tra trắc nghiệm.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        {skillStates.map((sk) => {
+                          const sc = sk.masteryScore ?? sk.score;
+                          const ev = sk.evidenceCount ?? 1;
+                          return (
+                            <div
+                              key={sk.code}
+                              className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs sm:text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                  {sk.name}
+                                </span>
+                                <span className="font-mono text-xs font-bold tabular-nums text-[#059669] dark:text-[#34D399]">
+                                  {sc}/100
+                                </span>
+                              </div>
+                              <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                                <div
+                                  className="h-full bg-[#10B981] rounded-full"
+                                  style={{ width: `${sc}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                <span>{sk.sourceLabel}</span>
+                                <span className="font-mono tabular-nums">
+                                  {ev} bài kiểm tra
+                                </span>
+                              </div>
                             </div>
-                            <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                              <div
-                                className="h-full bg-[#10B981] rounded-full"
-                                style={{ width: `${sc}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                              <span>{sk.sourceLabel}</span>
-                              <span className="font-mono tabular-nums">
-                                {ev} minh chứng
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Cột phải: Danh sách thẻ kỹ năng từ CV cá nhân */}
                   <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
                     <div className="space-y-1">
                       <div className="text-xs font-mono font-bold text-[#475569] dark:text-[#94A3B8]">
-                        TRÍCH XUẤT TỪ CV CÁ NHÂN · KHÔNG TỰ CHẤM ĐIỂM %
+                        TRÍCH XUẤT TỪ HỒ SƠ CÁ NHÂN
                       </div>
                       <h2 className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                        Kỹ năng &amp; Công nghệ khác ghi nhận từ CV của bạn
+                        Kỹ năng &amp; Công nghệ ghi nhận từ CV của bạn
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        Được đồng bộ tự động từ hồ sơ CV sang Phòng Luyện Phỏng Vấn để câu hỏi sát với kinh nghiệm thực tế của bạn.
+                        Được đồng bộ từ hồ sơ CV sang Phòng Luyện Phỏng Vấn để câu hỏi sát với kinh nghiệm thực tế của bạn.
                       </p>
                     </div>
 
-                    <div className="space-y-2.5">
-                      {profileAndSkills.externalCvSkills.map((ext) => (
-                        <div
-                          key={ext.name}
-                          className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col justify-between gap-1"
+                    {profileAndSkills.externalCvSkills.length === 0 ? (
+                      <div className="p-6 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-3">
+                        <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          Chưa có kỹ năng nào được trích xuất từ CV
+                        </div>
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                          Hãy tải file CV PDF hoặc bổ sung kỹ năng trong mục Hồ sơ của tôi để đồng bộ sang Phòng Luyện Phỏng Vấn.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStudentSidebarTab('PROFILE_CV');
+                            navigate('/app/profile-cv');
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#059669] dark:text-[#34D399] cursor-pointer"
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs sm:text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                              {ext.name}
-                            </span>
-                            <span className="text-[11px] font-mono text-[#059669] dark:text-[#34D399]">
-                              Từ CV của bạn
+                          Cập nhật Hồ sơ &amp; CV →
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {profileAndSkills.externalCvSkills.map((ext) => (
+                          <div
+                            key={ext.name}
+                            className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col justify-between gap-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs sm:text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                {ext.name}
+                              </span>
+                              <span className="text-[11px] font-mono text-[#059669] dark:text-[#34D399]">
+                                Từ CV của bạn
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                              {ext.note}
                             </span>
                           </div>
-                          <span className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                            {ext.note}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1247,8 +1606,18 @@ export const StudentDashboardView: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="space-y-4">
-                  {Object.values(certificates).map((c) => {
+                {Object.values(certificates).length === 0 ? (
+                  <div className="p-6 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-2">
+                    <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Chưa có bằng chứng nhận tốt nghiệp nào
+                    </div>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto">
+                      Sau khi bạn hoàn thành các buổi học và vượt qua kỳ thi cuối khóa, bằng chứng nhận tốt nghiệp sẽ được cấp tự động tại đây.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {Object.values(certificates).map((c) => {
                       const isExpanded = expandedCertCode === c.certificateCode;
                       return (
                         <div
@@ -1344,7 +1713,8 @@ export const StudentDashboardView: React.FC = () => {
                         </div>
                       );
                     })}
-                </div>
+                  </div>
+                )}
               </div>
 
               {/* Lịch sử đóng học phí */}
@@ -1352,34 +1722,45 @@ export const StudentDashboardView: React.FC = () => {
                 <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
                   Lịch sử đóng học phí
                 </h2>
-                <div className="space-y-3 text-xs">
-                  {effectiveReceipts.map((r) => (
-                    <div
-                      key={r.orderCode}
-                      className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                    >
-                      <div>
-                        <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                          Mã đăng ký: {r.orderCode} · Lớp {r.cohortCode}
-                        </div>
-                        <div className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-                          {r.courseTitle}
-                        </div>
-                        <div className="text-[#475569] dark:text-[#94A3B8]">
-                          {r.bankName} · {r.paidAt}
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="font-mono text-sm font-bold text-[#059669] dark:text-[#34D399]">
-                          {formatVnd(r.amountVnd)}
-                        </div>
-                        <span className="inline-block mt-1 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-semibold text-[10px]">
-                          ✓ Đã thanh toán thành công
-                        </span>
-                      </div>
+                {effectiveReceipts.length === 0 ? (
+                  <div className="p-6 rounded-xl bg-[#F8FAFC] dark:bg-[#090F0C] border border-dashed border-[#CBD5E1] dark:border-[#1E2D24] text-center space-y-2">
+                    <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Chưa có biên lai đóng học phí nào
                     </div>
-                  ))}
-                </div>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto">
+                      Lịch sử giao dịch và biên lai học phí điện tử của bạn sẽ được lưu trữ tại đây ngay sau khi thanh toán thành công.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 text-xs">
+                    {effectiveReceipts.map((r) => (
+                      <div
+                        key={r.orderCode}
+                        className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                            Mã đăng ký: {r.orderCode} · Lớp {r.cohortCode}
+                          </div>
+                          <div className="font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+                            {r.courseTitle}
+                          </div>
+                          <div className="text-[#475569] dark:text-[#94A3B8]">
+                            {r.bankName} · {r.paidAt}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-mono text-sm font-bold text-[#059669] dark:text-[#34D399]">
+                            {formatVnd(r.amountVnd)}
+                          </div>
+                          <span className="inline-block mt-1 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-semibold text-[10px]">
+                            ✓ Đã thanh toán thành công
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

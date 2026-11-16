@@ -14,6 +14,7 @@ import {
 import { useAcademy } from '../context/AcademyContext';
 import { formatTimestamp } from '../utils/academyLogic';
 import { AiTutorCompanionSticker } from '../components/BotanicalStickers';
+import { FormattedChatMessage } from '../components/FormattedChatMessage';
 import {
   SessionVideoPlayer,
   type VideoChapterItem,
@@ -738,7 +739,7 @@ export const SessionVideoRoomView: React.FC<{
               </div>
 
               <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                Bấm vào bất kỳ dòng thời gian nào bên dưới để trình phát <code>&lt;video&gt;</code> bên trái nhảy thẳng tới đúng giây đó và phát tiếp:
+                Bấm vào bất kỳ dòng thời gian nào bên dưới để khung phát video bài giảng bên trái nhảy thẳng tới đúng giây đó và phát tiếp:
               </div>
 
               <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
@@ -805,9 +806,10 @@ export const SessionVideoRoomView: React.FC<{
                       </span>
                     </div>
 
-                    <p className="text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                      {msg.text}
-                    </p>
+                    <FormattedChatMessage
+                      text={msg.text}
+                      className="text-xs text-[#475569] dark:text-[#94A3B8]"
+                    />
 
                     {msg.citations && msg.citations.length > 0 && (
                       <div className="flex flex-wrap gap-2 pt-1">

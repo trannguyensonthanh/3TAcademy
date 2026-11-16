@@ -342,13 +342,13 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
   ]);
 
   const anCvParsedData = {
-    fileName: 'NguyenVanAn_Fresher_AIEngineer_CV_2026.pdf',
-    updatedAt: '2026-04-03T13:30:00.000Z',
-    extractedAt: '2026-04-03T13:30:00.000Z',
+    fileName: '',
+    updatedAt: '',
+    extractedAt: '',
     fullName: 'Nguyễn Văn An',
     candidateName: 'Nguyễn Văn An',
-    headline: 'Fresher AI Engineer · RAG, LangChain & FastAPI Backend',
-    targetRole: 'Fresher AI Engineer (RAG & Agentic Workflows)',
+    headline: 'Học viên Kỹ thuật Phần mềm & Trí tuệ nhân tạo',
+    targetRole: 'Fresher AI & Backend Engineer',
     email: 'an.student@3t.edu.vn',
     phone: '0908 234 567',
     location: 'Quận Cầu Giấy, Hà Nội',
@@ -356,58 +356,25 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     githubUrl: 'https://github.com/nguyenvanan-ai',
     linkedinUrl: 'https://linkedin.com/in/nguyenvanan-ai',
     careerObjective:
-      'Kỹ sư phần mềm định hướng AI Engineering với nền tảng vững chắc về Python AsyncIO, FastAPI, PostgreSQL/pgvector và hệ thống Hybrid RAG.',
+      'Xây dựng nền tảng vững chắc về Python, Backend và hệ thống AI thực chiến thông qua các dự án thực tế.',
     summaryBio:
-      'Kỹ sư phần mềm định hướng AI Engineering với nền tảng vững chắc về Python AsyncIO, FastAPI, PostgreSQL/pgvector và hệ thống Hybrid RAG.',
-    skills: [
-      'Python 3.11 & AsyncIO',
-      'FastAPI & Pydantic v2',
-      'PostgreSQL & SQL Optimization',
-      'Docker & GitHub Actions CI/CD',
-    ],
-    externalSkills: [
-      {
-        name: 'FastAPI & RESTful Microservices',
-        note: 'Thiết kế cổng API bất đồng bộ tích hợp cơ sở dữ liệu PostgreSQL',
-      },
-    ],
-    projects: [
-      {
-        id: 'proj-an-1',
-        name: '3T SmartDocs — Hệ thống Trợ lý Tài liệu Kỹ thuật Nội bộ (Hybrid RAG)',
-        title: '3T SmartDocs — Hệ thống Trợ lý Tài liệu Kỹ thuật Nội bộ (Hybrid RAG)',
-        role: 'AI & Backend Developer',
-        period: '01/2026 - 04/2026',
-        techStack: ['Python', 'FastAPI', 'PostgreSQL', 'pgvector', 'BM25', 'Docker'],
-        highlights: [
-          'Thiết kế pipeline băm tài liệu theo cấu trúc Markdown Header kết hợp chồng lấp ngữ cảnh 15%.',
-          'Triển khai thuật toán tìm kiếm lai kết hợp pgvector HNSW và PostgreSQL tsvector BM25 qua công thức RRF (k=60).',
-        ],
-      },
-    ],
+      'Học viên định hướng phát triển phần mềm và hệ thống Trí tuệ nhân tạo ứng dụng.',
+    skills: [],
+    externalSkills: [],
+    projects: [],
     workExperience: [],
-    education: [
-      {
-        id: 'edu-an-1',
-        school: 'Đại học Bách Khoa Hà Nội (HUST)',
-        institution: 'Đại học Bách Khoa Hà Nội (HUST)',
-        degree: 'Kỹ sư Khoa học Máy tính (Computer Science)',
-        period: '2022 - 2026',
-        graduationYear: '2026',
-        gpaOrHonors: 'GPA: 3.45 / 4.0',
-      },
-    ],
+    education: [],
     awardsAndCerts: [],
   };
 
   const maiCvParsedData = {
-    fileName: 'LeHoangMai_Junior_AIEngineer_CV_2026.pdf',
-    updatedAt: '2026-04-03T14:20:00.000Z',
-    extractedAt: '2026-04-03T14:20:00.000Z',
+    fileName: '',
+    updatedAt: '',
+    extractedAt: '',
     fullName: 'Lê Hoàng Mai',
     candidateName: 'Lê Hoàng Mai',
-    headline: 'Junior Backend & AI Engineer · Python, FastAPI & Vector Search',
-    targetRole: 'Junior AI Engineer',
+    headline: 'Học viên Phát triển Phần mềm & Kỹ thuật Dữ liệu',
+    targetRole: 'Junior AI & Data Engineer',
     email: 'mai.student@3t.edu.vn',
     phone: '0912 345 678',
     location: 'Quận 1, TP. Hồ Chí Minh',
@@ -415,24 +382,14 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     githubUrl: 'https://github.com/lehoangmai-dev',
     linkedinUrl: 'https://linkedin.com/in/lehoangmai-dev',
     careerObjective:
-      'Kỹ sư Backend 1 năm kinh nghiệm chuyển dịch sang mảng AI Engineering. Thành thạo tối ưu truy vấn PostgreSQL/pgvector và triển khai dịch vụ RAG.',
+      'Phát triển kỹ năng thiết kế hệ thống Backend, cơ sở dữ liệu và ứng dụng AI thực tế.',
     summaryBio:
-      'Kỹ sư Backend 1 năm kinh nghiệm chuyên sâu về Python, FastAPI, PostgreSQL và hệ thống truy xuất tri thức RAG.',
-    skills: ['Python & FastAPI', 'PostgreSQL & pgvector', 'Node.js & TypeScript', 'Docker'],
+      'Học viên công nghệ tại 3T Academy.',
+    skills: [],
     externalSkills: [],
     projects: [],
     workExperience: [],
-    education: [
-      {
-        id: 'edu-mai-1',
-        school: 'Trường Đại học Công nghệ Thông tin — ĐHQG TP.HCM (UIT)',
-        institution: 'Trường Đại học Công nghệ Thông tin — ĐHQG TP.HCM (UIT)',
-        degree: 'Cử nhân Kỹ thuật Phần mềm',
-        period: '2021 - 2025',
-        graduationYear: '2025',
-        gpaOrHonors: 'GPA: 3.62 / 4.0',
-      },
-    ],
+    education: [],
     awardsAndCerts: [],
   };
 
@@ -2986,7 +2943,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       cvParsedData: (p.cvParsedData ?? {}) as Record<string, unknown>,
     })),
     mockInterviews: [],
-    skillStates: [],
+    skillStates: [], 
   });
 
   if (consistencyViolations.length > 0) {
