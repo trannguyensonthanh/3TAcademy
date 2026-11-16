@@ -574,3 +574,69 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+// 1.7 POST /auth/change-password
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(6, 'Vui lòng nhập mật khẩu hiện tại (tối thiểu 6 ký tự)'),
+  newPassword: z.string().min(6, 'Mật khẩu mới phải có tối thiểu 6 ký tự'),
+});
+
+authRouter.post(
+  '/change-password',
+  requireAuth,
+  validate(changePasswordSchema),
+  async (req, res, next) => {
+    try {
+      const accountId = req.user!.id;
+      const { currentPassword, newPassword } = req.body;
+
+      const [account] = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1);
+
+      if (!account || !account.passwordHash) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'ACCOUNT_NOT_FOUND',
+          message: 'Không tìm thấy tài khoản người dùng',
+        });
+        return;
+      }
+
+      const isCurrentValid = await argon2.verify(account.passwordHash, currentPassword);
+      if (!isCurrentValid) {
+        res.status(400).json({
+          success: false,
+          status: 400,
+          code: 'INVALID_CURRENT_PASSWORD',
+          message: 'Mật khẩu hiện tại không chính xác. Vui lòng kiểm tra lại.',
+          error: {
+            code: 'INVALID_CURRENT_PASSWORD',
+            message: 'Mật khẩu hiện tại không chính xác. Vui lòng kiểm tra lại.',
+          },
+        });
+        return;
+      }
+
+      const newPasswordHash = await argon2.hash(newPassword);
+      await db
+        .update(accounts)
+        .set({
+          passwordHash: newPasswordHash,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId));
+
+      res.json({
+        success: true,
+        message: 'Đã cập nhật mật khẩu đăng nhập mới thành công.',
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+

@@ -106,6 +106,49 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       description: 'Số lần cảnh báo vi phạm tối đa trước khi tự động đình chỉ bài thi cuối khóa',
       isPublic: false,
     },
+    {
+      key: 'ACADEMY_FAQS',
+      value: JSON.stringify([
+        {
+          id: 'faq-1',
+          question: 'Hình thức học tại 3T Academy là học trực tiếp cùng giảng viên hay xem video thu sẵn?',
+          answer:
+            'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các buổi tối cố định trong tuần (2 buổi/tuần). Sau mỗi buổi học, bản ghi hình chất lượng cao kèm phụ đề và tài liệu sẽ được cập nhật trên hệ thống để bạn chủ động ôn tập lại bất cứ lúc nào.',
+        },
+        {
+          id: 'faq-2',
+          question: 'Nếu hôm đó mình bận việc đột xuất không vào lớp kịp thì có bị mất bài không?',
+          answer:
+            'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải slide và mã nguồn thực hành. Trong lúc tự ôn bài, nếu có đoạn nào chưa rõ, bạn có thể hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích cặn kẽ theo đúng mốc thời gian giảng viên đã giảng.',
+        },
+        {
+          id: 'faq-3',
+          question: 'Mình mới bắt đầu hoặc trái ngành thì nên chọn khóa học nào trước?',
+          answer:
+            'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố lại nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI. Sau khi nắm vững tư duy viết code Python và truy vấn cơ sở dữ liệu PostgreSQL, bạn có thể học tiếp lên các khóa chuyên sâu về Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
+        },
+        {
+          id: 'faq-4',
+          question: 'Điều kiện để hoàn thành mỗi buổi học và nhận chứng chỉ tốt nghiệp là gì?',
+          answer:
+            'Để đảm bảo chất lượng đầu ra thực chất, mỗi buổi học yêu cầu bạn theo dõi tối thiểu 80% thời lượng bài giảng và làm đạt từ 7.0/10 trở lên bài kiểm tra ngắn (10 câu trắc nghiệm) cuối buổi. Khi hoàn thành đầy đủ các buổi học và vượt qua kỳ thi sát hạch cuối khóa (25 câu), hệ thống sẽ cấp Chứng chỉ tốt nghiệp có mã định danh xác thực trực tuyến.',
+        },
+        {
+          id: 'faq-5',
+          question: 'Tính năng Hồ sơ của tôi (CV) và Luyện phỏng vấn 1-1 hoạt động như thế nào?',
+          answer:
+            'Khi bạn thiết lập hồ sơ ban đầu và hoàn thành các khóa học, toàn bộ thông tin cá nhân, mục tiêu nghề nghiệp, kỹ năng chuyên môn và đồ án bạn đã làm sẽ được đồng bộ vào mục Hồ sơ của tôi để tạo bản CV chuẩn kỹ sư công nghệ. Bạn cũng có thể sử dụng lượt Luyện phỏng vấn 1-1 bằng giọng nói để rà soát độ khớp của CV với vị trí ứng tuyển và tập trả lời phỏng vấn sát thực tế.',
+        },
+        {
+          id: 'faq-6',
+          question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
+          answer:
+            'Bạn chỉ cần chọn đợt học phù hợp với lịch cá nhân và bấm Đăng ký đợt học. Hệ thống sẽ hiển thị mã QR chuyển khoản ngân hàng (VietQR) với nội dung tự động. Ngay sau khi hoàn tất chuyển khoản trên ứng dụng ngân hàng, lớp học sẽ được mở khóa tự động chỉ sau vài giây mà không cần chờ duyệt thủ công.',
+        },
+      ]),
+      description: 'Danh sách câu hỏi thường gặp công khai tại trang Về học viện',
+      isPublic: true,
+    },
   ]);
 
   // =========================================================================
@@ -2630,7 +2673,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       endSec: null,
       pageNumber: null,
       content:
-        'Khóa học "Kỹ sư AI Thực chiến: RAG, Agents & LLMOps" (mã đợt đang mở: AI-ENG-2026-K01, học phí ưu đãi thử nghiệm 10.000 VNĐ) kéo dài 6 buổi chuyên sâu. Lịch học tối Thứ 3 và Thứ 5 (19:30 - 21:30), do TS. Lê Minh Khoa trực tiếp giảng dạy. Phù hợp cho lập trình viên đã biết Python và SQL cơ bản muốn chuyển sang làm AI Engineer.',
+        'Khóa học "Kỹ sư AI Thực chiến: RAG, Agents & LLMOps" (mã đợt đang mở: AI-ENG-2026-K01) gồm 6 buổi chuyên sâu. Lịch học tối Thứ 3 và Thứ 5 (19:30 - 21:30), do TS. Lê Minh Khoa trực tiếp giảng dạy. Phù hợp cho lập trình viên đã biết Python và SQL cơ bản muốn chuyển sang làm AI Engineer.',
     },
     {
       visibility: 'PUBLIC' as const,
@@ -2645,7 +2688,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       endSec: null,
       pageNumber: null,
       content:
-        'Lộ trình 6 buổi của khóa Kỹ sư AI Thực chiến (AI-ENG-2026-K01): Buổi 1 (FastAPI & Python AsyncIO), Buổi 2 (Chunking & Vector DB pgvector), Buổi 3 (Hybrid Search & Reranking), Buổi 4 (Function Calling & ReAct Agent), Buổi 5 (Đánh giá Ragas & LLMOps), Buổi 6 (Bảo vệ đồ án & Thi sát hạch). Học phí: 10.000 VNĐ.',
+        'Lộ trình 6 buổi của khóa Kỹ sư AI Thực chiến (AI-ENG-2026-K01): Buổi 1 (FastAPI & Python AsyncIO), Buổi 2 (Chunking & Vector DB pgvector), Buổi 3 (Hybrid Search & Reranking), Buổi 4 (Function Calling & ReAct Agent), Buổi 5 (Đánh giá Ragas & LLMOps), Buổi 6 (Bảo vệ đồ án & Thi sát hạch).',
     },
     {
       visibility: 'PUBLIC' as const,
@@ -2660,7 +2703,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       endSec: null,
       pageNumber: null,
       content:
-        'Khóa học "Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems" (mã đợt đang mở: SWE-ARCH-2026-K01, học phí 10.000 VNĐ) do ThS. Nguyễn Thu Hà giảng dạy vào tối Thứ 4 và Chủ Nhật (19:30 - 21:30). Trọng tâm lộ trình: Clean Layered Architecture, tối ưu truy vấn PostgreSQL, giao dịch ACID & Webhook thanh toán, Redis Caching, bảo mật JWT/Docker và kiểm thử chịu tải.',
+        'Khóa học "Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems" (mã đợt đang mở: SWE-ARCH-2026-K01) do ThS. Nguyễn Thu Hà giảng dạy vào tối Thứ 4 và Chủ Nhật (19:30 - 21:30). Trọng tâm lộ trình: Clean Layered Architecture, tối ưu truy vấn PostgreSQL, giao dịch ACID & Webhook thanh toán, Redis Caching, bảo mật JWT/Docker và kiểm thử chịu tải.',
     },
     {
       visibility: 'PUBLIC' as const,
@@ -2675,7 +2718,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       endSec: null,
       pageNumber: null,
       content:
-        'Khóa học "Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse" (mã đợt đang mở: DATA-PIPE-2026-K01, học phí 10.000 VNĐ) học chiều Thứ 7 và Chủ Nhật (14:00 - 16:30) cùng ThS. Nguyễn Thu Hà. Dành cho học viên muốn làm chủ đường ống dữ liệu lớn với Apache Spark, Kafka, dbt Lakehouse và đồng bộ dữ liệu cho AI.',
+        'Khóa học "Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse" (mã đợt đang mở: DATA-PIPE-2026-K01) học chiều Thứ 7 và Chủ Nhật (14:00 - 16:30) cùng ThS. Nguyễn Thu Hà. Dành cho học viên muốn làm chủ đường ống dữ liệu lớn với Apache Spark, Kafka, dbt Lakehouse và đồng bộ dữ liệu cho AI.',
     },
     {
       visibility: 'PUBLIC' as const,
@@ -2690,7 +2733,7 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       endSec: null,
       pageNumber: null,
       content:
-        'Khóa học nền tảng "Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI" (mã đợt đang mở: PY-SQL-2026-K01, học phí 10.000 VNĐ) học tối Thứ 2 và Thứ 5 (19:30 - 21:30) do TS. Lê Minh Khoa phụ trách. Rất phù hợp cho người mới bắt đầu hoặc trái ngành muốn xây nền tảng Python 3.11, OOP, Pytest, AsyncIO và truy vấn SQL phân tích trên PostgreSQL trước khi lên các khóa AI hoặc Data chuyên sâu.',
+        'Khóa học nền tảng "Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI" (mã đợt đang mở: PY-SQL-2026-K01) học tối Thứ 2 và Thứ 5 (19:30 - 21:30) do TS. Lê Minh Khoa phụ trách. Rất phù hợp cho người mới bắt đầu hoặc trái ngành muốn xây nền tảng Python 3.11, OOP, Pytest, AsyncIO và truy vấn SQL phân tích trên PostgreSQL trước khi lên các khóa AI hoặc Data chuyên sâu.',
     },
 
     // --- ENROLLED_ONLY CHUNKS: Course 1 (AI-ENG-2026-K01) ---

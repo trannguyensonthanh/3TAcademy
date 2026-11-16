@@ -387,7 +387,7 @@ export function applySmartSyncSelection(
 }
 
 export const StudentProfileCvWorkspace: React.FC = () => {
-  const { latestCvFileName, latestCvUpdatedAt, updateLatestCv } = useAcademy();
+  const { latestCvFileName, latestCvUpdatedAt, updateLatestCv, setCurrentUser } = useAcademy();
 
   const [resume, setResume] = useState<StudentResumeData>(EMPTY_RESUME_DATA);
   const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(true);
@@ -529,6 +529,18 @@ export const StudentProfileCvWorkspace: React.FC = () => {
         bio: resume.headline,
         careerGoal: resume.careerObjective,
       });
+      setCurrentUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              fullName: resume.fullName || prev.fullName,
+              avatarUrl: resume.avatarUrl || prev.avatarUrl,
+              phone: resume.phone || prev.phone,
+              bio: resume.headline || prev.bio,
+              careerGoal: resume.careerObjective || prev.careerGoal,
+            }
+          : prev
+      );
       const targetFileName =
         latestCvFileName && latestCvFileName !== 'Chưa tải lên file CV'
           ? latestCvFileName

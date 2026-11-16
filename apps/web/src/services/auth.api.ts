@@ -59,4 +59,11 @@ export const authApi = {
     httpRequest<{ success: boolean; loggedOutAt: string }>('/auth/logout', {
       method: 'POST',
     }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    httpRequest<{ success: boolean; message: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 };
+

@@ -24,7 +24,8 @@ async function ensureFreshDatabaseSeed() {
 
     const hasMissingEmbeddings =
       allChunks.length < 10 ||
-      allChunks.some((ch) => !Array.isArray(ch.embedding) || ch.embedding.length !== 1024);
+      allChunks.some((ch) => !Array.isArray(ch.embedding) || ch.embedding.length !== 1024) ||
+      allChunks.some((ch) => ch.content.includes('học phí ưu đãi thử nghiệm'));
 
     // Also re-seed if legacy duplicate certificates CERT-3T-2026-8892/8893 or legacy pre-baked CV files exist
     const hasLegacySeedCerts = allCerts.length >= 3;
@@ -43,7 +44,7 @@ async function ensureFreshDatabaseSeed() {
       hasLegacySeedCerts ||
       hasLegacyPrebakedStudentCv
     ) {
-      logger.info('Detected legacy or incomplete database seed — running clean minimal 10.000đ + RAG vector re-seed...');
+      logger.info('Detected legacy or incomplete database seed — running clean minimal database re-seed...');
       await runSeed(db);
       logger.info('Clean minimal database re-seed completed successfully.');
     }

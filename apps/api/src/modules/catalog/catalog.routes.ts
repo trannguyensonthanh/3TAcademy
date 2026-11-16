@@ -14,7 +14,6 @@ import {
   accounts,
   userProfiles,
   instructorProfiles,
-  knowledgeChunks,
   systemSettings,
   studentSkillStates,
   assessmentAttempts,
@@ -552,6 +551,45 @@ catalogRouter.get('/cohorts', async (_req, res, next) => {
   }
 });
 
+const DEFAULT_ACADEMY_FAQS = [
+  {
+    id: 'faq-1',
+    question: 'Hình thức học tại 3T Academy là học trực tiếp cùng giảng viên hay xem video thu sẵn?',
+    answer:
+      'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các buổi tối cố định trong tuần (2 buổi/tuần). Sau mỗi buổi học, bản ghi hình chất lượng cao kèm phụ đề và tài liệu sẽ được cập nhật trên hệ thống để bạn chủ động ôn tập lại bất cứ lúc nào.',
+  },
+  {
+    id: 'faq-2',
+    question: 'Nếu hôm đó mình bận việc đột xuất không vào lớp kịp thì có bị mất bài không?',
+    answer:
+      'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải slide và mã nguồn thực hành. Trong lúc tự ôn bài, nếu có đoạn nào chưa rõ, bạn có thể hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích cặn kẽ theo đúng mốc thời gian giảng viên đã giảng.',
+  },
+  {
+    id: 'faq-3',
+    question: 'Mình mới bắt đầu hoặc trái ngành thì nên chọn khóa học nào trước?',
+    answer:
+      'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố lại nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI. Sau khi nắm vững tư duy viết code Python và truy vấn cơ sở dữ liệu PostgreSQL, bạn có thể học tiếp lên các khóa chuyên sâu về Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
+  },
+  {
+    id: 'faq-4',
+    question: 'Điều kiện để hoàn thành mỗi buổi học và nhận chứng chỉ tốt nghiệp là gì?',
+    answer:
+      'Để đảm bảo chất lượng đầu ra thực chất, mỗi buổi học yêu cầu bạn theo dõi tối thiểu 80% thời lượng bài giảng và làm đạt từ 7.0/10 trở lên bài kiểm tra ngắn (10 câu trắc nghiệm) cuối buổi. Khi hoàn thành đầy đủ các buổi học và vượt qua kỳ thi sát hạch cuối khóa (25 câu), hệ thống sẽ cấp Chứng chỉ tốt nghiệp có mã định danh xác thực trực tuyến.',
+  },
+  {
+    id: 'faq-5',
+    question: 'Tính năng Hồ sơ của tôi (CV) và Luyện phỏng vấn 1-1 hoạt động như thế nào?',
+    answer:
+      'Khi bạn thiết lập hồ sơ ban đầu và hoàn thành các khóa học, toàn bộ thông tin cá nhân, mục tiêu nghề nghiệp, kỹ năng chuyên môn và đồ án bạn đã làm sẽ được đồng bộ vào mục Hồ sơ của tôi để tạo bản CV chuẩn kỹ sư công nghệ. Bạn cũng có thể sử dụng lượt Luyện phỏng vấn 1-1 bằng giọng nói để rà soát độ khớp của CV với vị trí ứng tuyển và tập trả lời phỏng vấn sát thực tế.',
+  },
+  {
+    id: 'faq-6',
+    question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
+    answer:
+      'Bạn chỉ cần chọn đợt học phù hợp với lịch cá nhân và bấm Đăng ký đợt học. Hệ thống sẽ hiển thị mã QR chuyển khoản ngân hàng (VietQR) với nội dung tự động. Ngay sau khi hoàn tất chuyển khoản trên ứng dụng ngân hàng, lớp học sẽ được mở khóa tự động chỉ sau vài giây mà không cần chờ duyệt thủ công.',
+  },
+];
+
 // 2.6 GET /faqs
 catalogRouter.get('/faqs', async (_req, res, next) => {
   try {
@@ -564,32 +602,26 @@ catalogRouter.get('/faqs', async (_req, res, next) => {
     if (faqSetting?.value) {
       try {
         const parsed = JSON.parse(faqSetting.value);
-        if (Array.isArray(parsed)) {
+        if (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          parsed.every(
+            (item) =>
+              item &&
+              typeof item.question === 'string' &&
+              item.question.trim().endsWith('?') &&
+              typeof item.answer === 'string'
+          )
+        ) {
           res.json(parsed);
           return;
         }
       } catch {
-        // Ignore parse error and query knowledgeChunks
+        // Ignore parse error and fallback to default FAQs
       }
     }
 
-    const faqChunks = await db
-      .select()
-      .from(knowledgeChunks)
-      .where(eq(knowledgeChunks.sourceType, 'FAQ'));
-
-    const faqs = faqChunks.map((chunk) => {
-      const lines = chunk.content.split('\n').filter((l) => l.trim().length > 0);
-      const question = lines[0]?.replace(/^(Hỏi|Q|Câu hỏi):\s*/i, '') || chunk.content.slice(0, 80);
-      const answer = lines.slice(1).join('\n').replace(/^(Đáp|A|Trả lời):\s*/i, '') || chunk.content;
-      return {
-        id: String(chunk.id),
-        question,
-        answer,
-      };
-    });
-
-    res.json(faqs);
+    res.json(DEFAULT_ACADEMY_FAQS);
   } catch (err) {
     next(err);
   }

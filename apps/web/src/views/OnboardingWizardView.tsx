@@ -100,26 +100,26 @@ export const CAREER_GOAL_TRACKS: CareerGoalTrackOption[] = [
     description: 'Chuyên sâu RAG, LLM Agents, Vector Search & Fine-tuning.',
     defaultGoalText:
       'AI Engineer — Chuyên sâu RAG, LLM Agents, Vector Search & Fine-tuning triển khai thực tế tại doanh nghiệp.',
-    recommendedCourseId: 'course-ai-eng',
-    recommendedCohortId: 'cohort-ai-k01',
+    recommendedCourseId: 'ky-su-ai-thuc-chien-rag-agents-llmops',
+    recommendedCohortId: 'AI-ENG-2026-K01',
   },
   {
     id: 'BACKEND_CLOUD',
-    title: 'Backend Python & Cloud',
-    description: 'Thiết kế API hiệu năng cao, Microservices, Docker.',
+    title: 'Backend & Distributed Systems',
+    description: 'Thiết kế API chịu tải cao, PostgreSQL, Microservices & Docker.',
     defaultGoalText:
-      'Backend Python & Cloud — Thiết kế API hiệu năng cao với FastAPI, PostgreSQL, Microservices & Docker.',
-    recommendedCourseId: 'course-fullstack-ai',
-    recommendedCohortId: 'cohort-fs-k03',
+      'Backend Engineer — Thiết kế API hiệu năng cao với TypeScript/FastAPI, PostgreSQL, Microservices & Docker.',
+    recommendedCourseId: 'kien-truc-backend-chuyen-sau-typescript-postgresql',
+    recommendedCohortId: 'SWE-ARCH-2026-K01',
   },
   {
     id: 'DATA_ANALYTICS',
-    title: 'Data Analytics & AI',
-    description: 'Xử lý dữ liệu lớn, Trực quan hóa dữ liệu và Dashboard BI.',
+    title: 'Data Engineering & Python/SQL',
+    description: 'Xử lý dữ liệu lớn, Python/SQL phân tích và Data Pipeline thực chiến.',
     defaultGoalText:
-      'Data Analytics & AI — Xử lý dữ liệu lớn bằng Python/SQL, Trực quan hóa dữ liệu và xây dựng Dashboard BI.',
-    recommendedCourseId: 'course-py-data',
-    recommendedCohortId: 'cohort-py-k04',
+      'Data & AI Foundation — Làm chủ lập trình Python 3.11, tối ưu truy vấn SQL phân tích và xây dựng Data Pipeline.',
+    recommendedCourseId: 'lap-trinh-python-sql-thuc-chien-data-ai',
+    recommendedCohortId: 'PY-SQL-2026-K01',
   },
 ];
 
@@ -286,7 +286,11 @@ export const OnboardingWizardView: React.FC = () => {
   const currentTrackObj =
     CAREER_GOAL_TRACKS.find((t) => t.id === selectedTrackId) ?? CAREER_GOAL_TRACKS[0];
   const recommendedCourse =
-    courses.find((c) => c.id === currentTrackObj.recommendedCourseId) ??
+    courses.find(
+      (c) =>
+        c.id === currentTrackObj.recommendedCourseId ||
+        c.slug === currentTrackObj.recommendedCourseId
+    ) ??
     courses[0] ?? {
       id: currentTrackObj.recommendedCourseId,
       slug: '',
@@ -301,7 +305,11 @@ export const OnboardingWizardView: React.FC = () => {
       syllabusTemplate: [],
     };
   const recommendedCohort =
-    cohorts.find((c) => c.id === currentTrackObj.recommendedCohortId) ??
+    cohorts.find(
+      (c) =>
+        c.id === currentTrackObj.recommendedCohortId ||
+        c.code === currentTrackObj.recommendedCohortId
+    ) ??
     cohorts[0] ?? {
       id: currentTrackObj.recommendedCohortId,
       courseId: recommendedCourse.id,

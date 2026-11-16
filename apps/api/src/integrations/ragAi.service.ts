@@ -397,7 +397,7 @@ export async function askCareerAdvisorRag(question: string) {
   const replyText =
     `Chào bạn nha! Mình rất vui được đồng hành tư vấn lộ trình học tập cho bạn tại **3T Academy**.\n\n` +
     (bestChunkContent ? `${bestChunkContent}\n\n` : '') +
-    `Hiện tại hệ thống đang mở ghi danh 4 lộ trình thực chiến với học phí **10.000 đ/khóa**:\n${catalogSummary}\n\n` +
+    `Hiện tại học viện đang mở ghi danh 4 lộ trình đào tạo thực chiến:\n${catalogSummary}\n\n` +
     (recommendedCourse
       ? `👉 Gợi ý phù hợp nhất cho bạn lúc này là khóa **${recommendedCourse.title}** (\`${recommendedCohort?.code || ''}\`). Bạn có muốn mình hỗ trợ thông tin lịch học hoặc cách đăng ký lớp này không?`
       : 'Bạn chia sẻ thêm mục tiêu công việc hiện tại để mình chọn lớp phù hợp nhất cho bạn nhé!');

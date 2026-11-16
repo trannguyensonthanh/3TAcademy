@@ -25,7 +25,7 @@ interface FloatingChatTurn {
 
 const FLOATING_QUICK_PROMPTS = [
   'Mình mới bắt đầu thì nên học lớp nào trước?',
-  'Tư vấn lộ trình Kỹ sư AI Thực chiến (10.000đ)',
+  'Tư vấn lộ trình Kỹ sư AI Thực chiến',
   'Lịch học buổi tối các lớp đang mở đăng ký?',
 ];
 
