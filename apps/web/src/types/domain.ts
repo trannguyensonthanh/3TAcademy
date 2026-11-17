@@ -214,10 +214,11 @@ export interface DiscussionThread {
 export interface CohortMaterial {
   id: string;
   cohortId: string;
+  sessionId?: string;
   sessionOrder: number;
   title: string;
-  fileType: 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK' | 'CODE' | 'READING';
-  type?: 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK' | 'CODE' | 'READING';
+  fileType: 'VIDEO' | 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK' | 'CODE' | 'READING';
+  type?: 'VIDEO' | 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK' | 'CODE' | 'READING';
   fileSize: string;
   sizeLabel?: string;
   updatedAt: string;
@@ -477,21 +478,62 @@ export interface MockInterviewRecord {
 export type DropoutRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 export type EnrollmentStatus = 'ACTIVE' | 'COMPLETED' | 'REVOKED';
 
+export interface StudentSessionProgressSummary {
+  sessionId: string;
+  sessionOrder: number;
+  title: string;
+  status: SessionStatus;
+  isWatched: boolean;
+  watchedSec: number;
+  durationSec: number;
+  quizScorePct: number | null;
+  quizPassed: boolean;
+  isCompleted: boolean;
+}
+
+export interface StudentQuestionSummary {
+  id: string;
+  source: 'DISCUSSION' | 'AI_TUTOR';
+  sessionId: string;
+  sessionOrder: number;
+  sessionTitle: string;
+  title: string;
+  content: string;
+  isResolved: boolean;
+  createdAt: string;
+}
+
 export interface Enrollment {
   id: string;
   userId: string;
   studentName: string;
   studentEmail: string;
+  phone?: string;
+  bio?: string;
+  careerGoal?: string;
+  avatarUrl?: string;
   cohortId: string;
   cohortCode: string;
+  cohortName?: string;
+  courseTitle?: string;
+  orderCode?: string;
+  tuitionPaidVnd?: number;
   status: EnrollmentStatus;
   completedSessionsCount: number;
   totalSessionsCount: number;
+  replayReadySessionsCount?: number;
+  progressPercent?: number;
   missingQuizzesCount: number;
   avgScorePct: number;
   lastActivityAt: string;
+  enrolledAt?: string;
+  enrolledAtFormatted?: string;
+  isNewEnrollment?: boolean;
   dropoutRiskScore: number;
   riskLevel: DropoutRiskLevel;
+  questionsCount?: number;
+  sessionProgressList?: StudentSessionProgressSummary[];
+  studentQuestions?: StudentQuestionSummary[];
 }
 
 export type EnrollmentRecord = Enrollment;

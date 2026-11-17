@@ -42,6 +42,7 @@ export type StudentSidebarTab =
 export type InstructorSidebarTab =
   | 'LIVE_SCHEDULE'
   | 'MANAGE_COHORTS'
+  | 'STUDENT_MANAGEMENT'
   | 'CLASS_ANALYTICS'
   | 'AI_GRADING'
   | 'QUIZ_BUILDER'
@@ -127,7 +128,8 @@ interface AcademyContextValue {
     cohortId: string,
     sessionOrder: number,
     title: string,
-    fileType: 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK'
+    fileType: 'VIDEO' | 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK',
+    materialUrl?: string
   ) => void;
   certificates: Record<string, CertificateRecord>;
   toggleCertificateRevoke: (certCode: string) => void;
@@ -161,6 +163,7 @@ function mapTeachPathToTab(path: string): InstructorSidebarTab {
   if (path.startsWith('/teach/cohorts') || path.startsWith('/teach/quizzes')) {
     return 'MANAGE_COHORTS';
   }
+  if (path.startsWith('/teach/students')) return 'STUDENT_MANAGEMENT';
   if (path.startsWith('/teach/analytics')) return 'CLASS_ANALYTICS';
   if (path.startsWith('/teach/discussions')) return 'STUDENT_QA';
   if (path.startsWith('/teach/schedule')) return 'AVAILABILITY';
@@ -849,7 +852,8 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       cohortId: string,
       sessionOrder: number,
       title: string,
-      fileType: 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK'
+      fileType: 'VIDEO' | 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK',
+      materialUrl?: string
     ) => {
       const targetSession =
         sessions.find(
@@ -862,6 +866,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           cohortId,
           sessionOrder,
           materialTitle: title,
+          materialUrl,
           fileType,
         });
         if (res.material) {

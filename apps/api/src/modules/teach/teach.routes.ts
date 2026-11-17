@@ -22,6 +22,7 @@ import {
   skills,
   chatSessions,
   chatMessages,
+  orders,
 } from '../../db/schema/index.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
@@ -54,6 +55,7 @@ import {
   getR2PublicObjectUrl,
   uploadBufferToR2,
 } from '../../integrations/r2.service.js';
+import { reconcileUnmatchedSepayTransactions } from '../order/order.routes.js';
 
 export const teachRouter = Router();
 
@@ -69,8 +71,17 @@ function formatSecondsToMmSs(sec: number | null | undefined): string {
 function inferMaterialFileType(
   fileName: string,
   mimeType: string
-): 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK' {
+): 'VIDEO' | 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK' {
   const lower = fileName.toLowerCase();
+  if (
+    mimeType.startsWith('video/') ||
+    lower.endsWith('.mp4') ||
+    lower.endsWith('.m3u8') ||
+    lower.endsWith('.webm') ||
+    lower.includes('video')
+  ) {
+    return 'VIDEO';
+  }
   if (lower.endsWith('.ipynb') || lower.includes('notebook')) return 'NOTEBOOK';
   if (lower.includes('github') || lower.endsWith('.zip') || lower.includes('repo')) return 'REPO';
   if (lower.includes('slide') || lower.endsWith('.pptx')) return 'SLIDE';
@@ -78,47 +89,234 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
+function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
+  const trimmed = (r2ObjectKey || '').trim();
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('/')
+  ) {
+    return trimmed;
+  }
+  return `https://cdn.3t.edu.vn/${trimmed}`;
+}
+
 export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
-  const [allEnr, allProfiles, allAccounts, allCohorts, allSessions, allProgress, allAttempts] =
-    await Promise.all([
-      cohortFilterIds && cohortFilterIds.length > 0
-        ? db.select().from(enrollments).where(inArray(enrollments.cohortId, cohortFilterIds))
-        : db.select().from(enrollments),
-      db.select().from(userProfiles),
-      db.select().from(accounts),
-      db.select().from(cohorts),
-      db.select().from(classSessions),
-      db.select().from(sessionProgress),
-      db.select().from(assessmentAttempts),
+  await reconcileUnmatchedSepayTransactions();
+
+  // Ensure any PAID order has a corresponding ACTIVE enrollment record
+  try {
+    const [paidOrders, existingEnrs] = await Promise.all([
+      db.select().from(orders).where(eq(orders.status, 'PAID')),
+      db.select().from(enrollments),
     ]);
+    const existingKeys = new Set(existingEnrs.map((e) => `${e.accountId}:${e.cohortId}`));
+    for (const ord of paidOrders) {
+      const key = `${ord.accountId}:${ord.cohortId}`;
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        await db
+          .insert(enrollments)
+          .values({
+            accountId: ord.accountId,
+            cohortId: ord.cohortId,
+            orderId: ord.id,
+            status: 'ACTIVE',
+          })
+          .onConflictDoUpdate({
+            target: [enrollments.accountId, enrollments.cohortId],
+            set: { status: 'ACTIVE', orderId: ord.id },
+          });
+      }
+    }
+  } catch {
+    // Ignore in mocked test environments
+  }
+
+  const [
+    allEnr,
+    allProfiles,
+    allAccounts,
+    allCohorts,
+    allCourses,
+    allSessions,
+    allProgress,
+    allAssessments,
+    allAttempts,
+    allOrders,
+    allThreads,
+    allPosts,
+    allChatSessions,
+    allChatMsgs,
+  ] = await Promise.all([
+    cohortFilterIds && cohortFilterIds.length > 0
+      ? db.select().from(enrollments).where(inArray(enrollments.cohortId, cohortFilterIds))
+      : db.select().from(enrollments),
+    db.select().from(userProfiles),
+    db.select().from(accounts),
+    db.select().from(cohorts),
+    db.select().from(courses),
+    db.select().from(classSessions).orderBy(asc(classSessions.sessionOrder)),
+    db.select().from(sessionProgress),
+    db.select().from(assessments),
+    db.select().from(assessmentAttempts).orderBy(desc(assessmentAttempts.submittedAt)),
+    db.select().from(orders).orderBy(desc(orders.paidAt), desc(orders.createdAt)),
+    db.select().from(discussionThreads).orderBy(desc(discussionThreads.createdAt)),
+    db.select().from(discussionPosts).orderBy(asc(discussionPosts.createdAt)),
+    db.select().from(chatSessions),
+    db.select().from(chatMessages).orderBy(desc(chatMessages.createdAt)),
+  ]);
 
   const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
   const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
   const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
+  const courseMap = new Map(allCourses.map((c) => [c.id, c]));
+  const sessionMap = new Map(allSessions.map((s) => [s.id, s]));
+  const assessmentMap = new Map(allAssessments.map((a) => [a.id, a]));
+  const chatSessionMap = new Map(allChatSessions.map((cs) => [cs.id, cs]));
+
+  const nowMs = Date.now();
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
   return allEnr.map((enr) => {
     const prof = profileMap.get(enr.accountId);
     const acc = accountMap.get(enr.accountId);
     const cohort = cohortMap.get(enr.cohortId);
-    const cSessions = allSessions.filter((s) => s.cohortId === enr.cohortId);
+    const course = cohort ? courseMap.get(cohort.courseId) : undefined;
+    const cSessions = allSessions
+      .filter((s) => s.cohortId === enr.cohortId)
+      .sort((a, b) => a.sessionOrder - b.sessionOrder);
     const totalSessionsCount = cSessions.length || 1;
-    const completedProg = allProgress.filter(
-      (p) =>
-        p.accountId === enr.accountId &&
-        p.isCompleted &&
-        cSessions.some((s) => s.id === p.sessionId)
+    const replayReadySessionsCount = cSessions.filter((s) => s.status === 'REPLAY_READY').length;
+
+    const stuProgressRows = allProgress.filter(
+      (p) => p.accountId === enr.accountId && cSessions.some((s) => s.id === p.sessionId)
     );
+    const completedProg = stuProgressRows.filter((p) => p.isCompleted);
     const completedSessionsCount = completedProg.length;
     const progressPercent = Math.round((completedSessionsCount / totalSessionsCount) * 100);
-    const missingQuizzesCount = Math.max(0, totalSessionsCount - completedSessionsCount);
 
-    const stuAttempts = allAttempts.filter((a) => a.accountId === enr.accountId && a.scorePct);
+    // Filter attempts belonging to assessments of this cohort
+    const cohortAttempts = allAttempts.filter((a) => {
+      if (a.accountId !== enr.accountId || a.scorePct === null || a.scorePct === undefined) {
+        return false;
+      }
+      const ass = assessmentMap.get(a.assessmentId);
+      return ass ? ass.cohortId === enr.cohortId : true;
+    });
+
     const avgScorePct =
-      stuAttempts.length > 0
+      cohortAttempts.length > 0
         ? Math.round(
-            stuAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / stuAttempts.length
+            cohortAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / cohortAttempts.length
           )
         : 0;
+
+    const enrolledDate = enr.enrolledAt ? new Date(enr.enrolledAt) : new Date();
+    const isNewEnrollment = nowMs - enrolledDate.getTime() <= SEVEN_DAYS_MS;
+
+    // Missing quizzes relative to sessions that have already taken place (REPLAY_READY)
+    const effectiveDueSessions = replayReadySessionsCount > 0 ? replayReadySessionsCount : 0;
+    const missingQuizzesCount = Math.max(0, effectiveDueSessions - completedSessionsCount);
+
+    // Latest activity timestamp across session progress, quiz attempts, and enrollment date
+    const activityTimestamps: number[] = [enrolledDate.getTime()];
+    for (const p of stuProgressRows) {
+      if (p.lastActivityAt) activityTimestamps.push(new Date(p.lastActivityAt).getTime());
+    }
+    for (const a of cohortAttempts) {
+      if (a.submittedAt) activityTimestamps.push(new Date(a.submittedAt).getTime());
+    }
+    const latestActivityDate = new Date(Math.max(...activityTimestamps));
+
+    // Match student's paid order for this cohort
+    const matchedOrder =
+      (enr.orderId ? allOrders.find((o) => o.id === enr.orderId) : undefined) ||
+      allOrders.find(
+        (o) => o.accountId === enr.accountId && o.cohortId === enr.cohortId && o.status === 'PAID'
+      );
+
+    // Detailed per-session progress for this student
+    const sessionProgressList = cSessions.map((sess) => {
+      const prog = stuProgressRows.find((p) => p.sessionId === sess.id);
+      const sessQuiz = allAssessments.find((a) => a.sessionId === sess.id);
+      const sessAttempts = sessQuiz
+        ? cohortAttempts.filter((a) => a.assessmentId === sessQuiz.id)
+        : [];
+      const bestAttempt =
+        sessAttempts.length > 0
+          ? sessAttempts.reduce((best, curr) =>
+              Number(curr.scorePct ?? 0) > Number(best.scorePct ?? 0) ? curr : best
+            )
+          : undefined;
+      const quizScorePct =
+        bestAttempt?.scorePct !== null && bestAttempt?.scorePct !== undefined
+          ? Math.round(Number(bestAttempt.scorePct))
+          : null;
+
+      return {
+        sessionId: String(sess.id),
+        sessionOrder: sess.sessionOrder,
+        title: sess.title,
+        sessionStatus: sess.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+        watchedSec: prog?.lastPositionSec ?? 0,
+        durationSeconds: sess.durationSeconds || 5400,
+        isCompleted: Boolean(prog?.isCompleted),
+        quizScorePct,
+        quizPassed: Boolean(prog?.isCompleted || (quizScorePct !== null && quizScorePct >= 70)),
+        lastWatchedAt: prog?.lastActivityAt
+          ? new Date(prog.lastActivityAt).toLocaleString('vi-VN')
+          : null,
+      };
+    });
+
+    // Questions asked by this student in this cohort (both Discussion Threads and AI Tutor chats)
+    const cohortSessionIds = new Set(cSessions.map((s) => s.id));
+    const studentDiscussionQuestions = allThreads
+      .filter((t) => t.authorId === enr.accountId && cohortSessionIds.has(t.sessionId))
+      .map((t) => {
+        const sess = sessionMap.get(t.sessionId);
+        const firstPost = allPosts.find((p) => p.threadId === t.id && !p.isAiGenerated);
+        return {
+          id: `disc-${t.id}`,
+          source: 'DISCUSSION' as const,
+          sessionOrder: sess?.sessionOrder ?? 1,
+          sessionTitle: sess?.title || '',
+          title: t.title,
+          content: firstPost?.contentMd || t.title,
+          detectedTopic: sess?.title || 'Thảo luận buổi học',
+          createdAt: t.createdAt.toLocaleString('vi-VN'),
+          isResolved: t.isResolved,
+        };
+      });
+
+    const studentAiQuestions = allChatMsgs
+      .filter((m) => {
+        if (m.role !== 'user') return false;
+        const cs = chatSessionMap.get(m.chatSessionId);
+        if (!cs || cs.accountId !== enr.accountId) return false;
+        return (
+          cs.cohortId === enr.cohortId ||
+          (cs.sessionId !== null && cohortSessionIds.has(cs.sessionId))
+        );
+      })
+      .map((m) => {
+        const cs = chatSessionMap.get(m.chatSessionId);
+        const sess = cs?.sessionId ? sessionMap.get(cs.sessionId) : undefined;
+        return {
+          id: `ai-${m.id}`,
+          source: 'AI_TUTOR' as const,
+          sessionOrder: sess?.sessionOrder ?? 1,
+          sessionTitle: sess?.title || 'Hỏi đáp Trợ giảng AI',
+          title: m.content.slice(0, 90),
+          content: m.content,
+          detectedTopic: m.detectedTopic || sess?.title || 'Trợ giảng AI',
+          createdAt: m.createdAt.toLocaleString('vi-VN'),
+          isResolved: true,
+        };
+      });
+
+    const studentQuestions = [...studentDiscussionQuestions, ...studentAiQuestions];
 
     return {
       id: String(enr.id),
@@ -126,21 +324,34 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
       accountId: String(enr.accountId),
       studentName: prof?.fullName || acc?.email || '',
       studentEmail: acc?.email || '',
+      phone: '',
+      bio: prof?.bio || '',
+      careerGoal: prof?.careerGoal || '',
       avatarUrl: prof?.avatarUrl,
       cohortId: String(enr.cohortId),
       cohortCode: cohort?.code || '',
+      cohortName: cohort?.name || '',
+      courseTitle: course?.title || cohort?.name || '',
+      orderCode: matchedOrder?.orderCode || `ORD-${enr.id}`,
+      tuitionPaidVnd: matchedOrder?.amountVnd ?? cohort?.tuitionVnd ?? 10000,
       status: enr.status,
       progressPercent,
       completedSessionsCount,
       totalSessionsCount,
+      replayReadySessionsCount,
       missingQuizzesCount,
       avgScorePct,
       finalExamPassed: enr.finalExamPassed,
       dropoutRiskScore: enr.dropoutRiskScore,
       riskLevel: enr.riskLevel as 'LOW' | 'MEDIUM' | 'HIGH',
-      lastActivityAt: (enr.enrolledAt ? new Date(enr.enrolledAt) : new Date()).toLocaleDateString('vi-VN'),
+      isNewEnrollment,
+      lastActivityAt: latestActivityDate.toLocaleDateString('vi-VN'),
       lastRemindedAt: enr.lastRemindedAt ? enr.lastRemindedAt.toLocaleString('vi-VN') : undefined,
-      enrolledAt: (enr.enrolledAt ? new Date(enr.enrolledAt) : new Date()).toISOString(),
+      enrolledAt: enrolledDate.toISOString(),
+      enrolledAtFormatted: enrolledDate.toLocaleString('vi-VN'),
+      questionsCount: studentQuestions.length,
+      sessionProgressList,
+      studentQuestions,
     };
   });
 }
@@ -445,7 +656,7 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
         fileSize: sizeStr,
         sizeLabel: sizeStr,
         fileSizeBytes: att.fileSizeBytes,
-        downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+        downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
         updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
       };
     });
@@ -528,11 +739,19 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
         : await db.select().from(cohorts);
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
 
+    const allFormattedEnrollments = await buildFormattedEnrollments(list.map((c) => c.id));
+    const enrollmentCountByCohort = new Map<string, number>();
+    for (const enr of allFormattedEnrollments) {
+      const cid = String(enr.cohortId);
+      enrollmentCountByCohort.set(cid, (enrollmentCountByCohort.get(cid) || 0) + 1);
+    }
+
     res.json(
       list.map((ch) => {
         const course = courseMap.get(ch.courseId);
         const staffInfo = getStaffForInstructor(ch.instructorId);
         const labels = formatScheduleLabels(ch.scheduleSlots || []);
+        const actualEnrolled = enrollmentCountByCohort.get(String(ch.id)) ?? ch.enrolledCount;
 
         return {
           id: String(ch.id),
@@ -546,7 +765,7 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
           curriculumVersion: ch.curriculumVersion,
           techStackNotes: ch.techStackNotes,
           tuitionVnd: ch.tuitionVnd,
-          enrolledCount: ch.enrolledCount,
+          enrolledCount: Math.max(ch.enrolledCount, actualEnrolled),
           enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
           startDate: ch.startDate,
           endDate: ch.endDate,
@@ -636,7 +855,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
         curriculumVersion: cohort.curriculumVersion,
         techStackNotes: cohort.techStackNotes,
         tuitionVnd: cohort.tuitionVnd,
-        enrolledCount: cohort.enrolledCount,
+        enrolledCount: Math.max(cohort.enrolledCount, cohortEnrollments.length),
         enrollmentOpenAt: cohort.enrollmentOpenAt.toISOString(),
         startDate: cohort.startDate,
         endDate: cohort.endDate,
@@ -705,7 +924,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
           fileSize: sizeStr,
           sizeLabel: sizeStr,
           fileSizeBytes: att.fileSizeBytes,
-          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+          downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
           updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
         };
       }),
@@ -785,7 +1004,7 @@ teachRouter.get(
           fileSize: sizeStr,
           sizeLabel: sizeStr,
           fileSizeBytes: att.fileSizeBytes,
-          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+          downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
           updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
         };
       });
@@ -853,7 +1072,8 @@ const updateMaterialsSchema = z.object({
   cohortId: z.union([z.string(), z.number()]).optional(),
   sessionOrder: z.number().int().optional(),
   materialTitle: z.string().optional(),
-  fileType: z.enum(['SLIDE', 'PDF', 'REPO', 'NOTEBOOK']).optional(),
+  materialUrl: z.string().optional(),
+  fileType: z.enum(['VIDEO', 'SLIDE', 'PDF', 'REPO', 'NOTEBOOK']).optional(),
   fileName: z.string().optional(),
   r2ObjectKey: z.string().optional(),
   mimeType: z.string().optional(),
@@ -885,6 +1105,7 @@ teachRouter.put(
         status,
         durationSeconds,
         materialTitle,
+        materialUrl,
         fileType,
         fileName,
         r2ObjectKey,
@@ -897,13 +1118,19 @@ teachRouter.put(
           ? new Date(scheduledStart)
           : session.scheduledStart;
 
-      const nextVideoKey =
-        videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key;
-      const nextStatus =
-        status ??
-        (videoR2Key && videoR2Key.trim() && session.status === 'SCHEDULED'
-          ? 'REPLAY_READY'
-          : session.status);
+      // Once a session is REPLAY_READY, lock its completed status and primary recording
+      const isAlreadyCompleted = session.status === 'REPLAY_READY';
+      const nextVideoKey = isAlreadyCompleted
+        ? session.videoR2Key || (videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key)
+        : videoR2Key !== undefined
+          ? videoR2Key.trim()
+          : session.videoR2Key;
+      const nextStatus = isAlreadyCompleted
+        ? 'REPLAY_READY'
+        : status ??
+          (videoR2Key && videoR2Key.trim() && session.status === 'SCHEDULED'
+            ? 'REPLAY_READY'
+            : session.status);
 
       const [updatedSession] = await db
         .update(classSessions)
@@ -927,20 +1154,29 @@ teachRouter.put(
       if (effectiveName) {
         const resolvedMime =
           mimeType ||
-          (fileType === 'NOTEBOOK'
-            ? 'application/x-ipynb+json'
-            : fileType === 'REPO'
-              ? 'application/zip'
-              : 'application/pdf');
-        const resolvedBytes = fileSizeBytes || 2516582;
+          (fileType === 'VIDEO'
+            ? 'video/mp4'
+            : fileType === 'NOTEBOOK'
+              ? 'application/x-ipynb+json'
+              : fileType === 'REPO'
+                ? 'application/zip'
+                : 'application/pdf');
+        const resolvedBytes = fileSizeBytes || (fileType === 'VIDEO' ? 18454937 : 2516582);
+        const trimmedUrl = materialUrl?.trim();
+        const defaultVideoUrl = '/videos/2759484-uhd_3840_2160_30fps.mp4';
+        const resolvedObjectKey =
+          trimmedUrl ||
+          r2ObjectKey ||
+          (fileType === 'VIDEO'
+            ? defaultVideoUrl
+            : `sessions/${sessionId}/${Date.now()}-${effectiveName.replace(/\s+/g, '_')}`);
 
         const [att] = await db
           .insert(sessionAttachments)
           .values({
             sessionId,
             fileName: effectiveName,
-            r2ObjectKey:
-              r2ObjectKey || `sessions/${sessionId}/${Date.now()}-${effectiveName.replace(/\s+/g, '_')}`,
+            r2ObjectKey: resolvedObjectKey,
             mimeType: resolvedMime,
             fileSizeBytes: resolvedBytes,
             uploadedBy: req.user!.id,
@@ -963,7 +1199,7 @@ teachRouter.put(
             fileSize: sizeStr,
             sizeLabel: sizeStr,
             fileSizeBytes: att.fileSizeBytes,
-            downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+            downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
             updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
           };
         }
@@ -1020,9 +1256,24 @@ teachRouter.put(
       }
 
       const { status, videoR2Key, activeSlideLabel, liveTopicNote } = req.body;
-      const nextStatus = status ?? session.status;
+      if (session.status === 'REPLAY_READY' && status && status !== 'REPLAY_READY') {
+        res.status(400).json({
+          success: false,
+          status: 400,
+          code: 'SESSION_ALREADY_COMPLETED',
+          message:
+            'Buổi học đã kết thúc và lưu bản ghi chính thức nên không thể chuyển ngược về trạng thái LIVE hoặc SCHEDULED.',
+        });
+        return;
+      }
+
+      const nextStatus = session.status === 'REPLAY_READY' ? 'REPLAY_READY' : (status ?? session.status);
       const nextVideoKey =
-        videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key;
+        session.status === 'REPLAY_READY' && session.videoR2Key
+          ? session.videoR2Key
+          : videoR2Key !== undefined
+            ? videoR2Key.trim()
+            : session.videoR2Key;
 
       const [updated] = await db
         .update(classSessions)

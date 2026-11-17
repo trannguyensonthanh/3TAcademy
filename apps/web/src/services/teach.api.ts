@@ -103,7 +103,8 @@ export const teachApi = {
       cohortId?: string;
       sessionOrder?: number;
       materialTitle?: string;
-      fileType?: 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK';
+      materialUrl?: string;
+      fileType?: 'VIDEO' | 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK';
     }
   ) =>
     httpRequest<{

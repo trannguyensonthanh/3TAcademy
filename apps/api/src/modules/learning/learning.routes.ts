@@ -69,13 +69,32 @@ function formatSecondsToMmSs(sec: number | null | undefined): string {
 function inferMaterialFileType(
   fileName: string,
   mimeType: string
-): 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK' {
+): 'VIDEO' | 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK' {
   const lower = fileName.toLowerCase();
+  const lowerMime = (mimeType || '').toLowerCase();
+  if (
+    lowerMime.startsWith('video/') ||
+    lower.endsWith('.mp4') ||
+    lower.endsWith('.webm') ||
+    lower.endsWith('.m3u8') ||
+    lower.includes('video')
+  ) {
+    return 'VIDEO';
+  }
   if (lower.endsWith('.ipynb') || lower.includes('notebook')) return 'NOTEBOOK';
   if (lower.includes('github') || lower.endsWith('.zip') || lower.includes('repo')) return 'REPO';
   if (lower.includes('slide') || lower.endsWith('.pptx')) return 'SLIDE';
-  if (mimeType.includes('pdf') || lower.endsWith('.pdf')) return 'PDF';
+  if (lowerMime.includes('pdf') || lower.endsWith('.pdf')) return 'PDF';
   return 'PDF';
+}
+
+function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
+  const raw = (r2ObjectKey || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/')) {
+    return raw;
+  }
+  return `https://cdn.3t.edu.vn/${raw}`;
 }
 
 export async function buildFormattedDiscussions(
@@ -880,7 +899,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
         fileSize: sizeStr,
         sizeLabel: sizeStr,
         fileSizeBytes: att.fileSizeBytes,
-        downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+        downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
         updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
       };
     });
@@ -1218,7 +1237,7 @@ learningRouter.get(
             fileSize: sizeStr,
             sizeLabel: sizeStr,
             fileSizeBytes: att.fileSizeBytes,
-            downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+            downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
             updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
           };
         }),

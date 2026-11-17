@@ -196,6 +196,19 @@ export const HorizontalTopicBarChart: React.FC<{
 }> = ({ items }) => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
+  if (!items || items.length === 0) {
+    return (
+      <div className="p-6 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center space-y-1.5">
+        <div className="text-xs font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+          Chưa có dữ liệu câu hỏi hoặc chủ đề vướng mắc trong lớp này
+        </div>
+        <p className="text-[11px] text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto leading-relaxed">
+          Hệ thống chỉ tổng hợp từ các câu hỏi thảo luận thực tế, lượt hỏi Trợ giảng AI và kết quả bài kiểm tra của học viên trong lớp.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="relative space-y-3 select-none">
       {items.map((item, idx) => {

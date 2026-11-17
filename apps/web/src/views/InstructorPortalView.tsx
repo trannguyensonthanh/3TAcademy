@@ -27,9 +27,12 @@ import {
   Lock,
   BarChart3,
   LogOut,
+  Search,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 import { useAcademy, InstructorSidebarTab } from '../context/AcademyContext';
-import { Enrollment, Notification, ChatMessage, ClassSession } from '../types/domain';
+import { Enrollment, Notification, ChatMessage, ClassSession, CohortMaterial } from '../types/domain';
 import {
   formatScheduleSlots,
   formatSessionDateTimeVi,
@@ -102,7 +105,31 @@ export const InstructorPortalView: React.FC = () => {
     navigate,
   } = useAcademy();
 
-  // 5 mục gọn gàng trên Sidebar của Giảng viên (có mục Thống kê lớp học tách biệt)
+  const { data: scheduleData, refetch: refetchSchedule } = useAsyncData(
+    () => teachApi.getInstructorSchedule(),
+    [currentUser?.id]
+  );
+  const { data: instructorCohortsData } = useAsyncData(
+    () => teachApi.getInstructorCohorts(),
+    [currentUser?.id]
+  );
+
+  const [analyticsCohortId, setAnalyticsCohortId] = useState<string>('1');
+  const [enrollmentsState, setEnrollmentsState] = useState<Enrollment[]>([]);
+  const [notificationsState, setNotificationsState] = useState<Notification[]>([]);
+  const [chatMessagesState, setChatMessagesState] = useState<ChatMessage[]>([]);
+  const [remindedEnrollmentIds, setRemindedEnrollmentIds] = useState<Record<string, boolean>>({});
+  const [analyticsReminderToast, setAnalyticsReminderToast] = useState<string | null>(null);
+
+  // State cho Tab Quản lý học viên (STUDENT_MANAGEMENT) & Modal Hồ sơ học viên chi tiết
+  const [studentMgmtCohortFilter, setStudentMgmtCohortFilter] = useState<string>('ALL');
+  const [studentMgmtStatusFilter, setStudentMgmtStatusFilter] = useState<
+    'ALL' | 'NEW' | 'ON_TRACK' | 'BEHIND'
+  >('ALL');
+  const [studentMgmtSearch, setStudentMgmtSearch] = useState<string>('');
+  const [selectedStudentDetail, setSelectedStudentDetail] = useState<Enrollment | null>(null);
+
+  // 6 mục trên Sidebar của Giảng viên (có Quản lý học viên & Thống kê lớp học)
   const sidebarItems: {
     id: InstructorSidebarTab;
     label: string;
@@ -124,6 +151,13 @@ export const InstructorPortalView: React.FC = () => {
       icon: Layers,
     },
     {
+      id: 'STUDENT_MANAGEMENT',
+      label: 'Quản lý học viên',
+      path: '/teach/students',
+      icon: UserCheck,
+      badge: enrollmentsState.length > 0 ? `${enrollmentsState.length} HV` : undefined,
+    },
+    {
       id: 'CLASS_ANALYTICS',
       label: 'Thống kê lớp học',
       path: '/teach/analytics',
@@ -142,22 +176,6 @@ export const InstructorPortalView: React.FC = () => {
       icon: Camera,
     },
   ];
-
-  const { data: scheduleData, refetch: refetchSchedule } = useAsyncData(
-    () => teachApi.getInstructorSchedule(),
-    [currentUser?.id]
-  );
-  const { data: instructorCohortsData } = useAsyncData(
-    () => teachApi.getInstructorCohorts(),
-    [currentUser?.id]
-  );
-
-  const [analyticsCohortId, setAnalyticsCohortId] = useState<string>('1');
-  const [enrollmentsState, setEnrollmentsState] = useState<Enrollment[]>([]);
-  const [notificationsState, setNotificationsState] = useState<Notification[]>([]);
-  const [chatMessagesState, setChatMessagesState] = useState<ChatMessage[]>([]);
-  const [remindedEnrollmentIds, setRemindedEnrollmentIds] = useState<Record<string, boolean>>({});
-  const [analyticsReminderToast, setAnalyticsReminderToast] = useState<string | null>(null);
 
   // Tab 1: Lịch dạy hôm nay — Danh sách học viên chậm tiến độ lấy từ API enrollments
   const [guestLinkGenerated, setGuestLinkGenerated] = useState<string | null>(null);
@@ -304,7 +322,12 @@ export const InstructorPortalView: React.FC = () => {
   );
   const [sessionSavedMsg, setSessionSavedMsg] = useState<string | null>(null);
   const [newMatTitle, setNewMatTitle] = useState<string>('');
-  const [newMatType, setNewMatType] = useState<'SLIDE' | 'PDF'>('SLIDE');
+  const [newMatUrl, setNewMatUrl] = useState<string>('');
+  const [newMatType, setNewMatType] = useState<
+    'VIDEO' | 'SLIDE' | 'PDF' | 'REPO' | 'NOTEBOOK'
+  >('SLIDE');
+  const [localMaterials, setLocalMaterials] = useState<CohortMaterial[]>([]);
+  const [previewSuppVideoUrl, setPreviewSuppVideoUrl] = useState<string | null>(null);
   const [uploadSavedMsg, setUploadSavedMsg] = useState<string | null>(null);
 
   // Bài kiểm tra 10 câu A, B, C, D gắn trực tiếp với từng buổi học + Trạng thái DRAFT / PUBLISHED
@@ -351,6 +374,9 @@ export const InstructorPortalView: React.FC = () => {
       }
       if (scheduleData.chatMessages) {
         setChatMessagesState(scheduleData.chatMessages);
+      }
+      if (scheduleData.materials) {
+        setLocalMaterials(scheduleData.materials);
       }
       if (scheduleData.examReviews && scheduleData.examReviews.length > 0) {
         setExamReviews(
@@ -534,6 +560,15 @@ export const InstructorPortalView: React.FC = () => {
         [sessId]: detail.assessmentId!,
       }));
     }
+    if (detail.materials) {
+      setLocalMaterials((prev) => {
+        const map = new Map(prev.map((m) => [m.id, m]));
+        for (const m of detail.materials!) {
+          map.set(m.id, m);
+        }
+        return Array.from(map.values());
+      });
+    }
     if (detail.questions) {
       setSessionQuizzesById((prev) => ({
         ...prev,
@@ -642,36 +677,60 @@ export const InstructorPortalView: React.FC = () => {
     setTimeout(() => setRemindToast(null), 3500);
   };
 
-  // Lưu tóm tắt kiến thức trọng tâm & tải tài liệu cho buổi học (Cấp 3 - Khối 2)
+  // Lưu tóm tắt kiến thức trọng tâm & tải tài liệu / video bổ sung cho buổi học (Cấp 3 - Khối 2)
   const handleSaveSessionSummaryAndMaterials = async (e: React.FormEvent) => {
     e.preventDefault();
     const summaryMd = formatCleanSummaryText(editSessionSummary.trim() || activeSession.aiSummaryMd);
     const matTitle = newMatTitle.trim();
-    await teachApi.updateSessionMaterials(activeSession.id, {
+    const matUrl = newMatUrl.trim();
+    const res = await teachApi.updateSessionMaterials(activeSession.id, {
       aiSummaryMd: summaryMd,
-      ...(matTitle ? { materialTitle: matTitle, fileType: newMatType } : {}),
+      ...(matTitle
+        ? {
+            materialTitle: matTitle,
+            materialUrl: matUrl || undefined,
+            fileType: newMatType,
+          }
+        : {}),
     });
     updateSessionDetails(activeSession.id, {
       aiSummaryMd: summaryMd,
     });
     setCohortDetailSessions((prev) =>
       prev.map((s) =>
-        String(s.id) === String(activeSession.id) ? { ...s, aiSummaryMd: summaryMd } : s
+        String(s.id) === String(activeSession.id)
+          ? {
+              ...s,
+              aiSummaryMd: summaryMd,
+              attachmentsCount: matTitle ? s.attachmentsCount + 1 : s.attachmentsCount,
+            }
+          : s
       )
     );
-    if (matTitle) {
+    if (res.material) {
+      setLocalMaterials((prev) => [
+        res.material!,
+        ...prev.filter((m) => m.id !== res.material!.id),
+      ]);
+      setNewMatTitle('');
+      setNewMatUrl('');
+    } else if (matTitle) {
       addCohortMaterial(
         selectedCohort.id,
         activeSession.sessionOrder,
         matTitle,
-        newMatType
+        newMatType,
+        matUrl || undefined
       );
       setNewMatTitle('');
+      setNewMatUrl('');
     }
     setSessionSavedMsg(
-      `Đã lưu ghi chú tóm tắt kiến thức trọng tâm và tài liệu đính kèm cho Buổi ${activeSession.sessionOrder}.`
+      matTitle
+        ? `Đã lưu ghi chú tóm tắt và đính kèm "${matTitle}" cho Buổi ${activeSession.sessionOrder}.`
+        : `Đã lưu ghi chú tóm tắt kiến thức trọng tâm cho Buổi ${activeSession.sessionOrder}.`
     );
-    setTimeout(() => setSessionSavedMsg(null), 3500);
+    setTimeout(() => setSessionSavedMsg(null), 4000);
   };
 
   // Tạo 10 câu hỏi gợi ý từ nội dung buổi học đang chọn -> Mặc định ở trạng thái Bản nháp (DRAFT)
@@ -900,8 +959,18 @@ export const InstructorPortalView: React.FC = () => {
     );
   };
 
-  const sessionMaterials = materials.filter(
-    (m) => m.cohortId === selectedCohortId && m.sessionOrder === activeSession.sessionOrder
+  const combinedMaterials = (() => {
+    const map = new Map<string, CohortMaterial>();
+    for (const m of materials) map.set(m.id, m);
+    for (const m of localMaterials) map.set(m.id, m);
+    return Array.from(map.values());
+  })();
+
+  const sessionMaterials = combinedMaterials.filter(
+    (m) =>
+      (String(m.cohortId) === String(selectedCohort.id) &&
+        m.sessionOrder === activeSession.sessionOrder) ||
+      (m.sessionId && String(m.sessionId) === String(activeSession.id))
   );
 
   const filteredDiscussions = discussions.filter(
@@ -1063,20 +1132,32 @@ export const InstructorPortalView: React.FC = () => {
 
                 {/* Các nút điều khiển mở / vào / tắt phòng học trực tuyến */}
                 <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void handleStartAndEnterLiveSession(liveSession.id)}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
-                  >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>
-                      {activeLiveSession
-                        ? 'Vào phòng dạy trực tuyến'
-                        : nextScheduledSession
-                        ? `Bắt đầu dạy trực tuyến (Buổi ${liveSession.sessionOrder})`
-                        : 'Mở phòng trực tuyến bổ trợ'}
-                    </span>
-                  </button>
+                  {activeLiveSession || nextScheduledSession ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleStartAndEnterLiveSession(liveSession.id)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>
+                        {activeLiveSession
+                          ? 'Vào phòng dạy trực tuyến'
+                          : `Bắt đầu dạy trực tuyến (Buổi ${liveSession.sessionOrder})`}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInstructorSidebarTab('MANAGE_COHORTS');
+                        void handleOpenSessionLevel3(liveSession.id, String(liveSession.cohortId));
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Film className="w-4 h-4" />
+                      <span>Xem bản ghi &amp; Quản lý buổi học →</span>
+                    </button>
+                  )}
 
                   {activeLiveSession && (
                     <button
@@ -1467,7 +1548,9 @@ export const InstructorPortalView: React.FC = () => {
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                       Lịch học chuẩn của lớp:{' '}
                       <strong>{formatScheduleSlots(selectedCohort.scheduleSlots)}</strong> · Sĩ số:{' '}
-                      <strong>{selectedCohort.enrolledCount} học viên</strong>
+                      <strong>
+                        {Math.max(selectedCohort.enrolledCount, cohortDetailEnrollments.length)} học viên
+                      </strong>
                     </p>
                   </div>
                 </div>
@@ -1752,80 +1835,117 @@ export const InstructorPortalView: React.FC = () => {
 
                 {/* PHẦN 3 (CẤP 2): BẢNG TIẾN ĐỘ & ĐIỂM SỐ CỦA HỌC VIÊN TRONG LỚP */}
                 <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
-                  <div>
-                    <h2 className="text-lg font-bold">
-                      3. Bảng tiến độ &amp; Điểm kiểm tra của học viên trong lớp ({selectedCohort.code})
-                    </h2>
-                    <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Theo dõi chuyên cần và điểm trung bình các bài kiểm tra mở khóa của từng học viên trong lớp.
-                    </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-bold">
+                        3. Danh sách Học viên, Tiến độ &amp; Câu hỏi trong lớp ({selectedCohort.code})
+                      </h2>
+                      <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                        Theo dõi học viên mới đăng ký, tiến độ từng buổi học, điểm kiểm tra trung bình và các câu hỏi thảo luận.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStudentMgmtCohortFilter(String(selectedCohort.id));
+                        setInstructorSidebarTab('STUDENT_MANAGEMENT');
+                        navigate('/teach/students');
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#10B981] text-[#059669] dark:text-[#34D399] text-xs font-bold cursor-pointer hover:bg-[#D1FAE5]/40"
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>Mở Quản lý học viên toàn diện →</span>
+                    </button>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]">
-                          <th className="py-3 px-3 font-semibold">Học viên</th>
-                          <th className="py-3 px-3 font-semibold">Tham gia buổi học</th>
-                          <th className="py-3 px-3 font-semibold">Bài kiểm tra đã đạt</th>
-                          <th className="py-3 px-3 font-semibold">Điểm trung bình</th>
-                          <th className="py-3 px-3 font-semibold">Trạng thái</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
-                        {cohortDetailEnrollments
-                          .map(
-                            (enr): CohortStudentProgressRow => ({
-                              id: enr.id,
-                              fullName: enr.studentName,
-                              email: enr.studentEmail,
-                              attendedCount: `${enr.completedSessionsCount}/${enr.totalSessionsCount} buổi`,
-                              completedQuizzes: `${Math.max(
-                                0,
-                                enr.totalSessionsCount - enr.missingQuizzesCount
-                              )}/${enr.totalSessionsCount} bài`,
-                              avgScore: `${(enr.avgScorePct / 10).toFixed(1)} / 10`,
-                              statusLabel:
-                                enr.riskLevel === 'LOW'
-                                  ? 'Đúng tiến độ'
-                                  : 'Cần nhắc làm bài',
-                            })
-                          )
-                          .map((row) => (
-                          <tr key={row.id}>
-                            <td className="py-3 px-3">
-                              <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                                {row.fullName}
-                              </div>
-                              <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                                {row.email}
-                              </div>
-                            </td>
-                            <td className="py-3 px-3 font-mono font-semibold">
-                              {row.attendedCount}
-                            </td>
-                            <td className="py-3 px-3 font-mono font-semibold">
-                              {row.completedQuizzes}
-                            </td>
-                            <td className="py-3 px-3 font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                              {row.avgScore}
-                            </td>
-                            <td className="py-3 px-3">
-                              <span
-                                className={`inline-flex px-2.5 py-1 rounded-md font-bold text-[11px] ${
-                                  row.statusLabel === 'Đúng tiến độ'
-                                    ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
-                                    : 'bg-[#F59E0B]/15 text-[#F59E0B]'
-                                }`}
-                              >
-                                {row.statusLabel}
-                              </span>
-                            </td>
+                  {cohortDetailEnrollments.length === 0 ? (
+                    <div className="p-6 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center space-y-1">
+                      <div className="text-xs font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                        Chưa có học viên nào hoàn tất ghi danh vào lớp {selectedCohort.code}
+                      </div>
+                      <p className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                        Ngay khi học viên thanh toán học phí qua VietQR/SePay, hồ sơ học viên sẽ tự động đồng bộ vào danh sách này.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]">
+                            <th className="py-3 px-3 font-semibold">Học viên</th>
+                            <th className="py-3 px-3 font-semibold">Mã đơn &amp; Ngày đăng ký</th>
+                            <th className="py-3 px-3 font-semibold">Tiến độ buổi học</th>
+                            <th className="py-3 px-3 font-semibold">Điểm trung bình</th>
+                            <th className="py-3 px-3 font-semibold">Câu hỏi đã đặt</th>
+                            <th className="py-3 px-3 font-semibold">Trạng thái</th>
+                            <th className="py-3 px-3 font-semibold text-right">Hồ sơ</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
+                          {cohortDetailEnrollments.map((enr) => {
+                            const statusLabel =
+                              enr.riskLevel === 'LOW' ? 'Đúng tiến độ' : 'Cần nhắc làm bài';
+                            return (
+                              <tr key={enr.id} className="hover:bg-[#F7FBF9]/60 dark:hover:bg-[#090F0C]/60">
+                                <td className="py-3 px-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                      {enr.studentName}
+                                    </span>
+                                    {enr.isNewEnrollment && (
+                                      <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-[#059669] dark:text-[#34D399] font-mono text-[10px] font-bold">
+                                        MỚI ĐĂNG KÝ
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                    {enr.studentEmail}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                    {enr.orderCode || 'Đã kích hoạt'}
+                                  </div>
+                                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                    {enr.enrolledAtFormatted || enr.lastActivityAt?.slice(0, 10)}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3 font-mono font-semibold">
+                                  {enr.completedSessionsCount}/{enr.totalSessionsCount} buổi
+                                </td>
+                                <td className="py-3 px-3 font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                  {(enr.avgScorePct / 10).toFixed(1)} / 10
+                                </td>
+                                <td className="py-3 px-3 font-mono font-semibold">
+                                  {enr.questionsCount ?? 0} câu hỏi
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span
+                                    className={`inline-flex px-2.5 py-1 rounded-md font-bold text-[11px] ${
+                                      statusLabel === 'Đúng tiến độ'
+                                        ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
+                                        : 'bg-[#F59E0B]/15 text-[#F59E0B]'
+                                    }`}
+                                  >
+                                    {statusLabel}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedStudentDetail(enr)}
+                                    className="px-3 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-[#059669] dark:text-[#34D399] font-bold cursor-pointer"
+                                  >
+                                    Xem chi tiết →
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1904,10 +2024,10 @@ export const InstructorPortalView: React.FC = () => {
                       }`}
                     >
                       {activeSession.status === 'REPLAY_READY'
-                        ? 'Đã dạy xong — Có bản ghi tự động từ Livestream'
+                        ? 'Đã kết thúc & Lưu bản ghi chính thức (Đã khóa trạng thái)'
                         : activeSession.status === 'LIVE'
-                        ? 'Hôm nay dạy trực tuyến (19:30 - 21:30)'
-                        : 'Buổi học sắp tới / Bổ trợ'}
+                        ? 'Đang phát trực tuyến (19:30 - 21:30)'
+                        : 'Buổi học sắp tới — Chưa diễn ra'}
                     </span>
                   </div>
 
@@ -1919,7 +2039,7 @@ export const InstructorPortalView: React.FC = () => {
                           ● PHÒNG DẠY TRỰC TUYẾN ĐANG MỞ CHO HỌC VIÊN
                         </div>
                         <p className="text-sm font-bold">
-                          Học viên có thể vào lớp ngay lúc này. Bấm vào phòng dạy hoặc tắt Live khi buổi học kết thúc.
+                          Học viên có thể vào lớp ngay lúc này. Khi buổi dạy kết thúc, bấm Tắt Live để chốt bản ghi chính thức (sau khi kết thúc sẽ khóa trạng thái buổi học).
                         </p>
                       </div>
 
@@ -1938,7 +2058,7 @@ export const InstructorPortalView: React.FC = () => {
                           onClick={() => void handleStopLiveSession(activeSession.id)}
                           className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold cursor-pointer"
                         >
-                          <span>Tắt Live (Kết thúc buổi học)</span>
+                          <span>Kết thúc buổi dạy &amp; Chốt bản ghi chính thức</span>
                         </button>
 
                         <button
@@ -1966,46 +2086,39 @@ export const InstructorPortalView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Trường hợp 2: Buổi học đã dạy xong (REPLAY_READY) -> Trình xem Bản ghi Video thật */}
+                  {/* Trường hợp 2: Buổi học đã dạy xong (REPLAY_READY) -> Hiển thị Bản ghi chính thức & Khóa vĩnh viễn trạng thái */}
                   {activeSession.status === 'REPLAY_READY' && (
                     <div className="space-y-4">
-                      {isPlayingReplayPreview || sessionVideoUrlById[activeSession.id] ? (
-                        <SessionVideoPlayer
-                          src={sessionVideoUrlById[activeSession.id] || ''}
-                          title={activeSession.title}
-                          compact
-                          emptyTitle="Chưa gắn đường dẫn video bản ghi"
-                          emptyDescription="Hãy nhập URL video (.mp4 / .m3u8) ở khung bên dưới rồi bấm Lưu nguồn video."
-                        />
-                      ) : (
-                        <div className="rounded-2xl bg-[#0F172A] border border-slate-800 p-6 text-white flex flex-wrap items-center justify-between gap-4">
-                          <div className="space-y-1 max-w-2xl">
-                            <h3 className="text-base sm:text-lg font-bold">
-                              {activeSession.title}
-                            </h3>
-                            <p className="text-xs text-slate-300">
-                              Bản ghi buổi học đã sẵn sàng để giảng viên kiểm tra lại trước khi học viên ôn tập, hoặc bạn có thể mở lại phòng dạy trực tuyến nếu cần.
-                            </p>
+                      <SessionVideoPlayer
+                        src={
+                          sessionVideoUrlById[activeSession.id] ||
+                          '/videos/2759484-uhd_3840_2160_30fps.mp4'
+                        }
+                        title={activeSession.title}
+                        compact
+                        emptyTitle="Bản ghi buổi học đã lưu trữ"
+                        emptyDescription="Bản ghi chính thức của buổi học đã được lưu trữ cố định."
+                      />
+
+                      <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-start justify-between gap-3 text-xs">
+                        <div className="space-y-1 max-w-3xl">
+                          <div className="inline-flex items-center gap-1.5 font-bold text-[#065F46] dark:text-[#34D399]">
+                            <Lock className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
+                            <span>
+                              Bản ghi buổi học đã hoàn tất và được khóa cố định (Không chuyển ngược về LIVE / SCHEDULED)
+                            </span>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2.5">
-                            <button
-                              type="button"
-                              onClick={() => setIsPlayingReplayPreview(true)}
-                              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                              <span>Xem trước bản ghi video</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleStartAndEnterLiveSession(activeSession.id)}
-                              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/15 text-xs font-bold cursor-pointer"
-                            >
-                              <span>Mở lại phòng dạy trực tuyến</span>
-                            </button>
-                          </div>
+                          <p className="text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                            Buổi học đã kết thúc vào lịch trình{' '}
+                            <strong>{formatSessionDateTimeVi(activeSession.scheduledStart)}</strong> và đã lưu video bản ghi chính thức cho học viên ôn tập. Nếu giảng viên cần giải thích thêm, đính chính hoặc đăng{' '}
+                            <strong>Video hướng dẫn bổ sung</strong>, vui lòng thêm tại{' '}
+                            <strong>Mục 2 (Tài liệu, Ghi chú &amp; Video hướng dẫn bổ sung)</strong> ngay bên dưới.
+                          </p>
                         </div>
-                      )}
+                        <span className="px-2.5 py-1 rounded-md bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-mono text-[11px] font-bold shrink-0">
+                          Đã chốt bản ghi
+                        </span>
+                      </div>
                     </div>
                   )}
 
@@ -2033,127 +2146,174 @@ export const InstructorPortalView: React.FC = () => {
                       </div>
                     </div>
                   )}
-
-                  {/* Khung quản lý Nguồn Video & Trạng thái Live đồng bộ API thật */}
-                  <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2 font-bold">
-                        <Film className="w-4 h-4 text-[#10B981]" />
-                        <span>Cấu hình nguồn Video bài giảng &amp; Trạng thái buổi học (Đồng bộ học viên)</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {(['SCHEDULED', 'LIVE', 'REPLAY_READY'] as const).map((st) => (
-                          <button
-                            key={st}
-                            type="button"
-                            disabled={isSavingVideo}
-                            onClick={() => void handleSaveSessionVideoAndStatus(st)}
-                            className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold cursor-pointer ${
-                              activeSession.status === st
-                                ? 'bg-[#10B981] text-white'
-                                : 'bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]'
-                            }`}
-                          >
-                            {st}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="text"
-                        value={videoInputUrl}
-                        onChange={(e) => setVideoInputUrl(e.target.value)}
-                        placeholder="Nhập URL video (.mp4 / .m3u8) hoặc R2 key..."
-                        className="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-mono"
-                      />
-                      <button
-                        type="button"
-                        disabled={isSavingVideo}
-                        onClick={() => void handleSaveSessionVideoAndStatus()}
-                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer shrink-0 disabled:opacity-60"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        <span>{isSavingVideo ? 'Đang lưu...' : 'Lưu nguồn video'}</span>
-                      </button>
-                    </div>
-                    {videoSaveMsg && (
-                      <div className="text-xs font-bold text-[#059669] dark:text-[#34D399]">
-                        ✓ {videoSaveMsg}
-                      </div>
-                    )}
-                  </div>
                 </div>
 
-                {/* KHỐI 2 (CẤP 3): TÀI LIỆU & TÓM TẮT BUỔI HỌC */}
+                {/* KHỐI 2 (CẤP 3): TÀI LIỆU, GHI CHÚ & VIDEO HƯỚNG DẪN BỔ SUNG */}
                 <form
                   onSubmit={handleSaveSessionSummaryAndMaterials}
                   className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4"
                 >
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-5 h-5 text-[#10B981]" />
-                    <h2 className="text-lg font-bold">
-                      2. Tài liệu &amp; Tóm tắt kiến thức trọng tâm (Buổi {activeSession.sessionOrder})
-                    </h2>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-[#10B981]" />
+                      <h2 className="text-lg font-bold">
+                        2. Tài liệu, Ghi chú &amp; Video hướng dẫn bổ sung (Buổi {activeSession.sessionOrder})
+                      </h2>
+                    </div>
+                    <span className="text-[11px] font-semibold text-[#059669] dark:text-[#34D399] px-2.5 py-1 rounded-lg bg-[#D1FAE5]/60 dark:bg-emerald-950/60">
+                      Cho phép bổ sung Slide, PDF, Source Code &amp; Video hướng dẫn sau buổi học
+                    </span>
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold mb-1.5">
-                      Ghi chú tóm tắt kiến thức trọng tâm sau buổi dạy
+                      Ghi chú tóm tắt kiến thức trọng tâm &amp; nội dung bổ sung sau buổi dạy
                     </label>
                     <textarea
                       rows={3}
                       value={editSessionSummary}
                       onChange={(e) => setEditSessionSummary(e.target.value)}
-                      placeholder="Viết tóm tắt các ý chính và lưu ý thực hành của buổi học này..."
+                      placeholder="Viết tóm tắt các ý chính, đính chính hoặc lưu ý thực hành bổ sung của buổi học này..."
                       className="w-full p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs sm:text-sm leading-relaxed"
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="sm:col-span-2">
+                  <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-3">
+                    <div className="text-xs font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Thêm học liệu hoặc Video hướng dẫn bổ sung cho Buổi {activeSession.sessionOrder}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-semibold mb-1.5">
+                          Tên tài liệu / Tiêu đề Video hướng dẫn bổ sung
+                        </label>
+                        <input
+                          type="text"
+                          value={newMatTitle}
+                          onChange={(e) => setNewMatTitle(e.target.value)}
+                          placeholder={
+                            newMatType === 'VIDEO'
+                              ? `VD: Video hướng dẫn bổ sung Buổi ${activeSession.sessionOrder} - Chữa bài tập thực hành.mp4`
+                              : `VD: Slide bài giảng Buổi ${activeSession.sessionOrder}.pdf`
+                          }
+                          className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold mb-1.5">
+                          Loại học liệu bổ sung
+                        </label>
+                        <select
+                          value={newMatType}
+                          onChange={(e) =>
+                            setNewMatType(
+                              e.target.value as
+                                | 'VIDEO'
+                                | 'SLIDE'
+                                | 'PDF'
+                                | 'REPO'
+                                | 'NOTEBOOK'
+                            )
+                          }
+                          className="w-full px-3 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold"
+                        >
+                          <option value="VIDEO">Video hướng dẫn / Video bổ sung (MP4 / Link)</option>
+                          <option value="SLIDE">Slide bài giảng PDF</option>
+                          <option value="PDF">Tài liệu hướng dẫn / Bài tập PDF</option>
+                          <option value="REPO">Source Code / GitHub Repo mẫu</option>
+                          <option value="NOTEBOOK">Jupyter Notebook (.ipynb)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
                       <label className="block text-xs font-semibold mb-1.5">
-                        Tải lên file Slide PDF / Tài liệu bài tập mới cho buổi học
+                        Đường dẫn Video bổ sung (.mp4 / .m3u8) hoặc Link tải tài liệu (Tùy chọn)
                       </label>
                       <input
                         type="text"
-                        value={newMatTitle}
-                        onChange={(e) => setNewMatTitle(e.target.value)}
-                        placeholder={`VD: Slide bài giảng Buổi ${activeSession.sessionOrder}.pdf`}
-                        className="w-full px-3.5 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs"
+                        value={newMatUrl}
+                        onChange={(e) => setNewMatUrl(e.target.value)}
+                        placeholder={
+                          newMatType === 'VIDEO'
+                            ? 'VD: /videos/2759484-uhd_3840_2160_30fps.mp4 hoặc https://.../video-huong-dan-bo-sung.mp4'
+                            : 'VD: https://.../tai-lieu-bo-sung.pdf (Để trống nếu tải lên kho lưu trữ mặc định)'
+                        }
+                        className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-mono"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold mb-1.5">Loại tài liệu</label>
-                      <select
-                        value={newMatType}
-                        onChange={(e) => setNewMatType(e.target.value as 'SLIDE' | 'PDF')}
-                        className="w-full px-3 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs"
-                      >
-                        <option value="SLIDE">Slide bài giảng PDF</option>
-                        <option value="PDF">Tài liệu hướng dẫn / Bài tập</option>
-                      </select>
                     </div>
                   </div>
 
-                  {/* Danh sách tài liệu hiện có của buổi học */}
+                  {/* Danh sách tài liệu & video bổ sung hiện có của buổi học */}
                   {sessionMaterials.length > 0 && (
-                    <div className="pt-2 space-y-2">
+                    <div className="pt-2 space-y-3">
                       <div className="text-xs font-semibold text-[#475569] dark:text-[#94A3B8]">
-                        Tài liệu đã đính kèm trong Buổi {activeSession.sessionOrder}:
+                        Tài liệu &amp; Video bổ sung đã đính kèm trong Buổi {activeSession.sessionOrder} ({sessionMaterials.length}):
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {sessionMaterials.map((m) => (
-                          <span
-                            key={m.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-medium"
-                          >
-                            <FileText className="w-3.5 h-3.5 text-[#10B981]" />
-                            <span>{m.title}</span>
-                          </span>
-                        ))}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {sessionMaterials.map((m) => {
+                          const isVideoMat =
+                            m.fileType === 'VIDEO' ||
+                            m.type === 'VIDEO' ||
+                            m.title.toLowerCase().endsWith('.mp4') ||
+                            m.title.toLowerCase().includes('video');
+                          return (
+                            <div
+                              key={m.id}
+                              className="p-3 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {isVideoMat ? (
+                                  <Film className="w-4 h-4 text-[#10B981] shrink-0" />
+                                ) : (
+                                  <FileText className="w-4 h-4 text-[#10B981] shrink-0" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="font-bold truncate">{m.title}</div>
+                                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                    {isVideoMat ? 'Video hướng dẫn bổ sung' : `Học liệu ${m.fileType}`} · {m.fileSize}
+                                  </div>
+                                </div>
+                              </div>
+                              {isVideoMat && m.downloadUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewSuppVideoUrl((prev) =>
+                                      prev === m.downloadUrl ? null : m.downloadUrl
+                                    )
+                                  }
+                                  className="px-2.5 py-1 rounded-lg bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-bold text-[11px] shrink-0 cursor-pointer"
+                                >
+                                  {previewSuppVideoUrl === m.downloadUrl ? 'Đóng video' : 'Xem video'}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
+
+                      {previewSuppVideoUrl && (
+                        <div className="pt-2 space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-[#059669] dark:text-[#34D399]">
+                              Trình phát Video hướng dẫn bổ sung:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewSuppVideoUrl(null)}
+                              className="text-xs font-semibold text-[#475569] hover:text-[#EF4444] cursor-pointer"
+                            >
+                              Đóng trình phát ✕
+                            </button>
+                          </div>
+                          <SessionVideoPlayer
+                            src={previewSuppVideoUrl}
+                            title="Video hướng dẫn bổ sung"
+                            compact
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2169,7 +2329,7 @@ export const InstructorPortalView: React.FC = () => {
                       className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
                     >
                       <Save className="w-3.5 h-3.5" />
-                      <span>Lưu tóm tắt &amp; Tài liệu buổi học</span>
+                      <span>Lưu tóm tắt, Tài liệu &amp; Video bổ sung</span>
                     </button>
                   </div>
                 </form>
@@ -2571,6 +2731,383 @@ export const InstructorPortalView: React.FC = () => {
         )}
 
         {/* ==================================================================
+            2B. QUẢN LÝ HỌC VIÊN TOÀN DIỆN (/teach/students)
+           ================================================================== */}
+        {instructorSidebarTab === 'STUDENT_MANAGEMENT' && (() => {
+          const scopedEnrollments = enrollmentsState.filter((e) => {
+            if (
+              studentMgmtCohortFilter !== 'ALL' &&
+              String(e.cohortId) !== String(studentMgmtCohortFilter)
+            ) {
+              return false;
+            }
+            if (studentMgmtStatusFilter === 'NEW' && !e.isNewEnrollment) {
+              return false;
+            }
+            if (studentMgmtStatusFilter === 'ON_TRACK' && e.riskLevel !== 'LOW') {
+              return false;
+            }
+            if (studentMgmtStatusFilter === 'BEHIND' && e.riskLevel === 'LOW') {
+              return false;
+            }
+            if (studentMgmtSearch.trim()) {
+              const q = studentMgmtSearch.trim().toLowerCase();
+              const matched =
+                e.studentName.toLowerCase().includes(q) ||
+                e.studentEmail.toLowerCase().includes(q) ||
+                (e.orderCode || '').toLowerCase().includes(q) ||
+                e.cohortCode.toLowerCase().includes(q);
+              if (!matched) return false;
+            }
+            return true;
+          });
+
+          const cohortScopedAll = enrollmentsState.filter(
+            (e) =>
+              studentMgmtCohortFilter === 'ALL' ||
+              String(e.cohortId) === String(studentMgmtCohortFilter)
+          );
+          const newEnrollmentsCount = cohortScopedAll.filter((e) => e.isNewEnrollment).length;
+          const onTrackCount = cohortScopedAll.filter((e) => e.riskLevel === 'LOW').length;
+          const behindCount = cohortScopedAll.filter((e) => e.riskLevel !== 'LOW').length;
+          const totalQuestionsAsked = cohortScopedAll.reduce(
+            (sum, e) => sum + (e.questionsCount ?? 0),
+            0
+          );
+
+          return (
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                      QUẢN LÝ HỌC VIÊN &amp; THEO DÕI GHI DANH THỜI GIAN THỰC
+                    </div>
+                    <h1 className="text-xl sm:text-2xl font-bold">
+                      Danh sách Học viên, Tiến độ học tập &amp; Lịch sử đặt câu hỏi
+                    </h1>
+                    <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
+                      Theo dõi học viên mới đăng ký qua cổng thanh toán, lớp đang theo học, tiến độ từng buổi (Buổi 1 ➔ Buổi 6), điểm kiểm tra và các câu hỏi học viên đã đặt.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 5 Thẻ chỉ số tổng quan */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-2">
+                  <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                    <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
+                      Tổng số học viên
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[#0F172A] dark:text-white mt-0.5">
+                      {cohortScopedAll.length} HV
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#D1FAE5]/40 dark:bg-[#065F46]/25 border border-[#10B981]/30">
+                    <div className="text-[11px] font-semibold text-[#065F46] dark:text-[#34D399]">
+                      Mới đăng ký (7 ngày)
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[#10B981] mt-0.5">
+                      {newEnrollmentsCount} HV
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                    <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
+                      Đúng tiến độ
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[#059669] dark:text-[#34D399] mt-0.5">
+                      {onTrackCount} HV
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                    <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
+                      Cần nhắc nhở / hỗ trợ
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[#F59E0B] mt-0.5">
+                      {behindCount} HV
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                    <div className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
+                      Tổng câu hỏi đã đặt
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[#0F172A] dark:text-white mt-0.5">
+                      {totalQuestionsAsked} câu
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bộ lọc theo Lớp, Trạng thái & Tìm kiếm */}
+                <div className="pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-[#475569] dark:text-[#94A3B8] mr-1">
+                      Lớp học:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setStudentMgmtCohortFilter('ALL')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                        studentMgmtCohortFilter === 'ALL'
+                          ? 'bg-[#10B981] text-white'
+                          : 'bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]'
+                      }`}
+                    >
+                      Tất cả các lớp ({enrollmentsState.length})
+                    </button>
+                    {effectiveCohorts.map((c) => {
+                      const countInCohort = enrollmentsState.filter(
+                        (e) => String(e.cohortId) === String(c.id)
+                      ).length;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => setStudentMgmtCohortFilter(String(c.id))}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                            String(studentMgmtCohortFilter) === String(c.id)
+                              ? 'bg-[#10B981] text-white'
+                              : 'bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]'
+                          }`}
+                        >
+                          {c.code} ({countInCohort})
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1 bg-[#F7FBF9] dark:bg-[#090F0C] p-1 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24]">
+                      {(
+                        [
+                          { id: 'ALL', label: 'Tất cả' },
+                          { id: 'NEW', label: 'Mới đăng ký' },
+                          { id: 'ON_TRACK', label: 'Đúng tiến độ' },
+                          { id: 'BEHIND', label: 'Cần hỗ trợ' },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setStudentMgmtStatusFilter(tab.id)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                            studentMgmtStatusFilter === tab.id
+                              ? 'bg-[#10B981] text-white'
+                              : 'text-[#475569] dark:text-[#94A3B8]'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="relative min-w-[230px]">
+                      <Search className="w-3.5 h-3.5 text-[#475569] absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={studentMgmtSearch}
+                        onChange={(e) => setStudentMgmtSearch(e.target.value)}
+                        placeholder="Tìm tên, email, mã đơn..."
+                        className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {remindToast && (
+                <div className="p-3.5 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 text-xs font-bold">
+                  ✓ {remindToast}
+                </div>
+              )}
+
+              {/* Bảng danh sách học viên chi tiết */}
+              <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
+                {scopedEnrollments.length === 0 ? (
+                  <div className="p-8 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center space-y-1.5">
+                    <div className="text-sm font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Không tìm thấy học viên nào khớp bộ lọc hiện tại
+                    </div>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                      Khi học viên hoàn tất thanh toán học phí qua VietQR / SePay, hồ sơ ghi danh và tiến độ học tập sẽ hiển thị ngay tại đây.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]">
+                          <th className="py-3 px-3 font-semibold">Học viên &amp; Liên hệ</th>
+                          <th className="py-3 px-3 font-semibold">Lớp học &amp; Mã đơn học phí</th>
+                          <th className="py-3 px-3 font-semibold">Thời gian đăng ký</th>
+                          <th className="py-3 px-3 font-semibold">Tiến độ từng buổi</th>
+                          <th className="py-3 px-3 font-semibold">Điểm TB</th>
+                          <th className="py-3 px-3 font-semibold">Câu hỏi đã đặt</th>
+                          <th className="py-3 px-3 font-semibold">Trạng thái</th>
+                          <th className="py-3 px-3 font-semibold text-right">Thao tác</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E2ECE7] dark:divide-[#1E2D24]">
+                        {scopedEnrollments.map((enr) => {
+                          const isReminded = Boolean(remindedEnrollmentIds[enr.id]);
+                          const progList = enr.sessionProgressList || [];
+                          return (
+                            <tr
+                              key={enr.id}
+                              className="hover:bg-[#F7FBF9]/70 dark:hover:bg-[#090F0C]/70 transition-colors"
+                            >
+                              <td className="py-3.5 px-3">
+                                <div className="flex items-center gap-2.5">
+                                  <AvatarWithFallback
+                                    name={enr.studentName}
+                                    className="w-9 h-9 rounded-full shrink-0"
+                                  />
+                                  <div className="space-y-0.5">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                                        {enr.studentName}
+                                      </span>
+                                      {enr.isNewEnrollment && (
+                                        <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-[#059669] dark:text-[#34D399] font-mono text-[10px] font-bold">
+                                          MỚI ĐĂNG KÝ
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                      {enr.studentEmail}
+                                      {enr.phone ? ` · ${enr.phone}` : ''}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-3">
+                                <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                  {enr.cohortCode}
+                                </div>
+                                <div className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate max-w-[200px]">
+                                  {enr.orderCode
+                                    ? `Mã đơn: ${enr.orderCode}`
+                                    : enr.cohortName || 'Ghi danh chính thức'}
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-3">
+                                <div className="font-mono font-semibold text-[#0F172A] dark:text-white">
+                                  {enr.enrolledAtFormatted || enr.lastActivityAt?.slice(0, 10)}
+                                </div>
+                                <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                                  Hoạt động: {enr.lastActivityAt?.slice(0, 10)}
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-3">
+                                <div className="font-mono font-bold">
+                                  {enr.completedSessionsCount}/{enr.totalSessionsCount} buổi (
+                                  {enr.progressPercent ??
+                                    Math.round(
+                                      (enr.completedSessionsCount /
+                                        Math.max(1, enr.totalSessionsCount)) *
+                                        100
+                                    )}
+                                  %)
+                                </div>
+                                {progList.length > 0 && (
+                                  <div className="flex items-center gap-1 mt-1">
+                                    {progList.map((sp) => (
+                                      <span
+                                        key={sp.sessionId}
+                                        title={`Buổi ${sp.sessionOrder}: ${sp.title} — ${
+                                          sp.isCompleted
+                                            ? 'Đã hoàn thành'
+                                            : sp.isWatched
+                                              ? 'Đã xem video'
+                                              : 'Chưa học'
+                                        }`}
+                                        className={`w-5 h-4 rounded text-[9px] font-mono font-bold inline-flex items-center justify-center ${
+                                          sp.isCompleted
+                                            ? 'bg-[#10B981] text-white'
+                                            : sp.isWatched
+                                              ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                                              : 'bg-[#E2ECE7] dark:bg-[#1E2D24] text-[#475569] dark:text-[#94A3B8]'
+                                        }`}
+                                      >
+                                        B{sp.sessionOrder}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="py-3.5 px-3 font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                <div>{(enr.avgScorePct / 10).toFixed(1)} / 10</div>
+                                <div className="text-[10px] font-normal text-[#475569] dark:text-[#94A3B8]">
+                                  Thiếu {enr.missingQuizzesCount} bài quiz
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-3">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-mono font-bold text-[11px] ${
+                                    (enr.questionsCount ?? 0) > 0
+                                      ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
+                                      : 'bg-[#F7FBF9] dark:bg-[#090F0C] text-[#475569] dark:text-[#94A3B8]'
+                                  }`}
+                                >
+                                  <MessageSquare className="w-3 h-3" />
+                                  <span>{enr.questionsCount ?? 0} câu hỏi</span>
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-3">
+                                <span
+                                  className={`inline-flex px-2.5 py-1 rounded-md font-bold text-[11px] ${
+                                    enr.riskLevel === 'LOW'
+                                      ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
+                                      : enr.riskLevel === 'MEDIUM'
+                                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                        : 'bg-[#EF4444]/15 text-[#EF4444]'
+                                  }`}
+                                >
+                                  {enr.riskLevel === 'LOW'
+                                    ? 'Đúng tiến độ'
+                                    : enr.riskLevel === 'MEDIUM'
+                                      ? 'Cần lưu ý'
+                                      : 'Cần hỗ trợ sớm'}
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-3 text-right">
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedStudentDetail(enr)}
+                                    className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold cursor-pointer"
+                                  >
+                                    Xem hồ sơ &amp; Tiến độ
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isReminded}
+                                    onClick={() => handleRemindStudent(enr.id, enr.studentName)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] font-semibold cursor-pointer disabled:opacity-50"
+                                  >
+                                    {isReminded ? 'Đã nhắc' : 'Nhắc học'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ==================================================================
             3. THỐNG KÊ LỚP HỌC (/teach/analytics) — TÁCH RIÊNG 4 BIỂU ĐỒ CHUYÊN SÂU
            ================================================================== */}
         {instructorSidebarTab === 'CLASS_ANALYTICS' && (() => {
@@ -2608,10 +3145,10 @@ export const InstructorPortalView: React.FC = () => {
                 (e) => e.completedSessionsCount >= sess.sessionOrder && e.riskLevel === 'LOW'
               ).length,
               mediumRisk: effectiveEnrollments.filter(
-                (e) => e.riskLevel === 'MEDIUM'
+                (e) => e.completedSessionsCount >= sess.sessionOrder && e.riskLevel === 'MEDIUM'
               ).length,
               highRisk: effectiveEnrollments.filter(
-                (e) => e.riskLevel === 'HIGH'
+                (e) => e.completedSessionsCount >= sess.sessionOrder && e.riskLevel === 'HIGH'
               ).length,
             },
           }));
@@ -2644,7 +3181,10 @@ export const InstructorPortalView: React.FC = () => {
               rangeLabel: '< 50',
               bandTitle: 'Chưa đạt chuẩn',
               studentCount: below50Count,
-              percentage: Math.round((below50Count / totalEnr) * 100),
+              percentage:
+                effectiveEnrollments.length > 0
+                  ? Math.round((below50Count / totalEnr) * 100)
+                  : 0,
               color: '#EF4444',
               sampleNote: 'Cần học viên xem lại video bài giảng và làm lại bài kiểm tra mở khóa.',
             },
@@ -2652,7 +3192,10 @@ export const InstructorPortalView: React.FC = () => {
               rangeLabel: '50 - 69',
               bandTitle: 'Cần củng cố thêm',
               studentCount: b50to69Count,
-              percentage: Math.round((b50to69Count / totalEnr) * 100),
+              percentage:
+                effectiveEnrollments.length > 0
+                  ? Math.round((b50to69Count / totalEnr) * 100)
+                  : 0,
               color: '#F59E0B',
               sampleNote: 'Đã nắm lý thuyết cơ bản nhưng còn nhầm câu hỏi tình huống thực tế.',
             },
@@ -2660,7 +3203,10 @@ export const InstructorPortalView: React.FC = () => {
               rangeLabel: '70 - 84',
               bandTitle: 'Đạt chuẩn tốt',
               studentCount: b70to84Count,
-              percentage: Math.round((b70to84Count / totalEnr) * 100),
+              percentage:
+                effectiveEnrollments.length > 0
+                  ? Math.round((b70to84Count / totalEnr) * 100)
+                  : 0,
               color: '#10B981',
               sampleNote: 'Nắm vững kiến thức trọng tâm và vượt mốc mở khóa buổi tiếp theo.',
             },
@@ -2668,81 +3214,86 @@ export const InstructorPortalView: React.FC = () => {
               rangeLabel: '85 - 100',
               bandTitle: 'Xuất sắc',
               studentCount: above85Count,
-              percentage: Math.round((above85Count / totalEnr) * 100),
+              percentage:
+                effectiveEnrollments.length > 0
+                  ? Math.round((above85Count / totalEnr) * 100)
+                  : 0,
               color: 'emerald-gradient',
               sampleNote: 'Hoàn thành xuất sắc cả câu hỏi kiến trúc hệ thống và tối ưu hiệu năng.',
             },
           ];
 
-          // 3. Gom nhóm trực tiếp từ chat_messages.detectedTopic kết hợp discussion_threads
-          const detectedTopicCounts = chatMessagesState.reduce<Record<string, number>>(
-            (acc, msg) => {
-              if (msg.detectedTopic) {
-                acc[msg.detectedTopic] = (acc[msg.detectedTopic] || 0) + 1;
-              }
-              return acc;
-            },
-            {}
+          // 3. Gom nhóm 100% từ dữ liệu thật của lớp đang chọn (discussion_threads + chat_messages + điểm kiểm tra từng buổi)
+          const cohortDiscussions = discussions.filter(
+            (d) => String(d.cohortId) === String(currentAnalyticsCohort.id)
+          );
+          const cohortStudentChatMsgs = chatMessagesState.filter(
+            (m) =>
+              String(m.cohortId) === String(currentAnalyticsCohort.id) &&
+              m.senderRole === 'STUDENT'
           );
 
-          const topicBottlenecks = [
-            {
-              skillCode: 'RAG & Vector Search',
-              topicName: 'Cân bằng trọng số Hybrid Search (BM25 + pgvector) & Tách bảng PDF',
-              sessionLabel: 'Buổi 4 & 5',
-              wrongAnswerRatePct: 38,
-              discussionQuestionsCount: 14,
-              aiTutorQueriesCount: 38 + (detectedTopicCounts['RAG & Vector Search'] || 0) * 4,
-              recommendationNote:
-                'Dành 10 phút đầu Buổi 5 minh họa trực tiếp công thức chuẩn hóa điểm RRF trên dữ liệu hợp đồng mẫu.',
-            },
-            {
-              skillCode: 'PostgreSQL & SQL',
-              topicName: 'Kiểm soát phân quyền truy cập tài liệu ở tầng truy vấn SQL (Row-Level)',
-              sessionLabel: 'Buổi 3 & 4',
-              wrongAnswerRatePct: 31,
-              discussionQuestionsCount: 11,
-              aiTutorQueriesCount: 28 + (detectedTopicCounts['PostgreSQL & SQL'] || 0) * 4,
-              recommendationNote:
-                'Ghim câu lệnh SQL lọc quyền phòng ban trước khi chạy toán tử khoảng cách vector lên đầu mục thảo luận.',
-            },
-            {
-              skillCode: 'FastAPI',
-              topicName: 'Xác thực JWT Dependency Injection & Kiểm soát bất đồng bộ trên FastAPI',
-              sessionLabel: 'Buổi 3',
-              wrongAnswerRatePct: 24,
-              discussionQuestionsCount: 9,
-              aiTutorQueriesCount: 22 + (detectedTopicCounts['FastAPI'] || 0) * 3,
-              recommendationNote:
-                'Bổ sung sơ đồ luồng Middleware kiểm tra quyền trước khi gọi tầng truy vấn cơ sở dữ liệu.',
-            },
-            {
-              skillCode: 'Python',
-              topicName: 'Xử lý bất đồng bộ (asyncio.gather) giảm độ trễ phản hồi dưới 800ms',
-              sessionLabel: 'Buổi 2 & 3',
-              wrongAnswerRatePct: 18,
-              discussionQuestionsCount: 6,
-              aiTutorQueriesCount: 17 + (detectedTopicCounts['Python'] || 0) * 3,
-              recommendationNote:
-                'Đa số học viên đã nắm vững, chỉ cần lưu ý cách xử lý lỗi timeout khi gọi API ngoài.',
-            },
-            {
-              skillCode: 'Redis & Docker',
-              topicName: 'Thiết lập Semantic Cache bằng Redis & Đóng gói Docker Compose',
-              sessionLabel: 'Buổi 5 & 6',
-              wrongAnswerRatePct: 14,
-              discussionQuestionsCount: 5,
-              aiTutorQueriesCount:
-                12 +
-                ((detectedTopicCounts['Redis'] || 0) + (detectedTopicCounts['Docker'] || 0)) * 3,
-              recommendationNote:
-                'Cung cấp sẵn file cấu hình mẫu docker-compose.yml để học viên đối chiếu nhanh.',
-            },
-          ];
+          const topicBottlenecks = effectiveAnalyticsSessions
+            .map((sess) => {
+              const sessDiscCount = cohortDiscussions.filter(
+                (d) =>
+                  (d.sessionId && String(d.sessionId) === String(sess.id)) ||
+                  d.sessionOrder === sess.sessionOrder
+              ).length;
+              const sessAiCount = cohortStudentChatMsgs.filter(
+                (m) => String(m.sessionId) === String(sess.id)
+              ).length;
 
-          // 4. Tính toán trực tiếp từ bảng notifications (type === 'AI_STUDY_REMINDER')
+              const quizScoresForSess = effectiveEnrollments
+                .map(
+                  (e) =>
+                    e.sessionProgressList?.find(
+                      (sp) =>
+                        String(sp.sessionId) === String(sess.id) ||
+                        sp.sessionOrder === sess.sessionOrder
+                    )?.quizScorePct ?? null
+                )
+                .filter((sc): sc is number => sc !== null);
+
+              const avgQuizScore =
+                quizScoresForSess.length > 0
+                  ? quizScoresForSess.reduce((s, v) => s + v, 0) / quizScoresForSess.length
+                  : null;
+              const wrongRatePct =
+                avgQuizScore !== null ? Math.max(0, Math.round(100 - avgQuizScore)) : 0;
+
+              return {
+                skillCode: `${currentAnalyticsCohort.code}-S0${sess.sessionOrder}`,
+                topicName: sess.title,
+                sessionLabel: `Buổi ${sess.sessionOrder}`,
+                wrongAnswerRatePct: wrongRatePct,
+                discussionQuestionsCount: sessDiscCount,
+                aiTutorQueriesCount: sessAiCount,
+                recommendationNote:
+                  sessDiscCount + sessAiCount > 0
+                    ? `Có ${sessDiscCount} thảo luận và ${sessAiCount} câu hỏi AI tại Buổi ${sess.sessionOrder}. Giảng viên nên giải đáp thêm hoặc đính kèm Video hướng dẫn bổ sung.`
+                    : `Học viên đã làm bài kiểm tra Buổi ${sess.sessionOrder} với tỷ lệ sai trung bình ${wrongRatePct}%.`,
+              };
+            })
+            .filter(
+              (item) =>
+                item.discussionQuestionsCount > 0 ||
+                item.aiTutorQueriesCount > 0 ||
+                item.wrongAnswerRatePct > 0
+            )
+            .sort(
+              (a, b) =>
+                b.discussionQuestionsCount +
+                b.aiTutorQueriesCount +
+                b.wrongAnswerRatePct -
+                (a.discussionQuestionsCount + a.aiTutorQueriesCount + a.wrongAnswerRatePct)
+            );
+
+          // 4. Tính toán trực tiếp từ bảng notifications (type === 'AI_STUDY_REMINDER') của lớp đang chọn
           const aiReminders = notificationsState.filter(
-            (n) => n.type === 'AI_STUDY_REMINDER'
+            (n) =>
+              n.type === 'AI_STUDY_REMINDER' &&
+              (!n.cohortId || String(n.cohortId) === String(currentAnalyticsCohort.id))
           );
           const totalSentCount = aiReminders.length;
           const totalReadCount = aiReminders.filter((n) => n.isRead).length;
@@ -2812,16 +3363,30 @@ export const InstructorPortalView: React.FC = () => {
             <div className="flex flex-col gap-6 w-full min-w-0">
               {/* Header của Thống kê lớp học */}
               <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col gap-4 w-full">
-                <div className="w-full space-y-1">
-                  <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                    PHÂN TÍCH CHUYÊN SÂU DÀNH CHO GIẢNG VIÊN
+                <div className="w-full flex flex-wrap items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                      PHÂN TÍCH CHUYÊN SÂU DÀNH CHO GIẢNG VIÊN (DỮ LIỆU THỰC TẾ TỪ HỆ THỐNG)
+                    </div>
+                    <h1 className="text-xl sm:text-2xl font-bold">
+                      Thống kê lớp học &amp; Chất lượng tiếp thu bài giảng
+                    </h1>
+                    <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
+                      Theo dõi tiến độ hoàn thành bài học, mức độ chuyên cần của học viên, phổ điểm kiểm tra và các chủ đề thảo luận thực tế trong lớp.
+                    </p>
                   </div>
-                  <h1 className="text-xl sm:text-2xl font-bold">
-                    Thống kê lớp học &amp; Chất lượng tiếp thu bài giảng
-                  </h1>
-                  <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
-                    Theo dõi tiến độ hoàn thành bài học, mức độ chuyên cần của học viên, phổ điểm kiểm tra và các chủ đề thảo luận nhiều nhất trong lớp.
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStudentMgmtCohortFilter(String(currentAnalyticsCohort.id));
+                      setInstructorSidebarTab('STUDENT_MANAGEMENT');
+                      navigate('/teach/students');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#10B981] text-[#059669] dark:text-[#34D399] text-xs font-bold cursor-pointer"
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    <span>Xem danh sách {effectiveEnrollments.length} học viên lớp này →</span>
+                  </button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 w-full pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
@@ -2866,14 +3431,14 @@ export const InstructorPortalView: React.FC = () => {
                           1. TIẾN ĐỘ HỌC TẬP &amp; MỨC ĐỘ CHUYÊN CẦN ({currentAnalyticsCohort.code})
                         </span>
                         <span className="text-[11px] font-semibold text-[#475569] dark:text-[#94A3B8]">
-                          Đúng hạn: {lowRiskCount} · Cần lưu ý: {mediumRiskCount} · Cần hỗ trợ: {highRiskCount}
+                          Tổng: {effectiveEnrollments.length} HV · Đúng hạn: {lowRiskCount} · Cần lưu ý: {mediumRiskCount} · Cần hỗ trợ: {highRiskCount}
                         </span>
                       </div>
                       <h2 className="text-base sm:text-lg font-bold">
                         Tiến độ học tập &amp; Mức độ cần hỗ trợ
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        Thống kê tỷ lệ tham gia các buổi học và phân loại mức độ chuyên cần của học viên trong lớp.
+                        Thống kê tỷ lệ hoàn thành các buổi học và phân loại mức độ chuyên cần thực tế của học viên trong lớp.
                       </p>
                     </div>
 
@@ -2937,28 +3502,37 @@ export const InstructorPortalView: React.FC = () => {
                               </p>
                             </div>
 
-                            <button
-                              type="button"
-                              disabled={isReminded}
-                              onClick={() => handleSendAiReminderToHighRisk(enr)}
-                              className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                                isReminded
-                                  ? 'bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399]'
-                                  : 'bg-[#10B981] hover:bg-[#059669] text-white shadow-xs'
-                              }`}
-                            >
-                              {isReminded ? (
-                                <>
-                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                  <span>Đã gửi lời nhắc</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                                  <span>Gửi lời nhắc ôn tập</span>
-                                </>
-                              )}
-                            </button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedStudentDetail(enr)}
+                                className="px-3 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-bold cursor-pointer"
+                              >
+                                Chi tiết
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isReminded}
+                                onClick={() => handleSendAiReminderToHighRisk(enr)}
+                                className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                                  isReminded
+                                    ? 'bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399]'
+                                    : 'bg-[#10B981] hover:bg-[#059669] text-white shadow-xs'
+                                }`}
+                              >
+                                {isReminded ? (
+                                  <>
+                                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span>Đã gửi lời nhắc</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                    <span>Gửi lời nhắc ôn tập</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -2975,7 +3549,9 @@ export const InstructorPortalView: React.FC = () => {
                           2. PHỔ ĐIỂM SỐ &amp; HIỆU QUẢ KHÓA HỌC
                         </span>
                         <span className="text-[11px] font-semibold text-[#059669] dark:text-[#34D399]">
-                          86% đạt từ 70 điểm trở lên
+                          {effectiveEnrollments.length > 0
+                            ? `${passRatePct}% đạt từ 70 điểm trở lên`
+                            : 'Chưa có dữ liệu điểm kiểm tra'}
                         </span>
                       </div>
                       <h2 className="text-base sm:text-lg font-bold">
@@ -3017,22 +3593,22 @@ export const InstructorPortalView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Biểu đồ 3: Chủ đề kỹ thuật học viên hỏi nhiều nhất */}
+                {/* Biểu đồ 3: Chủ đề kỹ thuật học viên hỏi nhiều nhất (100% Dữ liệu thật) */}
                 <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 flex flex-col justify-between space-y-4 min-w-0">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        3. CÁC CHỦ ĐỀ HỌC VIÊN HỎI NHIỀU NHẤT
+                        3. CÁC CHỦ ĐỀ HỌC VIÊN HỎI NHIỀU NHẤT ({currentAnalyticsCohort.code})
                       </span>
                       <span className="text-[11px] font-semibold text-[#059669] dark:text-[#34D399]">
-                        Chủ đề trọng tâm
+                        {cohortDiscussions.length} thảo luận · {cohortStudentChatMsgs.length} câu hỏi AI
                       </span>
                     </div>
                     <h2 className="text-base sm:text-lg font-bold">
-                      Các chủ đề kỹ thuật được thảo luận nhiều nhất
+                      Các chủ đề kỹ thuật được thảo luận thực tế trong lớp
                     </h2>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Tổng hợp những phần kiến thức học viên đặt nhiều câu hỏi nhất trong buổi học để giảng viên lưu ý giải đáp thêm.
+                      Tổng hợp trực tiếp từ các câu hỏi thảo luận, lượt hỏi Trợ giảng AI và kết quả bài kiểm tra của học viên trong lớp {currentAnalyticsCohort.code}.
                     </p>
                   </div>
 
@@ -3208,6 +3784,217 @@ export const InstructorPortalView: React.FC = () => {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================================================================
+            MODAL CHI TIẾT HỒ SƠ, TIẾN ĐỘ TỪNG BUỔI & CÂU HỎI CỦA HỌC VIÊN
+           ================================================================== */}
+        {selectedStudentDetail && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-6 shadow-2xl">
+              {/* Modal Header */}
+              <div className="flex items-start justify-between gap-4 pb-4 border-b border-[#E2ECE7] dark:border-[#1E2D24]">
+                <div className="flex items-center gap-3.5">
+                  <AvatarWithFallback
+                    name={selectedStudentDetail.studentName}
+                    className="w-12 h-12 rounded-full shrink-0"
+                  />
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                        {selectedStudentDetail.studentName}
+                      </h2>
+                      <span className="px-2.5 py-0.5 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-mono text-xs font-bold">
+                        {selectedStudentDetail.cohortCode}
+                      </span>
+                      {selectedStudentDetail.isNewEnrollment && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-[#059669] dark:text-[#34D399] font-mono text-[10px] font-bold">
+                          MỚI ĐĂNG KÝ
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                      Email: <strong>{selectedStudentDetail.studentEmail}</strong>
+                      {selectedStudentDetail.phone ? ` · SĐT: ${selectedStudentDetail.phone}` : ''}
+                      {selectedStudentDetail.orderCode
+                        ? ` · Mã đơn học phí: ${selectedStudentDetail.orderCode}`
+                        : ''}
+                      {selectedStudentDetail.enrolledAtFormatted
+                        ? ` · Ngày đăng ký: ${selectedStudentDetail.enrolledAtFormatted}`
+                        : ''}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedStudentDetail(null)}
+                  className="p-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#EF4444] text-[#475569] hover:text-[#EF4444] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Tóm tắt nhanh chỉ số học viên */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                  <div className="text-[#475569] dark:text-[#94A3B8]">Lớp theo học</div>
+                  <div className="font-bold text-sm mt-0.5 truncate">
+                    {selectedStudentDetail.cohortName || selectedStudentDetail.cohortCode}
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                  <div className="text-[#475569] dark:text-[#94A3B8]">Tiến độ hoàn thành</div>
+                  <div className="font-mono font-bold text-sm text-[#10B981] mt-0.5">
+                    {selectedStudentDetail.completedSessionsCount}/
+                    {selectedStudentDetail.totalSessionsCount} buổi
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                  <div className="text-[#475569] dark:text-[#94A3B8]">Điểm trung bình Quiz</div>
+                  <div className="font-mono font-bold text-sm text-[#059669] dark:text-[#34D399] mt-0.5">
+                    {(selectedStudentDetail.avgScorePct / 10).toFixed(1)} / 10 (
+                    {selectedStudentDetail.avgScorePct}%)
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
+                  <div className="text-[#475569] dark:text-[#94A3B8]">Câu hỏi đã đặt</div>
+                  <div className="font-mono font-bold text-sm mt-0.5">
+                    {selectedStudentDetail.questionsCount ?? 0} câu hỏi
+                  </div>
+                </div>
+              </div>
+
+              {/* A. Tiến độ từng buổi học của học viên */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-[#10B981]" />
+                  <span>
+                    1. Tiến độ học tập &amp; Điểm kiểm tra từng buổi ({selectedStudentDetail.cohortCode})
+                  </span>
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {(selectedStudentDetail.sessionProgressList || []).map((sp) => (
+                    <div
+                      key={sp.sessionId}
+                      className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                            Buổi {sp.sessionOrder}
+                          </span>
+                          <span className="font-bold truncate">{sp.title}</span>
+                        </div>
+                        <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                          {sp.isWatched ? 'Đã xem video bài giảng' : 'Chưa xem video'} ·{' '}
+                          {sp.quizScorePct !== null
+                            ? `Điểm bài kiểm tra: ${sp.quizScorePct}%`
+                            : 'Chưa nộp bài kiểm tra'}
+                        </div>
+                      </div>
+                      <span
+                        className={`px-2.5 py-1 rounded-md font-bold text-[11px] shrink-0 ${
+                          sp.isCompleted
+                            ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
+                            : sp.isWatched
+                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                              : 'bg-slate-200/70 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8]'
+                        }`}
+                      >
+                        {sp.isCompleted
+                          ? 'Đã hoàn thành'
+                          : sp.isWatched
+                            ? 'Đang học'
+                            : 'Chưa học'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* B. Danh sách các câu hỏi học viên đã đặt (Thảo luận & AI Tutor) */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-[#10B981]" />
+                  <span>
+                    2. Lịch sử câu hỏi học viên đã đặt trong Thảo luận &amp; Trợ giảng AI (
+                    {selectedStudentDetail.studentQuestions?.length ?? 0})
+                  </span>
+                </h3>
+
+                {!selectedStudentDetail.studentQuestions ||
+                selectedStudentDetail.studentQuestions.length === 0 ? (
+                  <div className="p-5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                    Học viên này chưa đặt câu hỏi nào trong mục Thảo luận buổi học hoặc Trợ giảng AI.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {selectedStudentDetail.studentQuestions.map((sq) => (
+                      <div
+                        key={sq.id}
+                        className="p-3.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-1.5 text-xs"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${
+                                sq.source === 'DISCUSSION'
+                                  ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
+                                  : 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                              }`}
+                            >
+                              {sq.source === 'DISCUSSION'
+                                ? 'Thảo luận buổi học'
+                                : 'Hỏi Trợ giảng AI'}
+                            </span>
+                            <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                              Buổi {sq.sessionOrder}: {sq.sessionTitle}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                            {new Date(sq.createdAt).toLocaleString('vi-VN')}
+                          </span>
+                        </div>
+                        <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                          {sq.title}
+                        </div>
+                        {sq.content && sq.content !== sq.title && (
+                          <p className="text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                            {sq.content}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRemindStudent(
+                      selectedStudentDetail.id,
+                      selectedStudentDetail.studentName
+                    );
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>Gửi lời nhắc học tập cho {selectedStudentDetail.studentName}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedStudentDetail(null)}
+                  className="px-4 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-bold cursor-pointer"
+                >
+                  Đóng hồ sơ
+                </button>
               </div>
             </div>
           </div>
