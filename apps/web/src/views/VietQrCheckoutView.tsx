@@ -40,38 +40,107 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
     : courses[0];
 
   const [paymentState, setPaymentState] = useState<'WAITING' | 'SUCCESS' | 'EXPIRED'>('WAITING');
-  const [secondsLeft, setSecondsLeft] = useState<number>(899); // 14:59
+  const [secondsLeft, setSecondsLeft] = useState<number>(900);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<OrderReceipt | null>(null);
   const [icsDownloaded, setIcsDownloaded] = useState(false);
   const [qrImageError, setQrImageError] = useState(false);
   const [order, setOrder] = useState<SepayOrderCreatedResponse | null>(null);
   const [orderError, setOrderError] = useState<string | null>(null);
+  const [isRenewingOrder, setIsRenewingOrder] = useState<boolean>(false);
+  const [isCheckingPayment, setIsCheckingPayment] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (!targetCohort || role !== 'STUDENT') return;
-    let active = true;
-    const createOrder = async () => {
+  const computeRemainingSeconds = (expiresAtIso?: string): number => {
+    if (!expiresAtIso) return 900;
+    const diffSec = Math.floor((new Date(expiresAtIso).getTime() - Date.now()) / 1000);
+    return Math.max(0, diffSec);
+  };
+
+  const finalizePaidOrder = React.useCallback(
+    async (
+      activeOrder: SepayOrderCreatedResponse,
+      statusRes?: {
+        orderCode?: string;
+        paidAt?: string;
+        transactionRef?: string;
+        receipt?: OrderReceipt;
+      }
+    ) => {
+      if (!targetCohort) return;
+      await refreshEnrollments();
+      const enrollmentsRes = await learningApi.getMyEnrollments();
+      const matchedReceipt =
+        statusRes?.receipt ??
+        enrollmentsRes.receipts.find(
+          (r) =>
+            r.orderCode === (statusRes?.orderCode || activeOrder.orderCode) ||
+            r.cohortCode === targetCohort.code
+        );
+      setReceipt(
+        matchedReceipt ?? {
+          orderCode: statusRes?.orderCode || activeOrder.orderCode,
+          cohortCode: targetCohort.code,
+          courseTitle: course?.title || targetCohort.name,
+          amountVnd: activeOrder.amountVnd,
+          paidAt: statusRes?.paidAt || new Date().toLocaleDateString('vi-VN'),
+          bankName: activeOrder.bankName,
+          transactionRef:
+            statusRes?.transactionRef || `SEPAY-${statusRes?.orderCode || activeOrder.orderCode}`,
+        }
+      );
+      setPaymentState('SUCCESS');
+    },
+    [course?.title, refreshEnrollments, targetCohort]
+  );
+
+  const initializeOrRenewOrder = React.useCallback(
+    async (forceNew = false) => {
+      if (!targetCohort || role !== 'STUDENT') return;
       try {
         setOrderError(null);
-        const idempotencyKey = `idem-checkout-${targetCohort.id}`;
-        const created = await orderApi.createCohortOrder(targetCohort.id, idempotencyKey);
-        if (active) {
+        if (forceNew) {
+          setIsRenewingOrder(true);
+        }
+        const idempotencyKey = forceNew
+          ? `idem-renew-${targetCohort.id}-${Date.now()}`
+          : `idem-checkout-${targetCohort.id}`;
+        let created = await orderApi.createCohortOrder(targetCohort.id, idempotencyKey, forceNew);
+
+        if (created.status === 'PAID') {
           setOrder(created);
+          await finalizePaidOrder(created);
+          return;
         }
-      } catch (err) {
-        if (active) {
-          setOrderError(
-            err instanceof Error ? err.message : 'Không thể khởi tạo đơn thanh toán SePay.'
+
+        let remaining = computeRemainingSeconds(created.expiresAt);
+        // If backend returned an already-expired order, request a fresh 15-minute order
+        if ((created.status === 'EXPIRED' || remaining <= 0) && !forceNew) {
+          created = await orderApi.createCohortOrder(
+            targetCohort.id,
+            `idem-renew-${targetCohort.id}-${Date.now()}`,
+            true
           );
+          remaining = computeRemainingSeconds(created.expiresAt);
         }
+
+        setOrder(created);
+        setQrImageError(false);
+        setSecondsLeft(remaining > 0 ? remaining : 900);
+        setPaymentState('WAITING');
+      } catch (err) {
+        setOrderError(
+          err instanceof Error ? err.message : 'Không thể khởi tạo đơn thanh toán SePay.'
+        );
+      } finally {
+        setIsRenewingOrder(false);
       }
-    };
-    void createOrder();
-    return () => {
-      active = false;
-    };
-  }, [targetCohort, role]);
+    },
+    [finalizePaidOrder, role, targetCohort]
+  );
+
+  useEffect(() => {
+    void initializeOrRenewOrder(false);
+  }, [initializeOrRenewOrder]);
 
   const orderCode = order?.orderCode || '';
   const accountNumber = order?.accountNumber || '';
@@ -80,43 +149,39 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
   useEffect(() => {
     if (paymentState !== 'WAITING' || !order) return;
     const timer = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
+      if (order.expiresAt) {
+        const remaining = computeRemainingSeconds(order.expiresAt);
+        setSecondsLeft(remaining);
+        if (remaining <= 0) {
           setPaymentState('EXPIRED');
-          return 0;
         }
-        return prev - 1;
-      });
+      } else {
+        setSecondsLeft((prev) => {
+          if (prev <= 1) {
+            setPaymentState('EXPIRED');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
     }, 1000);
     return () => clearInterval(timer);
   }, [paymentState, order]);
 
-  // Poll GET /orders/:orderCode every 3 seconds to auto-detect real SePay Webhook completion
+  // Poll GET /orders/:orderCode every 3 seconds in both WAITING and EXPIRED states
+  // so that late bank webhooks arriving near/after the 15-minute mark still auto-unlock the course
   useEffect(() => {
-    if (paymentState !== 'WAITING' || !order?.orderCode || !targetCohort) return;
+    if (paymentState === 'SUCCESS' || !order?.orderCode || !targetCohort) return;
     let active = true;
     const pollTimer = setInterval(async () => {
       try {
         const statusRes = await orderApi.getOrderStatus(order.orderCode);
         if (!active) return;
         if (statusRes.status === 'PAID') {
-          await refreshEnrollments();
-          const enrollmentsRes = await learningApi.getMyEnrollments();
-          const matchedReceipt = enrollmentsRes.receipts.find(
-            (r) => r.orderCode === order.orderCode
-          );
-          setReceipt(
-            matchedReceipt ?? {
-              orderCode: statusRes.orderCode || order.orderCode,
-              cohortCode: targetCohort.code,
-              courseTitle: course?.title || targetCohort.name,
-              amountVnd: order.amountVnd,
-              paidAt: statusRes.paidAt || new Date().toISOString(),
-              bankName: order.bankName,
-              transactionRef: statusRes.transactionRef || `SEPAY-${order.orderCode}`,
-            }
-          );
-          setPaymentState('SUCCESS');
+          await finalizePaidOrder(order, statusRes);
+        } else if (statusRes.status === 'EXPIRED' && paymentState === 'WAITING') {
+          setSecondsLeft(0);
+          setPaymentState('EXPIRED');
         }
       } catch {
         // Ignore transient network poll errors
@@ -126,13 +191,29 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
       active = false;
       clearInterval(pollTimer);
     };
-  }, [
-    course?.title,
-    order,
-    paymentState,
-    refreshEnrollments,
-    targetCohort,
-  ]);
+  }, [finalizePaidOrder, order, paymentState, targetCohort]);
+
+  const handleManualCheckPayment = async () => {
+    if (!order?.orderCode) return;
+    try {
+      setIsCheckingPayment(true);
+      setOrderError(null);
+      const statusRes = await orderApi.getOrderStatus(order.orderCode);
+      if (statusRes.status === 'PAID') {
+        await finalizePaidOrder(order, statusRes);
+      } else {
+        setOrderError(
+          `Hệ thống chưa ghi nhận biến động số dư cho mã đơn ${order.orderCode}. Nếu bạn chưa chuyển khoản, hãy nhấn "Tạo lại mã VietQR mới (15:00)" bên dưới.`
+        );
+      }
+    } catch (err) {
+      setOrderError(
+        err instanceof Error ? err.message : 'Không thể kiểm tra trạng thái đơn hàng.'
+      );
+    } finally {
+      setIsCheckingPayment(false);
+    }
+  };
 
   const handleCopy = (fieldKey: string, value: string) => {
     navigator.clipboard?.writeText(value).catch(() => {});
@@ -445,20 +526,41 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                     Mã VietQR Cho Đơn {orderCode} Đã Hết Thời Gian Giữ Chỗ
                   </h3>
                   <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                    Nhấn nút bên dưới để làm mới thời gian hiệu lực 15 phút và tiếp tục thanh toán.
+                    Nếu bạn vừa chuyển khoản cho mã đơn <span className="font-mono font-semibold">{orderCode}</span>, hệ thống vẫn tự động đối soát ngầm hoặc bạn có thể bấm kiểm tra ngay bên dưới. Nếu chưa chuyển khoản, hãy tạo mã VietQR mới (15:00).
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSecondsLeft(899);
-                    setPaymentState('WAITING');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#10B981] text-white text-xs font-semibold hover:bg-[#059669] cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Tạo lại mã VietQR mới (15:00)</span>
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    disabled={isRenewingOrder}
+                    onClick={() => {
+                      void initializeOrRenewOrder(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#10B981] text-white text-xs font-semibold hover:bg-[#059669] disabled:opacity-60 cursor-pointer"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isRenewingOrder ? 'animate-spin' : ''}`} />
+                    <span>
+                      {isRenewingOrder
+                        ? 'Đang khởi tạo mã VietQR mới...'
+                        : 'Tạo lại mã VietQR mới (15:00)'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isCheckingPayment}
+                    onClick={() => {
+                      void handleManualCheckPayment();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-[#0F172A] dark:text-[#ECFDF5] text-xs font-semibold disabled:opacity-60 cursor-pointer"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#10B981]" />
+                    <span>
+                      {isCheckingPayment
+                        ? 'Đang đối soát giao dịch...'
+                        : 'Tôi đã chuyển khoản — Kiểm tra lại'}
+                    </span>
+                  </button>
+                </div>
               </div>
             ) : (
               <>
@@ -586,9 +688,21 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
                 </div>
 
                 {/* Live SePay Webhook Polling Status Indicator */}
-                <div className="flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-medium text-[#059669] dark:text-[#34D399]">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] animate-ping shrink-0" />
-                  <span>Đang chờ ngân hàng xác nhận giao dịch tự động (SePay Webhook)...</span>
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 py-2.5 px-4 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-medium text-[#059669] dark:text-[#34D399]">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#10B981] animate-ping shrink-0" />
+                    <span>Đang chờ ngân hàng xác nhận giao dịch tự động (SePay Webhook)...</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isCheckingPayment}
+                    onClick={() => {
+                      void handleManualCheckPayment();
+                    }}
+                    className="shrink-0 px-2.5 py-1 rounded bg-white dark:bg-[#111A15] border border-[#10B981]/40 hover:border-[#10B981] text-[11px] font-semibold text-[#059669] dark:text-[#34D399] disabled:opacity-60 cursor-pointer"
+                  >
+                    {isCheckingPayment ? 'Đang kiểm tra...' : 'Kiểm tra ngay'}
+                  </button>
                 </div>
               </>
             )}

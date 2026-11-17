@@ -7,7 +7,8 @@ export interface SepayOrderCreatedResponse {
   cohortCode: string;
   courseTitle?: string;
   amountVnd: number;
-  status: 'PENDING' | 'PAID';
+  status: 'PENDING' | 'PAID' | 'EXPIRED' | 'FAILED' | 'REFUNDED' | 'CANCELED';
+  expiresAt?: string;
   bankName: string;
   accountNumber: string;
   accountHolder: string;
@@ -18,18 +19,19 @@ export interface SepayOrderCreatedResponse {
 export type CreateOrderResponse = SepayOrderCreatedResponse;
 
 export const orderApi = {
-  createCohortOrder: (cohortId: string, idempotencyKey: string) =>
+  createCohortOrder: (cohortId: string, idempotencyKey: string, forceNew?: boolean) =>
     httpRequest<SepayOrderCreatedResponse>('/orders', {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify({ cohortId, idempotencyKey }),
+      body: JSON.stringify({ cohortId, idempotencyKey, forceNew }),
     }),
 
   getOrderStatus: (orderCode: string) =>
     httpRequest<{
       orderCode: string;
-      status: 'PENDING' | 'PAID';
+      status: 'PENDING' | 'PAID' | 'EXPIRED' | 'FAILED' | 'REFUNDED' | 'CANCELED';
       paidAt?: string;
+      expiresAt?: string;
       transactionRef?: string;
       receipt?: OrderReceipt;
     }>(`/orders/${encodeURIComponent(orderCode)}`, { method: 'GET' }),

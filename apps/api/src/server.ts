@@ -2,24 +2,41 @@ import { app } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { db, pool } from './db/index.js';
-import { cohorts, courses, certificates, knowledgeChunks, userProfiles, classSessions, enrollments, sessionSubtitles } from './db/schema/index.js';
+import { cohorts, courses, certificates, knowledgeChunks, userProfiles, classSessions, enrollments, sessionSubtitles, orders, paymentTransactions } from './db/schema/index.js';
 import { runSeed } from './db/seed.js';
 import { redis } from './config/redis.js';
-import { getConfiguredSepayWebhookUrls } from './modules/order/order.routes.js';
+import {
+  getConfiguredSepayWebhookUrls,
+  reconcileUnmatchedSepayTransactions,
+} from './modules/order/order.routes.js';
 import { eq } from 'drizzle-orm';
 
 async function ensureFreshDatabaseSeed() {
   try {
-    const [allCourses, allCohorts, allCerts, allChunks, allProfiles, allSessions, allEnrollments] =
-      await Promise.all([
-        db.select({ id: courses.id }).from(courses),
-        db.select().from(cohorts),
-        db.select({ id: certificates.id }).from(certificates),
-        db.select().from(knowledgeChunks),
-        db.select({ cvParsedData: userProfiles.cvParsedData }).from(userProfiles),
-        db.select().from(classSessions),
-        db.select({ id: enrollments.id }).from(enrollments),
-      ]);
+    // First reconcile any pending/unmatched SePay webhook transactions so real student payments are immediately fulfilled
+    await reconcileUnmatchedSepayTransactions();
+
+    const [
+      allCourses,
+      allCohorts,
+      allCerts,
+      allChunks,
+      allProfiles,
+      allSessions,
+      allEnrollments,
+      allOrders,
+      allTxns,
+    ] = await Promise.all([
+      db.select({ id: courses.id }).from(courses),
+      db.select().from(cohorts),
+      db.select({ id: certificates.id }).from(certificates),
+      db.select().from(knowledgeChunks),
+      db.select({ cvParsedData: userProfiles.cvParsedData }).from(userProfiles),
+      db.select().from(classSessions),
+      db.select({ id: enrollments.id }).from(enrollments),
+      db.select({ id: orders.id }).from(orders),
+      db.select({ id: paymentTransactions.id }).from(paymentTransactions),
+    ]);
 
     const hasLegacyCohorts =
       allCohorts.length !== 4 ||
@@ -60,14 +77,16 @@ async function ensureFreshDatabaseSeed() {
       );
     });
 
+    const hasUserActivity =
+      allEnrollments.length > 0 || allOrders.length > 0 || allTxns.length > 0;
+
     if (
       allCourses.length < 4 ||
       hasLegacyCohorts ||
       hasMissingEmbeddings ||
       hasLegacySeedCerts ||
       hasLegacyPrebakedStudentCv ||
-      ((hasRawMarkdownSessionSummaries || hasAllSixReplayReadyInAiOrPy) &&
-        allEnrollments.length === 0)
+      ((hasRawMarkdownSessionSummaries || hasAllSixReplayReadyInAiOrPy) && !hasUserActivity)
     ) {
       logger.info(
         'Detected legacy or unformatted database seed — running clean minimal database re-seed...'

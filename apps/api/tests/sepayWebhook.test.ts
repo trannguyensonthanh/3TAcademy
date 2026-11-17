@@ -71,7 +71,21 @@ describe('sepay helpers', () => {
     );
   });
 
-  it('extracts order codes accurately without false positives on bank names', () => {
+  it('extracts order codes accurately without false positives on bank names or hyphenated suffixes', () => {
+    expect(
+      extractOrderCodeFromSepayPayload({
+        content: '157257350873-3T436921255-CHUYEN TIEN-OQCH000OgXyc-MOMO157257350873MOMO',
+        description:
+          'BankAPINotify 157257350873-3T436921255-CHUYEN TIEN-OQCH000OgXyc-MOMO157257350873MOMO',
+      })
+    ).toBe('3T436921255');
+
+    expect(
+      extractOrderCodeFromSepayPayload({
+        code: '3T436921255-CHUYEN',
+      })
+    ).toBe('3T436921255');
+
     expect(
       extractOrderCodeFromSepayPayload({
         content: 'MBVCB.3278907687.3T17100001.CT tu NGUYEN VAN AN',

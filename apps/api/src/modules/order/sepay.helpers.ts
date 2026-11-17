@@ -45,8 +45,10 @@ export function buildSepayWebhookUrls(
   };
 }
 
-const ORDER_CODE_PATTERN = /(?:^|[^A-Z0-9])((?:ORD)?(?:3T|ET)[A-Z0-9-]*\d[A-Z0-9-]*)(?=$|[^A-Z0-9])/i;
-const DIRECT_CODE_PATTERN = /^(?:ORD)?(?:3T|ET)[A-Z0-9-]+$/i;
+// Matches standard order codes (e.g. 3T436921255, ORD3T260324) or structured numeric-suffix codes (e.g. ORD3T-2026-001)
+// without swallowing bank/wallet hyphenated suffixes like "-CHUYEN TIEN" or "-MOMO".
+const ORDER_CODE_PATTERN =
+  /(?:^|[^A-Z0-9])((?:ORD)?(?:3T|ET)\d[A-Z0-9]*|(?:ORD)?(?:3T|ET)(?:-[0-9]+)+)(?=$|[^A-Z0-9])/i;
 
 export function extractOrderCodeFromSepayPayload(
   payload: Record<string, unknown>
@@ -54,8 +56,11 @@ export function extractOrderCodeFromSepayPayload(
   for (const directField of [payload.code, payload.orderCode]) {
     if (typeof directField === 'string') {
       const trimmed = directField.trim().toUpperCase();
-      if (trimmed && DIRECT_CODE_PATTERN.test(trimmed)) {
-        return trimmed;
+      if (trimmed) {
+        const directMatch = trimmed.match(ORDER_CODE_PATTERN);
+        if (directMatch && directMatch[1]) {
+          return directMatch[1].toUpperCase();
+        }
       }
     }
   }

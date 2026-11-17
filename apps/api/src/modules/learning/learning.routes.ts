@@ -55,6 +55,7 @@ import {
   updateLiveRecordingState,
 } from './liveRoom.helpers.js';
 import { getR2PublicObjectUrl } from '../../integrations/r2.service.js';
+import { reconcileUnmatchedSepayTransactions } from '../order/order.routes.js';
 
 export const learningRouter = Router();
 
@@ -232,6 +233,8 @@ function mapClassSessionDto(
 }
 
 async function ensureEnrollmentsForPaidOrders(accountId: number) {
+  await reconcileUnmatchedSepayTransactions();
+
   const [paidOrders, existingEnrollments] = await Promise.all([
     db
       .select()
