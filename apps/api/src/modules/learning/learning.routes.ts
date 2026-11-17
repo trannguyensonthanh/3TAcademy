@@ -53,6 +53,9 @@ import {
   addLiveReaction,
   upvoteLiveDiscussion,
   updateLiveRecordingState,
+  updateHostMediaState,
+  relayWebRtcSignal,
+  relayLiveAudioChunk,
 } from './liveRoom.helpers.js';
 import { getR2PublicObjectUrl } from '../../integrations/r2.service.js';
 import { reconcileUnmatchedSepayTransactions } from '../order/order.routes.js';
@@ -215,6 +218,19 @@ function mapClassSessionDto(
       : 'NOT_STARTED';
 
   const cleanTitle = (s.title || '').replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '').trim() || s.title;
+  const hasSavedVideo = Boolean((s.videoR2Key || '').trim());
+  const effectiveStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+    s.status === 'REPLAY_READY' && !hasSavedVideo
+      ? 'SCHEDULED'
+      : (s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY');
+
+  if (s.status === 'REPLAY_READY' && !hasSavedVideo) {
+    // Auto-heal in background if a test livestream was closed without saving any video
+    db.update(classSessions)
+      .set({ status: 'SCHEDULED', updatedAt: new Date() })
+      .where(eq(classSessions.id, s.id))
+      .catch(() => {});
+  }
 
   return {
     id: String(s.id),
@@ -228,7 +244,7 @@ function mapClassSessionDto(
     hostInstructorName: opts.hostInstructorName || '',
     scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
     scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
-    status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+    status: effectiveStatus,
     videoR2Key: s.videoR2Key || '',
     videoProvider: (s.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
     livekitRoomName: s.livekitRoomName,
@@ -247,7 +263,7 @@ function mapClassSessionDto(
     quizQuestions: opts.quizQuestions || [],
     aiCitations: opts.aiCitations || [],
     guestJoinUrl:
-      s.status === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
+      effectiveStatus === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
   };
 }
 
@@ -2039,18 +2055,21 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
       };
     });
 
-    const transcript = chunks.map((ch, idx) => {
-      const sec = ch.startSec ?? idx * 15 + 10;
-      const slidePage = ch.pageNumber ?? idx * 4 + 8;
-      return {
-        id: `cue-${ch.id}`,
-        sec,
-        timeLabel: formatSecondsToMmSs(sec),
-        speaker: staffInfo.instructorName,
-        text: ch.content,
-        slidePage,
-      };
-    });
+    const hasSavedVideo = Boolean((session.videoR2Key || '').trim());
+    const transcript = hasSavedVideo
+      ? chunks.map((ch, idx) => {
+          const sec = ch.startSec ?? idx * 15 + 10;
+          const slidePage = ch.pageNumber ?? idx * 4 + 8;
+          return {
+            id: `cue-${ch.id}`,
+            sec,
+            timeLabel: formatSecondsToMmSs(sec),
+            speaker: staffInfo.instructorName,
+            text: ch.content,
+            slidePage,
+          };
+        })
+      : [];
 
     const callerFullName =
       currentProfile?.fullName || (isHost ? staffInfo.instructorName : req.user!.email);
@@ -2523,4 +2542,139 @@ learningRouter.post('/webhooks/livekit', async (req, res, next) => {
     next(err);
   }
 });
+
+// 3.19 POST /live/sessions/:sessionId/rtc-signal (WebRTC signaling between Instructor and Students)
+const rtcSignalSchema = z.object({
+  targetAccountId: z.union([z.string(), z.number()]).optional(),
+  signalType: z.enum(['offer', 'answer', 'ice-candidate', 'request-offer', 'media-stopped']),
+  sdp: z.any().optional(),
+  candidate: z.any().optional(),
+});
+
+learningRouter.post(
+  '/live/sessions/:sessionId/rtc-signal',
+  requireAuth,
+  validate(rtcSignalSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const [profile] = await db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, req.user!.id))
+        .limit(1);
+
+      const userRole = String(req.user!.role || '').trim().toUpperCase();
+      const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+
+      relayWebRtcSignal(session.id, {
+        fromAccountId: String(req.user!.id),
+        fromName: profile?.fullName || req.user!.email,
+        isHost,
+        targetAccountId:
+          req.body.targetAccountId !== undefined
+            ? String(req.body.targetAccountId)
+            : undefined,
+        signalType: req.body.signalType,
+        sdp: req.body.sdp,
+        candidate: req.body.candidate,
+      });
+
+      res.json({ relayed: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 3.20 POST /live/sessions/:sessionId/media-sync (Real-time camera/screen frame & audio chunk sync)
+const mediaSyncSchema = z.object({
+  camOn: z.boolean().optional(),
+  micOn: z.boolean().optional(),
+  screenSharing: z.boolean().optional(),
+  mirrorCam: z.boolean().optional(),
+  cameraFrameDataUrl: z.string().max(900_000).optional(),
+  screenFrameDataUrl: z.string().max(1_200_000).optional(),
+  audioChunkBase64: z.string().max(900_000).optional(),
+  audioMimeType: z.string().max(120).optional(),
+  audioSeq: z.number().int().optional(),
+});
+
+learningRouter.post(
+  '/live/sessions/:sessionId/media-sync',
+  requireAuth,
+  validate(mediaSyncSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'SESSION_NOT_FOUND',
+          message: 'Không tìm thấy buổi học',
+        });
+        return;
+      }
+
+      const [profile] = await db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, req.user!.id))
+        .limit(1);
+
+      const userRole = String(req.user!.role || '').trim().toUpperCase();
+      const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+      const senderName = profile?.fullName || req.user!.email;
+
+      if (
+        isHost &&
+        (req.body.camOn !== undefined ||
+          req.body.micOn !== undefined ||
+          req.body.screenSharing !== undefined ||
+          req.body.cameraFrameDataUrl !== undefined ||
+          req.body.screenFrameDataUrl !== undefined)
+      ) {
+        updateHostMediaState(session.id, {
+          camOn: req.body.camOn,
+          micOn: req.body.micOn,
+          screenSharing: req.body.screenSharing,
+          mirrorCam: req.body.mirrorCam,
+          cameraFrameDataUrl: req.body.cameraFrameDataUrl,
+          screenFrameDataUrl: req.body.screenFrameDataUrl,
+          hostAccountId: String(req.user!.id),
+          hostName: senderName,
+        });
+      }
+
+      if (req.body.audioChunkBase64) {
+        relayLiveAudioChunk(session.id, {
+          fromAccountId: String(req.user!.id),
+          fromName: senderName,
+          isHost,
+          mimeType: req.body.audioMimeType || 'audio/webm;codecs=opus',
+          audioBase64: req.body.audioChunkBase64,
+          seq: req.body.audioSeq ?? Date.now(),
+        });
+      }
+
+      res.json({
+        synced: true,
+        hostMedia: getLiveRoomState(session.id).hostMedia,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 

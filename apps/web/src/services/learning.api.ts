@@ -83,6 +83,18 @@ export interface LiveRecordingState {
   stoppedAt?: string;
 }
 
+export interface LiveHostMediaState {
+  camOn: boolean;
+  micOn: boolean;
+  screenSharing: boolean;
+  mirrorCam?: boolean;
+  cameraFrameDataUrl?: string;
+  screenFrameDataUrl?: string;
+  hostAccountId?: string;
+  hostName?: string;
+  updatedAt: string;
+}
+
 export interface LiveRoomRuntimeState {
   raisedHands: LiveHandRaiseItem[];
   recentReactions: LiveReactionPayload[];
@@ -96,6 +108,7 @@ export interface LiveRoomRuntimeState {
     liveTopicNote: string;
     updatedAt: string;
   };
+  hostMedia?: LiveHostMediaState;
 }
 
 export interface LiveSessionRoomPayload {
@@ -299,6 +312,45 @@ export const learningApi = {
       `/live/discussions/${encodeURIComponent(threadId)}/upvote`,
       {
         method: 'POST',
+      }
+    ),
+
+  sendLiveRtcSignal: (
+    sessionId: string,
+    payload: {
+      targetAccountId?: string;
+      signalType: 'offer' | 'answer' | 'ice-candidate' | 'request-offer' | 'media-stopped';
+      sdp?: unknown;
+      candidate?: unknown;
+    }
+  ) =>
+    httpRequest<{ relayed: boolean }>(
+      `/live/sessions/${encodeURIComponent(sessionId)}/rtc-signal`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  syncLiveHostMedia: (
+    sessionId: string,
+    payload: {
+      camOn?: boolean;
+      micOn?: boolean;
+      screenSharing?: boolean;
+      mirrorCam?: boolean;
+      cameraFrameDataUrl?: string;
+      screenFrameDataUrl?: string;
+      audioChunkBase64?: string;
+      audioMimeType?: string;
+      audioSeq?: number;
+    }
+  ) =>
+    httpRequest<{ synced: boolean; hostMedia?: LiveHostMediaState }>(
+      `/live/sessions/${encodeURIComponent(sessionId)}/media-sync`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
       }
     ),
 

@@ -35,6 +35,18 @@ export interface LiveParticipantPresence {
   joinedAt: string;
 }
 
+export interface LiveHostMediaState {
+  camOn: boolean;
+  micOn: boolean;
+  screenSharing: boolean;
+  mirrorCam?: boolean;
+  cameraFrameDataUrl?: string;
+  screenFrameDataUrl?: string;
+  hostAccountId?: string;
+  hostName?: string;
+  updatedAt: string;
+}
+
 export interface LiveRoomRuntimeState {
   raisedHands: LiveHandRaiseItem[];
   recentReactions: LiveReactionItem[];
@@ -48,6 +60,7 @@ export interface LiveRoomRuntimeState {
     liveTopicNote: string;
     updatedAt: string;
   };
+  hostMedia: LiveHostMediaState;
 }
 
 interface LiveRoomBucket {
@@ -74,8 +87,15 @@ function getOrCreateBucket(sessionId: number): LiveRoomBucket {
           isRecording: false,
         },
         hostBroadcast: {
-          activeSlideLabel: 'Slide 12 · Kiến trúc Hệ thống & Tối ưu Hiệu năng',
+          activeSlideLabel: 'Đang trình chiếu trực tiếp',
           liveTopicNote: 'Đang thảo luận trực tiếp cùng Giảng viên',
+          updatedAt: new Date().toISOString(),
+        },
+        hostMedia: {
+          camOn: false,
+          micOn: false,
+          screenSharing: false,
+          mirrorCam: true,
           updatedAt: new Date().toISOString(),
         },
       },
@@ -208,6 +228,16 @@ export function unregisterLiveRoomClient(sessionId: number, res: Response): void
       bucket.state.raisedHands = bucket.state.raisedHands.filter(
         (h) => String(h.accountId) !== key
       );
+      if (leavingParticipant.isHost && !updated.some((p) => p.isHost)) {
+        bucket.state.hostMedia = {
+          camOn: false,
+          micOn: false,
+          screenSharing: false,
+          mirrorCam: true,
+          updatedAt: new Date().toISOString(),
+        };
+        broadcastLiveRoomEvent(sessionId, 'host_media_sync', bucket.state.hostMedia);
+      }
     }
     broadcastLiveRoomEvent(sessionId, 'participants_updated', {
       participants: updated,
@@ -319,6 +349,74 @@ export function updateHostBroadcastState(
   };
   broadcastLiveRoomEvent(sessionId, 'host_broadcast', bucket.state.hostBroadcast);
   return bucket.state.hostBroadcast;
+}
+
+export function updateHostMediaState(
+  sessionId: number,
+  patch: Partial<LiveHostMediaState>
+): LiveHostMediaState {
+  const bucket = getOrCreateBucket(sessionId);
+  const prev = bucket.state.hostMedia;
+  const nextCamOn = patch.camOn !== undefined ? patch.camOn : prev.camOn;
+  const nextScreenSharing =
+    patch.screenSharing !== undefined ? patch.screenSharing : prev.screenSharing;
+  const nextMicOn = patch.micOn !== undefined ? patch.micOn : prev.micOn;
+
+  bucket.state.hostMedia = {
+    ...prev,
+    ...patch,
+    camOn: nextCamOn,
+    micOn: nextMicOn,
+    screenSharing: nextScreenSharing,
+    cameraFrameDataUrl: nextCamOn
+      ? (patch.cameraFrameDataUrl !== undefined
+          ? patch.cameraFrameDataUrl
+          : prev.cameraFrameDataUrl)
+      : undefined,
+    screenFrameDataUrl: nextScreenSharing
+      ? (patch.screenFrameDataUrl !== undefined
+          ? patch.screenFrameDataUrl
+          : prev.screenFrameDataUrl)
+      : undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  broadcastLiveRoomEvent(sessionId, 'host_media_sync', bucket.state.hostMedia);
+  return bucket.state.hostMedia;
+}
+
+export function relayWebRtcSignal(
+  sessionId: number,
+  signal: {
+    fromAccountId: string;
+    fromName: string;
+    isHost: boolean;
+    targetAccountId?: string;
+    signalType: 'offer' | 'answer' | 'ice-candidate' | 'request-offer' | 'media-stopped';
+    sdp?: unknown;
+    candidate?: unknown;
+  }
+): void {
+  broadcastLiveRoomEvent(sessionId, 'webrtc_signal', {
+    ...signal,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export function relayLiveAudioChunk(
+  sessionId: number,
+  chunk: {
+    fromAccountId: string;
+    fromName: string;
+    isHost: boolean;
+    mimeType: string;
+    audioBase64: string;
+    seq: number;
+  }
+): void {
+  broadcastLiveRoomEvent(sessionId, 'live_audio_chunk', {
+    ...chunk,
+    createdAt: new Date().toISOString(),
+  });
 }
 
 export function updateMutedParticipantsState(

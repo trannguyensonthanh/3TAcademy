@@ -13,9 +13,11 @@ import {
   Mic,
 } from 'lucide-react';
 import { useAcademy } from '../context/AcademyContext';
+import { formatTimestamp } from '../utils/academyLogic';
 import { CompetencyVerifiedShield } from '../components/BotanicalStickers';
 import { assessmentApi, StoredMcqAttemptResult, McqQuestionItem } from '../services/assessment.api';
 import { useAsyncData } from '../hooks/useAsyncData';
+import type { ClassSession } from '../types/domain';
 
 const DEFAULT_SUBMISSION: StoredMcqAttemptResult = {
   assessmentId: '',
@@ -33,6 +35,8 @@ const DEFAULT_SUBMISSION: StoredMcqAttemptResult = {
 export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ assessmentId }) => {
   const {
     sessions,
+    cohorts,
+    enrolledCohortIds,
     submitSessionQuiz,
     setStudentSidebarTab,
     interviewCredits,
@@ -55,19 +59,51 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
     isFinalExam,
   };
 
-  const targetSession =
+  const fallbackCohortId =
+    resultData?.cohortId ||
+    enrolledCohortIds[0] ||
+    cohorts[0]?.id ||
+    '1';
+
+  const fallbackSessionObj: ClassSession = {
+    id: resultData?.sessionId || sessions[0]?.id || '1',
+    cohortId: fallbackCohortId,
+    sessionOrder: 1,
+    title: 'Buổi học',
+    activityTags: [],
+    status: 'REPLAY_READY',
+    scheduledStart: '',
+    scheduledEnd: '',
+    videoR2Key: '',
+    videoProvider: 'R2_HLS_AES128',
+    durationSeconds: 600,
+    lastPositionSec: 0,
+    isCompleted: false,
+    quizStatus: 'NOT_STARTED',
+    quizScore: 0,
+    quizQuestions: [],
+    hostInstructorName: '',
+    attachmentsCount: 0,
+    aiSummaryMd: '',
+    aiCitations: [],
+  };
+
+  const matchedSession =
     sessions.find(
       (s) =>
-        s.id === resultData?.sessionId ||
-        s.assessmentId === assessmentId ||
-        assessmentId.includes(s.id)
+        String(s.id) === String(resultData?.sessionId) ||
+        String(s.assessmentId) === String(assessmentId) ||
+        assessmentId.includes(String(s.id))
     ) ??
     sessions.find((s) => s.sessionOrder === 4) ??
-    sessions[3];
+    sessions[3] ??
+    sessions[0];
+
+  const targetSession: ClassSession = matchedSession ?? fallbackSessionObj;
 
   const resolvedFinalExamId =
     resultData?.finalExamId ||
-    `final-exam-${resultData?.cohortId || targetSession?.cohortId || 'cohort-ai-k01'}`;
+    `final-exam-${resultData?.cohortId || targetSession.cohortId || '1'}`;
 
   // Sync session completion only when a real passing submission exists, using the student's submitted answers
   useEffect(() => {
@@ -75,24 +111,24 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
       resultData?.hasStoredAttempt &&
       submission.passed &&
       !isFinalExam &&
-      targetSession &&
-      !targetSession.isCompleted
+      matchedSession &&
+      !matchedSession.isCompleted
     ) {
       const submittedChoices =
         submission.selectedIndices ??
         Object.keys(submission.selectedAnswers || {})
           .sort((a, b) => Number(a) - Number(b))
           .map((k) => submission.selectedAnswers[Number(k)]);
-      submitSessionQuiz(targetSession.id, submittedChoices);
+      submitSessionQuiz(matchedSession.id, submittedChoices);
     }
   }, [
     isFinalExam,
+    matchedSession,
     resultData?.hasStoredAttempt,
     submission.passed,
     submission.selectedAnswers,
     submission.selectedIndices,
     submitSessionQuiz,
-    targetSession,
   ]);
 
   const wrongQuestions = questions.filter(
@@ -110,12 +146,18 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
             <button
               type="button"
               onClick={() =>
-                navigate(`/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}`)
+                resultData?.sessionId || matchedSession
+                  ? navigate(`/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}`)
+                  : navigate(`/app/cohorts/${targetSession.cohortId}`)
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5 text-[#10B981]" />
-              <span>Quay lại Phòng học Video Buổi {targetSession.sessionOrder}</span>
+              <span>
+                {resultData?.sessionId || matchedSession
+                  ? `Quay lại Phòng học Video Buổi ${targetSession.sessionOrder}`
+                  : 'Quay lại Không gian Lớp học'}
+              </span>
             </button>
             <span className="text-xs text-[#475569] dark:text-[#94A3B8]">
               Chấm điểm trắc nghiệm tức thì (0 giây chờ đợi)
@@ -265,7 +307,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                   <span className="text-[#059669] dark:text-[#34D399]">
                     Đáp án {String.fromCharCode(65 + wrongQuestions[0].correctIndex)}
                   </span>
-                  . Bạn hãy bấm vào nút bên cạnh để mở lại đúng đoạn bài giảng thầy Khoa giải thích nhé!
+                  . Bạn hãy bấm vào nút bên cạnh để mở lại đúng đoạn bài giảng giải thích chi tiết nhé!
                 </h2>
 
                 <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
@@ -278,13 +320,13 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                   type="button"
                   onClick={() =>
                     navigate(
-                      `/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}?t=${wrongQuestions[0].reviewJumpSec}`
+                      `/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}?t=${wrongQuestions[0].reviewJumpSec || 0}`
                     )
                   }
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-xs transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>[Xem lại đoạn video 14:20 - 16:05]</span>
+                  <span>[Xem lại bài giảng tại mốc {formatTimestamp(wrongQuestions[0].reviewJumpSec || 0)}]</span>
                 </button>
               </div>
             </div>
@@ -343,7 +385,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-amber-500/20 text-[#B45309] dark:text-amber-300 font-bold">
                           <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B]" />
-                          Chọn sai · Cần xem lại đoạn 14:20 - 16:05
+                          Chọn sai · Cần ôn lại mốc {formatTimestamp(q.reviewJumpSec || 0)}
                         </span>
                       )}
                     </div>
@@ -387,13 +429,13 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                           type="button"
                           onClick={() =>
                             navigate(
-                              `/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}?t=${q.reviewJumpSec}`
+                              `/app/cohorts/${targetSession.cohortId}/sessions/${targetSession.id}?t=${q.reviewJumpSec || 0}`
                             )
                           }
                           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
                         >
                           <Play className="w-3 h-3 fill-current" />
-                          <span>[Xem lại đoạn video 14:20 - 16:05]</span>
+                          <span>[Xem lại bài giảng tại mốc {formatTimestamp(q.reviewJumpSec || 0)}]</span>
                         </button>
                         <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold">
                           <FileText className="w-3.5 h-3.5 text-[#10B981]" />
@@ -475,18 +517,18 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
               <div className="space-y-2.5">
                 <button
                   type="button"
-                  onClick={() => navigate('/live/sess-k01-05')}
+                  onClick={() => navigate(`/app/cohorts/${targetSession.cohortId}`)}
                   className="w-full py-2.5 px-4 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <span>Vào Phòng Học Trực Tuyến (Buổi 5)</span>
+                  <span>Quay lại Lộ trình Lớp học</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate('/app/exams/exam-final-k01')}
+                  onClick={() => navigate(`/app/exams/${resolvedFinalExamId}/proctored`)}
                   className="w-full py-2.5 px-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <span>Thi Cuối Khóa 20 Câu Trắc Nghiệm (Camera Giám Sát)</span>
+                  <span>Thi Cuối Khóa 25 Câu Trắc Nghiệm (Camera Giám Sát)</span>
                   <ArrowRight className="w-3.5 h-3.5 text-[#10B981]" />
                 </button>
               </div>

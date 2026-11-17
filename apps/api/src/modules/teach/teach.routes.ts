@@ -39,6 +39,7 @@ import {
   broadcastLiveRoomEvent,
   getLiveRoomState,
   updateHostBroadcastState,
+  updateHostMediaState,
   updateKickedParticipantsState,
   updateLiveRecordingState,
   updateMutedParticipantsState,
@@ -187,7 +188,9 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
       .filter((s) => s.cohortId === enr.cohortId)
       .sort((a, b) => a.sessionOrder - b.sessionOrder);
     const totalSessionsCount = cSessions.length || 1;
-    const replayReadySessionsCount = cSessions.filter((s) => s.status === 'REPLAY_READY').length;
+    const replayReadySessionsCount = cSessions.filter(
+      (s) => s.status === 'REPLAY_READY' && Boolean((s.videoR2Key || '').trim())
+    ).length;
 
     const stuProgressRows = allProgress.filter(
       (p) => p.accountId === enr.accountId && cSessions.some((s) => s.id === p.sessionId)
@@ -253,12 +256,17 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
         bestAttempt?.scorePct !== null && bestAttempt?.scorePct !== undefined
           ? Math.round(Number(bestAttempt.scorePct))
           : null;
+      const hasSavedVideo = Boolean((sess.videoR2Key || '').trim());
+      const effectiveSessStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+        sess.status === 'REPLAY_READY' && !hasSavedVideo
+          ? 'SCHEDULED'
+          : (sess.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY');
 
       return {
         sessionId: String(sess.id),
         sessionOrder: sess.sessionOrder,
         title: sess.title,
-        sessionStatus: sess.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+        sessionStatus: effectiveSessStatus,
         watchedSec: prog?.lastPositionSec ?? 0,
         durationSeconds: sess.durationSeconds || 5400,
         isCompleted: Boolean(prog?.isCompleted),
@@ -547,6 +555,18 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       const staffInfo = getStaffForInstructor(s.instructorId);
       const sessAttachments = allAttachments.filter((att) => att.sessionId === s.id);
       const sessQuiz = allAssessments.find((a) => a.sessionId === s.id);
+      const hasSavedVideo = Boolean((s.videoR2Key || '').trim());
+      const effectiveStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+        s.status === 'REPLAY_READY' && !hasSavedVideo
+          ? 'SCHEDULED'
+          : (s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY');
+
+      if (s.status === 'REPLAY_READY' && !hasSavedVideo) {
+        db.update(classSessions)
+          .set({ status: 'SCHEDULED', updatedAt: new Date() })
+          .where(eq(classSessions.id, s.id))
+          .catch(() => {});
+      }
 
       return {
         id: String(s.id),
@@ -560,7 +580,7 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
           'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
         >,
         hostInstructorName: staffInfo.instructorName,
-        status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+        status: effectiveStatus,
         scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
         scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
         videoR2Key: s.videoR2Key || '',
@@ -578,7 +598,7 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
         quizQuestions: [],
         aiCitations: [],
         guestJoinUrl:
-          s.status === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
+          effectiveStatus === 'LIVE' ? `https://3t.edu.vn/live/guest/${s.id}` : undefined,
       };
     });
 
@@ -870,6 +890,19 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       sessions: sessions.map((s) => {
         const sessQuiz = cohortAssessments.find((a) => a.sessionId === s.id);
         const sessAttachments = attachments.filter((att) => att.sessionId === s.id);
+        const hasSavedVideo = Boolean((s.videoR2Key || '').trim());
+        const effectiveStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+          s.status === 'REPLAY_READY' && !hasSavedVideo
+            ? 'SCHEDULED'
+            : (s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY');
+
+        if (s.status === 'REPLAY_READY' && !hasSavedVideo) {
+          db.update(classSessions)
+            .set({ status: 'SCHEDULED', updatedAt: new Date() })
+            .where(eq(classSessions.id, s.id))
+            .catch(() => {});
+        }
+
         return {
           id: String(s.id),
           cohortId: String(s.cohortId),
@@ -880,7 +913,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
             'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
           >,
           hostInstructorName: staffInfo.instructorName,
-          status: s.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+          status: effectiveStatus,
           scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
           scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
           videoR2Key: s.videoR2Key || '',
@@ -1009,6 +1042,19 @@ teachRouter.get(
         };
       });
 
+      const hasSavedVideo = Boolean((session.videoR2Key || '').trim());
+      const effectiveStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+        session.status === 'REPLAY_READY' && !hasSavedVideo
+          ? 'SCHEDULED'
+          : (session.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY');
+
+      if (session.status === 'REPLAY_READY' && !hasSavedVideo) {
+        db.update(classSessions)
+          .set({ status: 'SCHEDULED', updatedAt: new Date() })
+          .where(eq(classSessions.id, session.id))
+          .catch(() => {});
+      }
+
       res.json({
         session: {
           id: String(session.id),
@@ -1020,7 +1066,7 @@ teachRouter.get(
             'THEORY' | 'LIVE_CODING' | 'EXERCISE_REVIEW' | 'WORKSHOP'
           >,
           hostInstructorName: staffInfo.instructorName,
-          status: session.status as 'LIVE' | 'SCHEDULED' | 'REPLAY_READY',
+          status: effectiveStatus,
           scheduledStart: session.scheduledStart ? session.scheduledStart.toISOString() : '',
           scheduledEnd: session.scheduledEnd ? session.scheduledEnd.toISOString() : '',
           videoR2Key: session.videoR2Key || '',
@@ -1118,19 +1164,24 @@ teachRouter.put(
           ? new Date(scheduledStart)
           : session.scheduledStart;
 
-      // Once a session is REPLAY_READY, lock its completed status and primary recording
-      const isAlreadyCompleted = session.status === 'REPLAY_READY';
+      // Once a session is REPLAY_READY WITH a saved recording, lock its completed status and primary recording
+      const isAlreadyCompleted =
+        session.status === 'REPLAY_READY' && Boolean((session.videoR2Key || '').trim());
       const nextVideoKey = isAlreadyCompleted
         ? session.videoR2Key || (videoR2Key !== undefined ? videoR2Key.trim() : session.videoR2Key)
         : videoR2Key !== undefined
           ? videoR2Key.trim()
           : session.videoR2Key;
-      const nextStatus = isAlreadyCompleted
+      const rawNextStatus = isAlreadyCompleted
         ? 'REPLAY_READY'
         : status ??
           (videoR2Key && videoR2Key.trim() && session.status === 'SCHEDULED'
             ? 'REPLAY_READY'
             : session.status);
+      const nextStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+        rawNextStatus === 'REPLAY_READY' && !Boolean((nextVideoKey || '').trim())
+          ? 'SCHEDULED'
+          : rawNextStatus;
 
       const [updatedSession] = await db
         .update(classSessions)
@@ -1256,7 +1307,10 @@ teachRouter.put(
       }
 
       const { status, videoR2Key, activeSlideLabel, liveTopicNote } = req.body;
-      if (session.status === 'REPLAY_READY' && status && status !== 'REPLAY_READY') {
+      const hasExistingVideo = Boolean((session.videoR2Key || '').trim());
+      const isAlreadyCompleted = session.status === 'REPLAY_READY' && hasExistingVideo;
+
+      if (isAlreadyCompleted && status && status !== 'REPLAY_READY') {
         res.status(400).json({
           success: false,
           status: 400,
@@ -1267,13 +1321,18 @@ teachRouter.put(
         return;
       }
 
-      const nextStatus = session.status === 'REPLAY_READY' ? 'REPLAY_READY' : (status ?? session.status);
-      const nextVideoKey =
-        session.status === 'REPLAY_READY' && session.videoR2Key
-          ? session.videoR2Key
-          : videoR2Key !== undefined
-            ? videoR2Key.trim()
-            : session.videoR2Key;
+      const nextVideoKey = isAlreadyCompleted
+        ? session.videoR2Key
+        : videoR2Key !== undefined
+          ? videoR2Key.trim()
+          : session.videoR2Key;
+      const hasAnyVideo = Boolean((nextVideoKey || '').trim());
+
+      const rawNextStatus = isAlreadyCompleted ? 'REPLAY_READY' : (status ?? session.status);
+      // If Instructor closes the live session ('REPLAY_READY' or 'SCHEDULED') WITHOUT saving a recording,
+      // return the session to 'SCHEDULED' so students don't see a fake replay button and Instructor can reopen Live anytime.
+      const nextStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' =
+        rawNextStatus === 'REPLAY_READY' && !hasAnyVideo ? 'SCHEDULED' : rawNextStatus;
 
       const [updated] = await db
         .update(classSessions)
@@ -1290,6 +1349,14 @@ teachRouter.put(
         activeSlideLabel,
         liveTopicNote,
       });
+
+      if (nextStatus !== 'LIVE') {
+        updateHostMediaState(session.id, {
+          camOn: false,
+          micOn: false,
+          screenSharing: false,
+        });
+      }
 
       const resolvedVideo = resolvePlayableVideoSource(
         updated?.videoR2Key,

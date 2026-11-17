@@ -41,6 +41,7 @@ export interface SessionVideoPlayerProps {
   activeSubtitle?: VideoSubtitleCue | null;
   seekRequest?: { sec: number; label?: string; nonce: number } | null;
   onTimeUpdate?: (currentSec: number, durationSec: number) => void;
+  onDurationChange?: (durationSec: number) => void;
   onPauseSave?: (currentSec: number, durationSec: number) => void;
   onEnded?: (durationSec: number) => void;
   onJumpChapter?: (sec: number, label: string) => void;
@@ -80,6 +81,7 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
   activeSubtitle,
   seekRequest,
   onTimeUpdate,
+  onDurationChange,
   onPauseSave,
   onEnded,
   onJumpChapter,
@@ -208,7 +210,9 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
     setIsBuffering(false);
     setMediaError(null);
     if (Number.isFinite(vid.duration) && vid.duration > 0) {
-      setDurationSec(Math.floor(vid.duration));
+      const realDur = Math.max(1, Math.floor(vid.duration));
+      setDurationSec(realDur);
+      onDurationChange?.(realDur);
     }
     vid.volume = volume;
     vid.muted = isMuted;
@@ -391,6 +395,7 @@ export const SessionVideoPlayer: React.FC<SessionVideoPlayerProps> = ({
             setCurrentSec(sec);
             if (dur > 0 && dur !== durationSec) {
               setDurationSec(dur);
+              onDurationChange?.(dur);
             }
             onTimeUpdate?.(sec, dur);
           }}

@@ -21,6 +21,7 @@ import {
 import { AvatarWithFallback } from './BotanicalStickers';
 import type {
   LiveHandRaiseItem,
+  LiveHostMediaState,
   LiveParticipantItem,
   LiveRecordingState,
 } from '../services/learning.api';
@@ -125,6 +126,9 @@ export interface LiveKitClassroomStageProps {
   localVideoStream: MediaStream | null;
   screenShareStream: MediaStream | null;
   remoteVideoTracks: AttachedRemoteTrackItem[];
+  hostWebRtcCameraStream?: MediaStream | null;
+  hostWebRtcScreenStream?: MediaStream | null;
+  hostMediaState?: LiveHostMediaState;
   activeSpeakerIdentities: string[];
   mutedIdentities: string[];
   raisedHands: LiveHandRaiseItem[];
@@ -167,6 +171,9 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   localVideoStream,
   screenShareStream,
   remoteVideoTracks,
+  hostWebRtcCameraStream,
+  hostWebRtcScreenStream,
+  hostMediaState,
   activeSpeakerIdentities,
   mutedIdentities,
   raisedHands,
@@ -231,15 +238,27 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
   const primaryRemoteCamera = pinnedRemoteTrack || hostRemoteCameraTrack || remoteCameraTracks[0];
   const isRecording = Boolean(recordingState?.isRecording);
 
+  const hasHostRemoteScreen = Boolean(
+    remoteScreenTrack ||
+      hostWebRtcScreenStream ||
+      (hostMediaState?.screenSharing && hostMediaState?.screenFrameDataUrl)
+  );
+  const hasHostRemoteCamera = Boolean(
+    primaryRemoteCamera ||
+      hostWebRtcCameraStream ||
+      (hostMediaState?.camOn && hostMediaState?.cameraFrameDataUrl)
+  );
+
   const isHostSpeaking = useMemo(() => {
     if (isHost) return micOn;
+    if (hostMediaState?.micOn) return true;
     if (!hostParticipant) return false;
     const hostId = String(hostParticipant.accountId);
     return (
       activeSpeakerIdentities.includes(`acc-${hostId}`) ||
       activeSpeakerIdentities.includes(hostId)
     );
-  }, [isHost, micOn, hostParticipant, activeSpeakerIdentities]);
+  }, [isHost, micOn, hostMediaState?.micOn, hostParticipant, activeSpeakerIdentities]);
 
   // Deduplicate online participants so the current user never appears twice
   const otherParticipants = useMemo(() => {
@@ -393,7 +412,7 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
         <div className="p-4 bg-slate-900 min-h-[460px] flex flex-col justify-between gap-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 flex-1">
             {/* If User is Student and Instructor is online in the room, show Instructor Tile FIRST */}
-            {!isHost && hostParticipant && (
+            {!isHost && (hostParticipant || hasHostRemoteCamera || hasHostRemoteScreen) && (
               <div
                 className={`relative rounded-xl bg-slate-800 border-2 ${
                   isHostSpeaking
@@ -401,11 +420,21 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                     : 'border-emerald-600/70'
                 } overflow-hidden min-h-[210px] flex items-center justify-center group`}
               >
-                {remoteScreenTrack &&
-                (remoteScreenTrack.participantIdentity === `acc-${hostParticipant.accountId}` ||
-                  remoteScreenTrack.participantIdentity === String(hostParticipant.accountId)) ? (
+                {remoteScreenTrack ? (
                   <LiveMediaTrackView
                     track={remoteScreenTrack.track}
+                    className="w-full h-full object-contain bg-black"
+                  />
+                ) : hostWebRtcScreenStream ? (
+                  <LocalMediaStreamView
+                    stream={hostWebRtcScreenStream}
+                    muted={false}
+                    className="w-full h-full object-contain bg-black"
+                  />
+                ) : hostMediaState?.screenSharing && hostMediaState?.screenFrameDataUrl ? (
+                  <img
+                    src={hostMediaState.screenFrameDataUrl}
+                    alt={`${hostName} đang chia sẻ màn hình`}
                     className="w-full h-full object-contain bg-black"
                   />
                 ) : hostRemoteCameraTrack ? (
@@ -413,13 +442,30 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
                     track={hostRemoteCameraTrack.track}
                     className="w-full h-full object-cover"
                   />
+                ) : hostWebRtcCameraStream ? (
+                  <LocalMediaStreamView
+                    stream={hostWebRtcCameraStream}
+                    muted={false}
+                    mirrored={hostMediaState?.mirrorCam ?? true}
+                    className="w-full h-full object-cover"
+                  />
+                ) : hostMediaState?.camOn && hostMediaState?.cameraFrameDataUrl ? (
+                  <img
+                    src={hostMediaState.cameraFrameDataUrl}
+                    alt={hostName}
+                    className={`w-full h-full object-cover ${
+                      hostMediaState.mirrorCam !== false ? '-scale-x-100' : ''
+                    }`}
+                  />
                 ) : (
                   <div className="flex flex-col items-center gap-2.5 p-4 text-center">
                     <AvatarWithFallback
-                      name={hostParticipant.fullName}
+                      name={hostParticipant?.fullName || hostName}
                       className="w-16 h-16 rounded-full ring-2 ring-emerald-500 text-lg"
                     />
-                    <div className="text-sm font-bold text-white">{hostParticipant.fullName}</div>
+                    <div className="text-sm font-bold text-white">
+                      {hostParticipant?.fullName || hostName}
+                    </div>
                     <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-semibold">
                       Giảng viên phụ trách
                     </span>
@@ -428,9 +474,13 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
 
                 <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-black/65 backdrop-blur-xs text-xs">
                   <span className="font-semibold text-white truncate">
-                    {hostParticipant.fullName} (Giảng viên)
+                    {hostParticipant?.fullName || hostName} (Giảng viên)
                   </span>
-                  <Volume2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  {isHostSpeaking ? (
+                    <Mic className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
                 </div>
               </div>
             )}
@@ -669,15 +719,31 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
         ===================================================================== */
         <div className="relative aspect-video bg-slate-900 flex items-center justify-center overflow-hidden">
           {/* 1. Remote Screen Share (e.g. Instructor presenting slides/code/screen to students) */}
-          {remoteScreenTrack && !focusSelfOnMainStage ? (
+          {!isHost && hasHostRemoteScreen && !focusSelfOnMainStage ? (
             <div className="relative w-full h-full bg-black flex items-center justify-center">
-              <LiveMediaTrackView
-                track={remoteScreenTrack.track}
-                className="w-full h-full object-contain"
-              />
+              {remoteScreenTrack ? (
+                <LiveMediaTrackView
+                  track={remoteScreenTrack.track}
+                  className="w-full h-full object-contain"
+                />
+              ) : hostWebRtcScreenStream ? (
+                <LocalMediaStreamView
+                  stream={hostWebRtcScreenStream}
+                  muted={false}
+                  className="w-full h-full object-contain"
+                />
+              ) : hostMediaState?.screenFrameDataUrl ? (
+                <img
+                  src={hostMediaState.screenFrameDataUrl}
+                  alt={`${hostMediaState.hostName || hostName} đang chia sẻ màn hình`}
+                  className="w-full h-full object-contain"
+                />
+              ) : null}
               <div className="absolute top-4 left-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/85 border border-white/15 text-white text-xs font-semibold shadow-md">
                 <MonitorUp className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{remoteScreenTrack.participantName} đang chia sẻ màn hình</span>
+                <span>
+                  {remoteScreenTrack?.participantName || hostMediaState?.hostName || hostName} đang chia sẻ màn hình
+                </span>
               </div>
             </div>
           ) : hasLocalScreenVideo ? (
@@ -695,15 +761,38 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
             </div>
           ) : !isHost && !focusSelfOnMainStage ? (
             /* 3. STUDENT VIEW: Main 16:9 Stage ALWAYS shows the INSTRUCTOR (or pinned speaker) */
-            primaryRemoteCamera ? (
+            hasHostRemoteCamera ? (
               <div className="relative w-full h-full bg-slate-950 flex items-center justify-center">
-                <LiveMediaTrackView
-                  track={primaryRemoteCamera.track}
-                  className="w-full h-full object-cover"
-                />
+                {primaryRemoteCamera ? (
+                  <LiveMediaTrackView
+                    track={primaryRemoteCamera.track}
+                    className="w-full h-full object-cover"
+                  />
+                ) : hostWebRtcCameraStream ? (
+                  <LocalMediaStreamView
+                    stream={hostWebRtcCameraStream}
+                    muted={false}
+                    mirrored={hostMediaState?.mirrorCam ?? true}
+                    className="w-full h-full object-cover"
+                  />
+                ) : hostMediaState?.cameraFrameDataUrl ? (
+                  <img
+                    src={hostMediaState.cameraFrameDataUrl}
+                    alt={hostMediaState.hostName || hostName}
+                    className={`w-full h-full object-cover ${
+                      hostMediaState.mirrorCam !== false ? '-scale-x-100' : ''
+                    }`}
+                  />
+                ) : null}
                 <div className="absolute bottom-4 left-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/65 backdrop-blur-xs text-white text-xs font-medium">
-                  <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{primaryRemoteCamera.participantName} · Giảng viên</span>
+                  {isHostSpeaking ? (
+                    <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                  )}
+                  <span>
+                    {primaryRemoteCamera?.participantName || hostMediaState?.hostName || hostName} · Giảng viên
+                  </span>
                 </div>
               </div>
             ) : (
@@ -727,7 +816,9 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
 
                 <h3 className="text-lg sm:text-xl font-bold text-white mt-1">{hostName}</h3>
                 <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-md">
-                  Giảng viên phụ trách lớp · Màn hình giảng dạy chính
+                  {isHostSpeaking
+                    ? 'Giảng viên đang giảng bài qua Micro trực tiếp'
+                    : 'Giảng viên phụ trách lớp · Màn hình giảng dạy chính'}
                 </p>
                 <p className="text-[11px] text-slate-400 mt-2">
                   Khi Giảng viên bật Camera hoặc Chia sẻ màn hình, nội dung sẽ hiển thị trực tiếp tại đây
@@ -846,14 +937,31 @@ export const LiveKitClassroomStage: React.FC<LiveKitClassroomStageProps> = ({
           {!isHost && !focusSelfOnMainStage && (
             <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
               {/* If Instructor is sharing screen AND also has camera on, show Instructor's camera PiP above Student's PiP */}
-              {remoteScreenTrack && hostRemoteCameraTrack && (
+              {hasHostRemoteScreen && hasHostRemoteCamera && (
                 <div className="relative w-40 sm:w-48 aspect-video rounded-xl overflow-hidden border-2 border-emerald-400/80 shadow-xl bg-slate-800">
-                  <LiveMediaTrackView
-                    track={hostRemoteCameraTrack.track}
-                    className="w-full h-full object-cover"
-                  />
+                  {hostRemoteCameraTrack ? (
+                    <LiveMediaTrackView
+                      track={hostRemoteCameraTrack.track}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : hostWebRtcCameraStream ? (
+                    <LocalMediaStreamView
+                      stream={hostWebRtcCameraStream}
+                      muted={false}
+                      mirrored={hostMediaState?.mirrorCam ?? true}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : hostMediaState?.cameraFrameDataUrl ? (
+                    <img
+                      src={hostMediaState.cameraFrameDataUrl}
+                      alt={hostName}
+                      className={`w-full h-full object-cover ${
+                        hostMediaState.mirrorCam !== false ? '-scale-x-100' : ''
+                      }`}
+                    />
+                  ) : null}
                   <div className="absolute bottom-1.5 left-2 right-2 px-2 py-0.5 rounded bg-black/70 text-[10px] font-medium text-white truncate">
-                    {hostRemoteCameraTrack.participantName} (Giảng viên)
+                    {hostRemoteCameraTrack?.participantName || hostMediaState?.hostName || hostName} (Giảng viên)
                   </div>
                 </div>
               )}

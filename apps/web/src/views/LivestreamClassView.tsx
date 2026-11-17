@@ -168,6 +168,12 @@ export const LivestreamClassView: React.FC<{
   >([]);
   const [activeSpeakerIdentities, setActiveSpeakerIdentities] = useState<string[]>([]);
 
+  // Native WebRTC peer-to-peer fallback streams (when LiveKit cloud is unreachable)
+  const [hostWebRtcCameraStream, setHostWebRtcCameraStream] = useState<MediaStream | null>(null);
+  const [hostWebRtcScreenStream, setHostWebRtcScreenStream] = useState<MediaStream | null>(null);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const webRtcAudioConnectedRef = useRef<boolean>(false);
+
   // Stage mode toggle: STAGE (Màn hình chính) | GRID (Hiển thị lưới)
   const [stageViewMode, setStageViewMode] = useState<'STAGE' | 'GRID'>('STAGE');
 
@@ -236,6 +242,17 @@ export const LivestreamClassView: React.FC<{
       void livekitRoomRef.current.disconnect();
       livekitRoomRef.current = null;
     }
+    for (const pc of peerConnectionsRef.current.values()) {
+      try {
+        pc.close();
+      } catch {
+        // Ignore close error
+      }
+    }
+    peerConnectionsRef.current.clear();
+    webRtcAudioConnectedRef.current = false;
+    setHostWebRtcCameraStream(null);
+    setHostWebRtcScreenStream(null);
     setLocalVideoStream(null);
     setScreenShareStream(null);
     setWebcamActive(false);
@@ -814,6 +831,237 @@ export const LivestreamClassView: React.FC<{
       }
     });
 
+    source.addEventListener('host_media_sync', (evt) => {
+      try {
+        const hostMedia = JSON.parse((evt as MessageEvent).data) as NonNullable<
+          LiveRoomRuntimeState['hostMedia']
+        >;
+        setRuntimeState((prev) => ({
+          ...prev,
+          hostMedia,
+        }));
+        if (!hostMedia.camOn) {
+          setHostWebRtcCameraStream(null);
+        }
+        if (!hostMedia.screenSharing) {
+          setHostWebRtcScreenStream(null);
+        }
+      } catch {
+        // Ignore
+      }
+    });
+
+    source.addEventListener('live_audio_chunk', (evt) => {
+      try {
+        if (isHost || webRtcAudioConnectedRef.current) return;
+        const payload = JSON.parse((evt as MessageEvent).data) as {
+          fromAccountId: string;
+          isHost: boolean;
+          audioBase64: string;
+        };
+        if (!payload.isHost || !payload.audioBase64) return;
+        const audio = new Audio(payload.audioBase64);
+        audio.volume = 1.0;
+        void audio.play().catch(() => {});
+      } catch {
+        // Ignore audio playback errors
+      }
+    });
+
+    source.addEventListener('webrtc_signal', (evt) => {
+      void (async () => {
+        try {
+          if (typeof RTCPeerConnection === 'undefined') return;
+          const sig = JSON.parse((evt as MessageEvent).data) as {
+            fromAccountId: string;
+            fromName: string;
+            isHost: boolean;
+            targetAccountId?: string;
+            signalType: 'offer' | 'answer' | 'ice-candidate' | 'request-offer' | 'media-stopped';
+            sdp?: RTCSessionDescriptionInit;
+            candidate?: RTCIceCandidateInit;
+          };
+
+          const myId = currentUser?.id ? String(currentUser.id) : '';
+          if (sig.fromAccountId === myId) return;
+          if (sig.targetAccountId && sig.targetAccountId !== myId) return;
+
+          const sessIdStr = String(roomData.session.id);
+
+          // 1. Instructor receives 'request-offer' from a Student -> create RTCPeerConnection and send offer
+          if (isHost && sig.signalType === 'request-offer') {
+            const hasAnyLocalMedia =
+              Boolean(localMediaStreamRef.current?.getTracks().length) ||
+              Boolean(screenShareStreamRef.current?.getTracks().length) ||
+              Boolean(localAudioStreamRef.current?.getTracks().length);
+            if (!hasAnyLocalMedia) return;
+
+            const existingPc = peerConnectionsRef.current.get(sig.fromAccountId);
+            if (existingPc) {
+              try {
+                existingPc.close();
+              } catch {
+                // Ignore
+              }
+            }
+
+            const pc = new RTCPeerConnection({
+              iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+            });
+            peerConnectionsRef.current.set(sig.fromAccountId, pc);
+
+            pc.onicecandidate = (iceEv) => {
+              if (iceEv.candidate) {
+                void learningApi
+                  .sendLiveRtcSignal(sessIdStr, {
+                    targetAccountId: sig.fromAccountId,
+                    signalType: 'ice-candidate',
+                    candidate: iceEv.candidate.toJSON(),
+                  })
+                  .catch(() => {});
+              }
+            };
+
+            if (localAudioStreamRef.current) {
+              for (const track of localAudioStreamRef.current.getAudioTracks()) {
+                pc.addTrack(track, localAudioStreamRef.current);
+              }
+            }
+            if (localMediaStreamRef.current) {
+              for (const track of localMediaStreamRef.current.getVideoTracks()) {
+                pc.addTrack(track, localMediaStreamRef.current);
+              }
+            }
+            if (screenShareStreamRef.current) {
+              for (const track of screenShareStreamRef.current.getTracks()) {
+                pc.addTrack(track, screenShareStreamRef.current);
+              }
+            }
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await learningApi.sendLiveRtcSignal(sessIdStr, {
+              targetAccountId: sig.fromAccountId,
+              signalType: 'offer',
+              sdp: pc.localDescription,
+            });
+            return;
+          }
+
+          // 2. Instructor receives 'answer' from Student
+          if (isHost && sig.signalType === 'answer' && sig.sdp) {
+            const pc = peerConnectionsRef.current.get(sig.fromAccountId);
+            if (pc && pc.signalingState !== 'stable') {
+              await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
+            }
+            return;
+          }
+
+          // 3. Student receives 'offer' from Instructor
+          if (!isHost && sig.isHost && sig.signalType === 'offer' && sig.sdp) {
+            const existingPc = peerConnectionsRef.current.get('host');
+            if (existingPc) {
+              try {
+                existingPc.close();
+              } catch {
+                // Ignore
+              }
+            }
+
+            const pc = new RTCPeerConnection({
+              iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+            });
+            peerConnectionsRef.current.set('host', pc);
+            let receivedVideoCount = 0;
+
+            pc.onicecandidate = (iceEv) => {
+              if (iceEv.candidate) {
+                void learningApi
+                  .sendLiveRtcSignal(sessIdStr, {
+                    targetAccountId: sig.fromAccountId,
+                    signalType: 'ice-candidate',
+                    candidate: iceEv.candidate.toJSON(),
+                  })
+                  .catch(() => {});
+              }
+            };
+
+            pc.ontrack = (trackEv) => {
+              const stream = trackEv.streams[0] || new MediaStream([trackEv.track]);
+              if (trackEv.track.kind === 'audio') {
+                webRtcAudioConnectedRef.current = true;
+                if (remoteAudioContainerRef.current) {
+                  const sid = `webrtc-audio-${trackEv.track.id}`;
+                  let audioEl = remoteAudioContainerRef.current.querySelector(
+                    `audio[data-track-sid="${sid}"]`
+                  ) as HTMLAudioElement | null;
+                  if (!audioEl) {
+                    audioEl = document.createElement('audio');
+                    audioEl.autoplay = true;
+                    audioEl.setAttribute('playsinline', 'true');
+                    audioEl.setAttribute('data-track-sid', sid);
+                    remoteAudioContainerRef.current.appendChild(audioEl);
+                  }
+                  audioEl.srcObject = stream;
+                  void audioEl.play().catch(() => {});
+                }
+                trackEv.track.onended = () => {
+                  webRtcAudioConnectedRef.current = false;
+                };
+              } else if (trackEv.track.kind === 'video') {
+                receivedVideoCount += 1;
+                const label = (trackEv.track.label || '').toLowerCase();
+                const isScreen =
+                  label.includes('screen') ||
+                  label.includes('window') ||
+                  label.includes('display') ||
+                  receivedVideoCount > 1;
+                if (isScreen) {
+                  setHostWebRtcScreenStream(stream);
+                  trackEv.track.onended = () => setHostWebRtcScreenStream(null);
+                } else {
+                  setHostWebRtcCameraStream(stream);
+                  trackEv.track.onended = () => setHostWebRtcCameraStream(null);
+                }
+              }
+            };
+
+            await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await learningApi.sendLiveRtcSignal(sessIdStr, {
+              targetAccountId: sig.fromAccountId,
+              signalType: 'answer',
+              sdp: pc.localDescription,
+            });
+            return;
+          }
+
+          // 4. Both sides handle 'ice-candidate'
+          if (sig.signalType === 'ice-candidate' && sig.candidate) {
+            const key = isHost ? sig.fromAccountId : 'host';
+            const pc = peerConnectionsRef.current.get(key);
+            if (pc) {
+              await pc.addIceCandidate(new RTCIceCandidate(sig.candidate)).catch(() => {});
+            }
+          }
+        } catch {
+          // Ignore WebRTC signaling errors; SSE frame/audio sync continues seamlessly
+        }
+      })();
+    });
+
+    // When Student connects to SSE, request WebRTC offer from Instructor
+    if (!isHost) {
+      window.setTimeout(() => {
+        void learningApi
+          .sendLiveRtcSignal(String(roomData.session.id), {
+            signalType: 'request-offer',
+          })
+          .catch(() => {});
+      }, 400);
+    }
+
     return () => {
       source.close();
       setSseConnected(false);
@@ -826,6 +1074,236 @@ export const LivestreamClassView: React.FC<{
     stopAllLocalMediaAndRoom,
     updateSessionDetails,
   ]);
+
+  // Helper for Instructor to push WebRTC offer to all active students in the room
+  const broadcastInstructorWebRtcOffer = useCallback(async () => {
+    if (!isHost || !activeSessionId || typeof RTCPeerConnection === 'undefined') return;
+    const students = (runtimeState.activeParticipants || roomData?.participants || []).filter(
+      (p) => !p.isHost && p.accountId && p.accountId !== currentAccountId
+    );
+    for (const stu of students) {
+      try {
+        const existing = peerConnectionsRef.current.get(stu.accountId);
+        if (existing) {
+          try {
+            existing.close();
+          } catch {
+            // Ignore
+          }
+        }
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+        peerConnectionsRef.current.set(stu.accountId, pc);
+
+        pc.onicecandidate = (iceEv) => {
+          if (iceEv.candidate) {
+            void learningApi
+              .sendLiveRtcSignal(String(activeSessionId), {
+                targetAccountId: stu.accountId,
+                signalType: 'ice-candidate',
+                candidate: iceEv.candidate.toJSON(),
+              })
+              .catch(() => {});
+          }
+        };
+
+        if (localAudioStreamRef.current) {
+          for (const track of localAudioStreamRef.current.getAudioTracks()) {
+            pc.addTrack(track, localAudioStreamRef.current);
+          }
+        }
+        if (localMediaStreamRef.current) {
+          for (const track of localMediaStreamRef.current.getVideoTracks()) {
+            pc.addTrack(track, localMediaStreamRef.current);
+          }
+        }
+        if (screenShareStreamRef.current) {
+          for (const track of screenShareStreamRef.current.getTracks()) {
+            pc.addTrack(track, screenShareStreamRef.current);
+          }
+        }
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await learningApi.sendLiveRtcSignal(String(activeSessionId), {
+          targetAccountId: stu.accountId,
+          signalType: 'offer',
+          sdp: pc.localDescription,
+        });
+      } catch {
+        // Ignore individual peer error
+      }
+    }
+  }, [
+    isHost,
+    activeSessionId,
+    runtimeState.activeParticipants,
+    roomData?.participants,
+    currentAccountId,
+  ]);
+
+  // Zero-config Real-time Instructor Camera + Screen Share Frame & Audio Sync over SSE
+  useEffect(() => {
+    if (!isHost || !activeSessionId) return;
+
+    // Immediately notify students of current camOn / micOn / screenSharing flags
+    void learningApi
+      .syncLiveHostMedia(String(activeSessionId), {
+        camOn,
+        micOn,
+        screenSharing,
+      })
+      .catch(() => {});
+
+    if (camOn || micOn || screenSharing) {
+      void broadcastInstructorWebRtcOffer();
+    }
+
+    if (!camOn && !screenSharing) return;
+
+    const camVideo = document.createElement('video');
+    camVideo.muted = true;
+    camVideo.playsInline = true;
+    if (localVideoStream) {
+      camVideo.srcObject = localVideoStream;
+      void camVideo.play().catch(() => {});
+    }
+
+    const screenVideo = document.createElement('video');
+    screenVideo.muted = true;
+    screenVideo.playsInline = true;
+    if (screenShareStream) {
+      screenVideo.srcObject = screenShareStream;
+      void screenVideo.play().catch(() => {});
+    }
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    let busy = false;
+
+    const captureAndSync = async () => {
+      if (busy || !ctx) return;
+      busy = true;
+      try {
+        let cameraFrameDataUrl: string | undefined;
+        let screenFrameDataUrl: string | undefined;
+
+        if (camOn && localVideoStream && camVideo.readyState >= 2) {
+          canvas.width = 480;
+          canvas.height = 270;
+          ctx.drawImage(camVideo, 0, 0, canvas.width, canvas.height);
+          cameraFrameDataUrl = canvas.toDataURL('image/jpeg', 0.55);
+        }
+
+        if (screenSharing && screenShareStream && screenVideo.readyState >= 2) {
+          canvas.width = 854;
+          canvas.height = 480;
+          ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+          screenFrameDataUrl = canvas.toDataURL('image/jpeg', 0.58);
+        }
+
+        if (cameraFrameDataUrl || screenFrameDataUrl) {
+          await learningApi.syncLiveHostMedia(String(activeSessionId), {
+            camOn,
+            micOn,
+            screenSharing,
+            cameraFrameDataUrl,
+            screenFrameDataUrl,
+          });
+        }
+      } catch {
+        // Ignore frame sync error
+      } finally {
+        busy = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void captureAndSync();
+    }, 450);
+
+    return () => {
+      window.clearInterval(intervalId);
+      camVideo.srcObject = null;
+      screenVideo.srcObject = null;
+    };
+  }, [
+    isHost,
+    activeSessionId,
+    camOn,
+    micOn,
+    screenSharing,
+    localVideoStream,
+    screenShareStream,
+    broadcastInstructorWebRtcOffer,
+  ]);
+
+  // Real-time Instructor Microphone Audio Chunk Relay over SSE (so students hear Instructor even if UDP WebRTC is blocked)
+  useEffect(() => {
+    if (!isHost || !activeSessionId || !micOn || !localAudioStreamRef.current) return;
+    if (typeof MediaRecorder === 'undefined') return;
+
+    let cancelled = false;
+    let seq = 0;
+    const stream = localAudioStreamRef.current;
+    const mimeType =
+      typeof MediaRecorder.isTypeSupported === 'function' &&
+      MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+    const recordSlice = () => {
+      if (cancelled || !localAudioStreamRef.current) return;
+      try {
+        const rec = new MediaRecorder(stream, { mimeType });
+        const chunks: BlobPart[] = [];
+        rec.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) chunks.push(e.data);
+        };
+        rec.onstop = () => {
+          if (cancelled || chunks.length === 0) return;
+          const blob = new Blob(chunks, { type: mimeType });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === 'string' && !cancelled) {
+              seq += 1;
+              void learningApi
+                .syncLiveHostMedia(String(activeSessionId), {
+                  micOn: true,
+                  audioChunkBase64: reader.result,
+                  audioMimeType: mimeType,
+                  audioSeq: seq,
+                })
+                .catch(() => {});
+            }
+          };
+          reader.readAsDataURL(blob);
+          if (!cancelled) {
+            recordSlice();
+          }
+        };
+        rec.start();
+        window.setTimeout(() => {
+          if (rec.state === 'recording') {
+            try {
+              rec.stop();
+            } catch {
+              // Ignore
+            }
+          }
+        }, 950);
+      } catch {
+        // Ignore recorder error
+      }
+    };
+
+    recordSlice();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHost, activeSessionId, micOn]);
 
   // Real browser camera & microphone control
   const handleToggleCamera = async () => {
@@ -1143,6 +1621,44 @@ export const LivestreamClassView: React.FC<{
   };
 
   const handleRequestLateJoinSummary = async () => {
+    const hasSavedVideo = Boolean((activeSession?.videoR2Key || '').trim());
+    const hasLiveActivity = chatMessages.length > 0 || qaList.length > 0;
+
+    if (!hasSavedVideo && !hasLiveActivity) {
+      setLateJoinAiSummaryText(
+        'Buổi học trực tuyến vừa mới bắt đầu, hiện chưa có nội dung thảo luận, câu hỏi hay bản ghi bài giảng nào được ghi nhận trong phòng học. Khi Giảng viên giảng bài và lớp học có trao đổi tại mục Trò chuyện / Hỏi đáp, bạn có thể bấm lại nút này để tổng hợp nhanh diễn biến thực tế.'
+      );
+      return;
+    }
+
+    if (!hasSavedVideo && hasLiveActivity) {
+      const recentChats = chatMessages
+        .slice(-5)
+        .map((m) => `• ${m.senderName || m.sender}: ${m.text}`)
+        .join('\n');
+      const recentQa = qaList
+        .slice(0, 5)
+        .map(
+          (q) =>
+            `• Câu hỏi từ ${q.author}: "${q.question}" (${
+              q.answeredByInstructor ? 'Đã được Giảng viên giải đáp' : `${q.votes} lượt quan tâm`
+            })`
+        )
+        .join('\n');
+
+      const summaryParts: string[] = [
+        `Tổng hợp diễn biến trực tiếp của Buổi ${activeSession?.sessionOrder || 1}: ${activeSession?.title || ''}`,
+      ];
+      if (recentQa) {
+        summaryParts.push(`Các câu hỏi thảo luận trong phòng (${qaList.length}):\n${recentQa}`);
+      }
+      if (recentChats) {
+        summaryParts.push(`Trao đổi gần nhất trong lớp (${chatMessages.length} tin nhắn):\n${recentChats}`);
+      }
+      setLateJoinAiSummaryText(summaryParts.join('\n\n'));
+      return;
+    }
+
     setIsGeneratingSummary(true);
     try {
       const res = await learningApi.askSessionAiTutor(
@@ -1190,15 +1706,15 @@ export const LivestreamClassView: React.FC<{
             }
           : prev
       );
-      if (overrides?.status === 'REPLAY_READY') {
+      if (res.status !== 'LIVE') {
         stopAllLocalMediaAndRoom();
       }
       setMediaNotice(
-        overrides?.status === 'LIVE'
+        res.status === 'LIVE'
           ? 'Đã mở phòng học trực tuyến. Học viên trong lớp đã có thể vào học.'
-          : overrides?.status === 'REPLAY_READY'
-            ? 'Đã kết thúc buổi học trực tuyến và đóng phòng Live.'
-            : 'Đã cập nhật trạng thái lớp học.'
+          : res.status === 'REPLAY_READY'
+            ? 'Đã kết thúc buổi học trực tuyến và lưu trạng thái hoàn thành có bản ghi.'
+            : 'Đã đóng phòng học trực tuyến (chưa lưu bản ghi video nên buổi học giữ trạng thái chưa diễn ra).'
       );
     } catch {
       setMediaNotice('Không cập nhật được trạng thái buổi học.');
@@ -2080,6 +2596,9 @@ export const LivestreamClassView: React.FC<{
             localVideoStream={localVideoStream}
             screenShareStream={screenShareStream}
             remoteVideoTracks={remoteVideoTracks}
+            hostWebRtcCameraStream={hostWebRtcCameraStream}
+            hostWebRtcScreenStream={hostWebRtcScreenStream}
+            hostMediaState={runtimeState.hostMedia}
             activeSpeakerIdentities={activeSpeakerIdentities}
             mutedIdentities={runtimeState.mutedIdentities || []}
             raisedHands={runtimeState.raisedHands}
@@ -2339,18 +2858,32 @@ export const LivestreamClassView: React.FC<{
 
             {/* RIGHT ZONE: End / Leave Room Controls */}
             <div className="xl:col-span-3 flex items-center justify-end gap-2">
-              {isHost && sessionStatus === 'LIVE' && (
-                <button
-                  type="button"
-                  disabled={isUpdatingHostState}
-                  onClick={() => void handleUpdateHostBroadcast({ status: 'REPLAY_READY' })}
-                  title="Đóng phòng học trực tuyến đối với toàn bộ học viên"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
-                >
-                  <PhoneOff className="w-4 h-4" />
-                  <span>Kết thúc Live</span>
-                </button>
-              )}
+              {isHost && sessionStatus === 'LIVE' && (() => {
+                const hasSavedRecording = Boolean(
+                  (activeSession?.videoR2Key || '').trim() ||
+                    (runtimeState.recording?.publicUrl || '').trim()
+                );
+                return (
+                  <button
+                    type="button"
+                    disabled={isUpdatingHostState}
+                    onClick={() =>
+                      void handleUpdateHostBroadcast({
+                        status: hasSavedRecording ? 'REPLAY_READY' : 'SCHEDULED',
+                      })
+                    }
+                    title={
+                      hasSavedRecording
+                        ? 'Kết thúc buổi học trực tuyến và xuất bản bản ghi video cho học viên'
+                        : 'Đóng phòng học trực tuyến (chưa lưu video nên buổi học sẽ quay về trạng thái chưa diễn ra)'
+                    }
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <PhoneOff className="w-4 h-4" />
+                    <span>{hasSavedRecording ? 'Kết thúc Live' : 'Đóng phòng Live'}</span>
+                  </button>
+                );
+              })()}
 
               {isHost && sessionStatus !== 'LIVE' && (
                 <button
@@ -2566,84 +3099,95 @@ export const LivestreamClassView: React.FC<{
           )}
 
           {/* TAB 3: TÀI LIỆU & TÓM TẮT BUỔI HỌC */}
-          {rightTab === 'LIVE_SUMMARY' && (
-            <div className="p-4 space-y-4 min-h-[480px] overflow-y-auto max-h-[540px]">
-              <button
-                type="button"
-                onClick={() => void handleRequestLateJoinSummary()}
-                disabled={isGeneratingSummary}
-                className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
-              >
-                <Sparkles className="w-4 h-4 shrink-0" />
-                <span>
-                  {isGeneratingSummary
-                    ? 'Đang tổng hợp nội dung buổi học...'
-                    : 'Tóm tắt nhanh nội dung buổi học'}
-                </span>
-              </button>
+          {rightTab === 'LIVE_SUMMARY' && (() => {
+            const hasSavedVideo = Boolean((activeSession?.videoR2Key || '').trim());
+            const outlineText = (activeSession?.aiSummaryMd || '')
+              .replace(/^#+\s*/gm, '')
+              .trim();
 
-              {lateJoinAiSummaryText && (
-                <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs text-slate-800 dark:text-emerald-100 leading-relaxed whitespace-pre-line">
-                  {lateJoinAiSummaryText}
-                </div>
-              )}
+            return (
+              <div className="p-4 space-y-4 min-h-[480px] overflow-y-auto max-h-[540px]">
+                <button
+                  type="button"
+                  onClick={() => void handleRequestLateJoinSummary()}
+                  disabled={isGeneratingSummary}
+                  className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
+                >
+                  <Sparkles className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isGeneratingSummary
+                      ? 'Đang tổng hợp diễn biến phòng học...'
+                      : 'Tóm tắt nhanh diễn biến buổi học'}
+                  </span>
+                </button>
 
-              {activeSession?.aiSummaryMd && !lateJoinAiSummaryText && (
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs">
-                  <div className="font-bold text-slate-800 dark:text-slate-200">
-                    Nội dung trọng tâm buổi học:
+                {lateJoinAiSummaryText && (
+                  <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs text-slate-800 dark:text-emerald-100 leading-relaxed whitespace-pre-line">
+                    {lateJoinAiSummaryText}
                   </div>
-                  <p className="text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
-                    {activeSession.aiSummaryMd.replace(/^#+\s*/gm, '')}
-                  </p>
-                </div>
-              )}
+                )}
 
-              {roomData?.attachments && roomData.attachments.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Tài liệu đính kèm:
-                  </div>
-                  {roomData.attachments.map((att) => (
-                    <a
-                      key={att.id}
-                      href={att.downloadUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 hover:border-emerald-500 flex items-center justify-between gap-2 text-xs transition-colors"
-                    >
-                      <span className="truncate font-semibold text-slate-800 dark:text-slate-200">
-                        {att.title}
-                      </span>
-                      <Download className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    </a>
-                  ))}
-                </div>
-              )}
-
-              {roomData?.transcript && roomData.transcript.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Các phần chính trong bài giảng:
-                  </div>
-                  {roomData.transcript.map((line, idx) => (
-                    <div
-                      key={line.id || idx}
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1 text-xs"
-                    >
-                      <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                        <span>Mốc {line.timeLabel}</span>
-                        <span>Trang {line.slidePage}</span>
-                      </div>
-                      <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                        {line.text}
-                      </p>
+                {outlineText && (
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs">
+                    <div className="font-bold text-slate-800 dark:text-slate-200">
+                      Đề cương &amp; Mục tiêu buổi học:
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
+                      {outlineText}
+                    </p>
+                  </div>
+                )}
+
+                {roomData?.attachments && roomData.attachments.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Tài liệu đính kèm ({roomData.attachments.length}):
+                    </div>
+                    {roomData.attachments.map((att) => (
+                      <a
+                        key={att.id}
+                        href={att.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 hover:border-emerald-500 flex items-center justify-between gap-2 text-xs transition-colors"
+                      >
+                        <span className="truncate font-semibold text-slate-800 dark:text-slate-200">
+                          {att.title}
+                        </span>
+                        <Download className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                    Chưa có tệp tài liệu đính kèm riêng cho buổi học này.
+                  </div>
+                )}
+
+                {hasSavedVideo && roomData?.transcript && roomData.transcript.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Mốc nội dung từ bản ghi bài giảng:
+                    </div>
+                    {roomData.transcript.map((line, idx) => (
+                      <div
+                        key={line.id || idx}
+                        className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1 text-xs"
+                      >
+                        <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          <span>Mốc {line.timeLabel}</span>
+                          <span>Trang {line.slidePage}</span>
+                        </div>
+                        <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                          {line.text}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* TAB 4: THÀNH VIÊN ĐANG TRONG PHÒNG HỌC & ĐIỀU PHỐI HỌC VIÊN */}
           {rightTab === 'PARTICIPANTS' && (

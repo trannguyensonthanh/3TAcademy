@@ -396,9 +396,14 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
 
           <div className="space-y-3">
             {workspaceSessions.map((sess) => {
+              const hasSavedVideo = Boolean((sess.videoR2Key || '').trim());
+              const effectiveStatus =
+                sess.status === 'REPLAY_READY' && !hasSavedVideo
+                  ? 'SCHEDULED'
+                  : sess.status;
               const watchPct = Math.min(
                 100,
-                Math.round((sess.lastPositionSec / sess.durationSeconds) * 100)
+                Math.round((sess.lastPositionSec / Math.max(1, sess.durationSeconds || 600)) * 100)
               );
 
               const cleanSessTitle = (sess.title || '')
@@ -461,7 +466,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                 <article
                   key={sess.id}
                   className={`rounded-xl bg-white dark:bg-[#111A15] border p-5 transition-all ${
-                    sess.status === 'LIVE'
+                    effectiveStatus === 'LIVE'
                       ? 'border-2 border-[#EF4444]'
                       : sess.isCompleted
                       ? 'border-[#10B981]/60'
@@ -475,21 +480,21 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                           Buổi {sess.sessionOrder.toString().padStart(2, '0')}
                         </span>
 
-                        {sess.status === 'REPLAY_READY' && (
+                        {effectiveStatus === 'REPLAY_READY' && (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-semibold">
                             <CheckCircle2 className="w-3.5 h-3.5 text-[#10B981]" />
                             <span>Đã có video bài giảng · Đã xem {watchPct}%</span>
                           </span>
                         )}
 
-                        {sess.status === 'LIVE' && (
+                        {effectiveStatus === 'LIVE' && (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-red-500/15 text-[#EF4444] font-mono font-bold">
                             <span className="w-2 h-2 rounded-full bg-[#EF4444] animate-pulse" />
                             <span>ĐANG HỌC TRỰC TUYẾN NGAY LÚC NÀY</span>
                           </span>
                         )}
 
-                        {sess.status === 'SCHEDULED' && (
+                        {effectiveStatus === 'SCHEDULED' && (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8] font-medium">
                             <Lock className="w-3.5 h-3.5" />
                             <span>Chưa tới giờ mở lớp ({startLabel})</span>
@@ -501,7 +506,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                             ✓ Đã hoàn thành · Bài kiểm tra 10 câu: {sess.quizScore}/100
                           </span>
                         ) : (
-                          sess.status === 'REPLAY_READY' && (
+                          effectiveStatus === 'REPLAY_READY' && (
                             <span className="font-mono font-semibold text-[#F59E0B]">
                               • Đang mở bài kiểm tra 10 câu (Cần đạt &ge; 7.0/10 để hoàn thành)
                             </span>
@@ -531,7 +536,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
 
                     {/* Action Buttons */}
                     <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                      {sess.status === 'LIVE' && (
+                      {effectiveStatus === 'LIVE' && (
                         <button
                           type="button"
                           onClick={() => navigate(`/live/${sess.id}`)}
@@ -542,7 +547,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                         </button>
                       )}
 
-                      {sess.status === 'REPLAY_READY' && (
+                      {effectiveStatus === 'REPLAY_READY' && (
                         <>
                           <button
                             type="button"
@@ -578,7 +583,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                         </>
                       )}
 
-                      {sess.status === 'SCHEDULED' && (
+                      {effectiveStatus === 'SCHEDULED' && (
                         <span className="px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-semibold text-[#475569] dark:text-[#94A3B8]">
                           Mở phòng lúc {startLabel}
                         </span>
@@ -604,24 +609,28 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                 <strong>Phòng Học Video</strong> của từng buổi học để bạn vừa xem vừa hỏi bài tiện lợi nhất!
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                const targetVideoSession =
-                  workspaceSessions.find((s) => s.sessionOrder === 4) ??
-                  workspaceSessions.find((s) => s.status === 'REPLAY_READY') ??
-                  workspaceSessions[0];
-                if (targetVideoSession) {
-                  navigate(
-                    `/app/cohorts/${cohort.id}/sessions/${targetVideoSession.id}`
-                  );
-                }
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold shrink-0 cursor-pointer"
-            >
-              <Video className="w-3.5 h-3.5" />
-              <span>Mở Phòng Học Video Buổi 4 →</span>
-            </button>
+            {workspaceSessions.some(
+              (s) => s.status === 'REPLAY_READY' && Boolean((s.videoR2Key || '').trim())
+            ) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const targetVideoSession =
+                    workspaceSessions.find(
+                      (s) => s.status === 'REPLAY_READY' && Boolean((s.videoR2Key || '').trim())
+                    ) ?? workspaceSessions[0];
+                  if (targetVideoSession) {
+                    navigate(
+                      `/app/cohorts/${cohort.id}/sessions/${targetVideoSession.id}`
+                    );
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold shrink-0 cursor-pointer"
+              >
+                <Video className="w-3.5 h-3.5" />
+                <span>Mở Phòng Học Video Đã Có Bản Ghi →</span>
+              </button>
+            )}
           </div>
 
           <div className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">

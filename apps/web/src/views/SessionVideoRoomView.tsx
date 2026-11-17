@@ -163,7 +163,7 @@ export const SessionVideoRoomView: React.FC<{
     session.assessmentId ||
     `quiz-${session.id}`;
   const videoUrl = sessionDetail.videoUrl || '';
-  const transcriptLines = sessionDetail.transcript ?? [];
+  const rawTranscriptLines = sessionDetail.transcript ?? [];
   const sessionAttachments =
     sessionDetail.attachments && sessionDetail.attachments.length > 0
       ? sessionDetail.attachments
@@ -175,7 +175,7 @@ export const SessionVideoRoomView: React.FC<{
     [session.id]
   );
 
-  const effectiveDiscussions =
+  const rawEffectiveDiscussions =
     sessionDiscussions && sessionDiscussions.length > 0
       ? sessionDiscussions
       : sessionDetail.discussions ?? discussions;
@@ -192,22 +192,101 @@ export const SessionVideoRoomView: React.FC<{
     querySeekSec !== null ? querySeekSec : Math.max(0, session.lastPositionSec || 0);
 
   const [currentSec, setCurrentSec] = useState<number>(initialResumeSec);
+  const [actualVideoDurationSec, setActualVideoDurationSec] = useState<number>(0);
   const [seekRequest, setSeekRequest] = useState<{
     sec: number;
     label?: string;
     nonce: number;
   } | null>(null);
 
+  const effectiveMaxDurationSec =
+    actualVideoDurationSec > 0
+      ? actualVideoDurationSec
+      : Math.max(1, session.durationSeconds || 600);
+
+  const rawMaxPointSec = Math.max(
+    ...rawTranscriptLines.map((l) => l.sec || 0),
+    ...(sessionDetail.chapters ?? []).map((c) => c.sec || 0),
+    1
+  );
+
+  const scaleTimestampToActualDuration = (
+    rawSec: number,
+    index: number,
+    totalItems: number
+  ): number => {
+    const cleanRaw = Math.max(0, Math.floor(rawSec || 0));
+    if (actualVideoDurationSec <= 0 || rawMaxPointSec <= actualVideoDurationSec) {
+      return cleanRaw;
+    }
+    const maxPlayableSec = Math.max(0, actualVideoDurationSec - 1);
+    if (totalItems <= 1 || maxPlayableSec === 0) {
+      return 0;
+    }
+    if (maxPlayableSec >= totalItems - 1) {
+      return Math.min(
+        maxPlayableSec,
+        Math.max(0, Math.round((index / Math.max(1, totalItems - 1)) * maxPlayableSec))
+      );
+    }
+    return Math.min(
+      maxPlayableSec,
+      Math.max(0, Math.round((cleanRaw / rawMaxPointSec) * maxPlayableSec))
+    );
+  };
+
+  const scaleArbitrarySec = (rawSec: number): number => {
+    const cleanRaw = Math.max(0, Math.floor(rawSec || 0));
+    if (actualVideoDurationSec <= 0 || cleanRaw < actualVideoDurationSec) {
+      return cleanRaw;
+    }
+    const maxPlayableSec = Math.max(0, actualVideoDurationSec - 1);
+    if (rawMaxPointSec > 0) {
+      return Math.min(
+        maxPlayableSec,
+        Math.max(0, Math.round((cleanRaw / rawMaxPointSec) * maxPlayableSec))
+      );
+    }
+    return maxPlayableSec;
+  };
+
+  const transcriptLines: TranscriptLine[] = rawTranscriptLines.map((line, idx, arr) => {
+    const scaledSec = scaleTimestampToActualDuration(line.sec, idx, arr.length);
+    return {
+      ...line,
+      sec: scaledSec,
+      timeLabel: formatTimestamp(scaledSec),
+    };
+  });
+
   const videoChapters: VideoChapterItem[] =
     sessionDetail.chapters && sessionDetail.chapters.length > 0
-      ? sessionDetail.chapters.map((ch, idx, arr) => ({
-          id: `chap-api-${idx + 1}`,
-          title: ch.title,
-          startSec: ch.sec,
-          endSec: arr[idx + 1] ? arr[idx + 1].sec - 1 : Math.max(session.durationSeconds || 600, ch.sec + 60),
-          label: `${ch.timeLabel} · ${ch.slideRange}`,
-        }))
+      ? sessionDetail.chapters.map((ch, idx, arr) => {
+          const startSec = scaleTimestampToActualDuration(ch.sec, idx, arr.length);
+          const nextStartSec = arr[idx + 1]
+            ? scaleTimestampToActualDuration(arr[idx + 1].sec, idx + 1, arr.length)
+            : effectiveMaxDurationSec;
+          const timeLabel = formatTimestamp(startSec);
+          return {
+            id: `chap-api-${idx + 1}`,
+            title: ch.title,
+            startSec,
+            endSec: Math.max(startSec, nextStartSec - 1),
+            label: `${timeLabel} · ${ch.slideRange}`,
+          };
+        })
       : [];
+
+  const effectiveDiscussions = rawEffectiveDiscussions.map((th) => {
+    const rawSec = th.videoTimestampSec ?? th.timestampSec ?? 0;
+    const scaledSec = scaleArbitrarySec(rawSec);
+    return {
+      ...th,
+      videoTimestampSec: scaledSec,
+      timestampSec: scaledSec,
+      timestampLabel: formatTimestamp(scaledSec),
+    };
+  });
 
   const [rightTab, setRightTab] = useState<'TRANSCRIPT' | 'AI_TUTOR' | 'CLASS_QA'>('AI_TUTOR');
   const [transcriptSearch, setTranscriptSearch] = useState<string>('');
@@ -237,7 +316,7 @@ export const SessionVideoRoomView: React.FC<{
   };
 
   const handleJumpToSecond = async (sec: number, labelInfo?: string) => {
-    const targetSec = Math.max(0, Math.floor(sec));
+    const targetSec = scaleArbitrarySec(sec);
     setCurrentSec(targetSec);
     setSeekRequest({ sec: targetSec, label: labelInfo, nonce: Date.now() });
     persistProgress(targetSec);
@@ -291,12 +370,15 @@ export const SessionVideoRoomView: React.FC<{
     await refetchDiscussions();
   };
 
+  const subtitleToleranceSec =
+    actualVideoDurationSec > 0 && actualVideoDurationSec <= 15 ? 1 : 4;
+
   const activeSubtitleLine =
     transcriptLines.length > 0
       ? transcriptLines
           .slice()
           .reverse()
-          .find((line) => currentSec >= line.sec - 4) ?? transcriptLines[0]
+          .find((line) => currentSec >= line.sec - subtitleToleranceSec) ?? transcriptLines[0]
       : null;
 
   const filteredTranscript = transcriptLines.filter(
@@ -411,7 +493,14 @@ export const SessionVideoRoomView: React.FC<{
     .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
     .trim() || session.title;
 
-  if (session.status === 'SCHEDULED' && !videoUrl) {
+  const hasSavedVideo = Boolean(videoUrl.trim() || (session.videoR2Key || '').trim());
+  const sampleTimestampLabels =
+    transcriptLines.length > 0
+      ? transcriptLines.slice(0, 3).map((l) => `[${l.timeLabel}]`)
+      : ['[00:00]', `[${formatTimestamp(Math.min(2, Math.max(0, effectiveMaxDurationSec - 2)))}]`, `[${formatTimestamp(Math.max(1, effectiveMaxDurationSec - 1))}]`];
+  const suggestedAiPrompt = `Tóm tắt trọng tâm bài "${cleanSessionTitle}" và giải thích các ý chính giúp mình với ạ?`;
+
+  if ((session.status === 'SCHEDULED' || !hasSavedVideo) && !videoUrl && session.status !== 'LIVE') {
     const formattedStart = (() => {
       if (!session.scheduledStart) return 'Theo lịch khai giảng của đợt học';
       const d = new Date(session.scheduledStart);
@@ -430,13 +519,13 @@ export const SessionVideoRoomView: React.FC<{
       <div className="min-h-screen bg-[#F7FBF9] dark:bg-[#090F0C] text-[#0F172A] dark:text-[#ECFDF5] py-16 px-6">
         <div className="max-w-xl mx-auto rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-8 text-center space-y-5 shadow-xs">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-[#475569] dark:text-[#94A3B8] text-xs font-semibold">
-            Buổi {session.sessionOrder.toString().padStart(2, '0')} · Chưa tới giờ mở lớp
+            Buổi {session.sessionOrder.toString().padStart(2, '0')} · Chưa tới giờ mở lớp / Chưa có video bài giảng
           </div>
           <h1 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
             Buổi {session.sessionOrder}: {cleanSessionTitle}
           </h1>
           <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-            Buổi học này dự kiến diễn ra vào lúc <strong>{formattedStart}</strong>. Video bài giảng và bài kiểm tra 10 câu cuối buổi sẽ được mở ngay sau khi buổi học kết thúc.
+            Buổi học này dự kiến diễn ra vào lúc <strong>{formattedStart}</strong>. Video bài giảng và bài kiểm tra 10 câu cuối buổi sẽ được mở ngay sau khi giảng viên hoàn tất buổi dạy trực tuyến và lưu bản ghi.
           </p>
           <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
             <button
@@ -520,8 +609,16 @@ export const SessionVideoRoomView: React.FC<{
                   }
                 : null
             }
-            onTimeUpdate={(sec) => {
+            onDurationChange={(dur) => {
+              if (dur > 0) {
+                setActualVideoDurationSec(dur);
+              }
+            }}
+            onTimeUpdate={(sec, dur) => {
               setCurrentSec(sec);
+              if (dur > 0 && dur !== actualVideoDurationSec) {
+                setActualVideoDurationSec(dur);
+              }
               if (Math.abs(sec - lastSyncedSecRef.current) >= 10) {
                 persistProgress(sec);
               }
@@ -743,11 +840,12 @@ export const SessionVideoRoomView: React.FC<{
               </div>
 
               <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                {filteredTranscript.map((line) => {
-                  const isActive = Math.abs(currentSec - line.sec) < 8;
+                {filteredTranscript.map((line, idx) => {
+                  const activeWindow = actualVideoDurationSec > 0 && actualVideoDurationSec <= 15 ? 1 : 8;
+                  const isActive = Math.abs(currentSec - line.sec) <= activeWindow;
                   return (
                     <button
-                      key={line.sec}
+                      key={`${line.sec}-${idx}`}
                       type="button"
                       onClick={() => handleJumpToSecond(line.sec, `Slide trang ${line.slidePage}`)}
                       className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer space-y-1.5 ${
@@ -777,14 +875,15 @@ export const SessionVideoRoomView: React.FC<{
             </div>
           )}
 
-          {/* TAB 2: HỎI TRỢ GIẢNG AI — NÚT [00:10], [00:25], [00:45] TUA VIDEO THẬT */}
+          {/* TAB 2: HỎI TRỢ GIẢNG AI — ĐỒNG BỘ MỐC GIÂY VỚI THỜI LƯỢNG VIDEO THỰC TẾ */}
           {rightTab === 'AI_TUTOR' && (
             <div className="p-4 flex flex-col justify-between space-y-4 min-h-[540px]">
               <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
                 <div className="p-3 rounded-xl bg-[#D1FAE5]/50 dark:bg-emerald-950/60 border border-[#10B981]/40 flex items-center gap-2.5 text-xs text-[#065F46] dark:text-emerald-300">
                   <AiTutorCompanionSticker className="w-7 h-7 shrink-0" />
                   <span>
-                    Trợ giảng AI nắm rõ từng giây bài giảng. Bấm vào các nút <strong>[00:10]</strong>, <strong>[00:25]</strong>, <strong>[00:45]</strong> để tua trình phát video bên trái tới đúng giây đó nhé!
+                    Trợ giảng AI nắm rõ từng giây bài giảng ({formatTimestamp(effectiveMaxDurationSec)}). Bấm vào các mốc thời gian{' '}
+                    <strong>{sampleTimestampLabels.join(', ')}</strong> để tua trình phát video bên trái tới đúng giây đó nhé!
                   </span>
                 </div>
 
@@ -813,17 +912,24 @@ export const SessionVideoRoomView: React.FC<{
 
                     {msg.citations && msg.citations.length > 0 && (
                       <div className="flex flex-wrap gap-2 pt-1">
-                        {msg.citations.map((cit, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => handleJumpToSecond(cit.jumpSec, cit.slideLabel)}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#D1FAE5] dark:bg-emerald-950 hover:bg-[#10B981] hover:text-white text-[#065F46] dark:text-emerald-300 font-mono text-[11px] font-bold transition-colors cursor-pointer"
-                          >
-                            <Play className="w-3 h-3 fill-current" />
-                            <span>{cit.label}</span>
-                          </button>
-                        ))}
+                        {msg.citations.map((cit, i) => {
+                          const scaledJumpSec = scaleArbitrarySec(cit.jumpSec);
+                          const displayCitLabel = cit.label.replace(
+                            /\[\d{1,2}:\d{2}(?::\d{2})?\]/,
+                            `[${formatTimestamp(scaledJumpSec)}]`
+                          );
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => handleJumpToSecond(scaledJumpSec, cit.slideLabel)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#D1FAE5] dark:bg-emerald-950 hover:bg-[#10B981] hover:text-white text-[#065F46] dark:text-emerald-300 font-mono text-[11px] font-bold transition-colors cursor-pointer"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              <span>{displayCitLabel}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -833,12 +939,10 @@ export const SessionVideoRoomView: React.FC<{
               <div className="space-y-2 pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
                 <button
                   type="button"
-                  onClick={() =>
-                    setAiInput('Vì sao phải dùng Promise.all để xử lý bất đồng bộ vậy ạ?')
-                  }
+                  onClick={() => setAiInput(suggestedAiPrompt)}
                   className="text-left text-[11px] font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
                 >
-                  + Gợi ý hỏi: Vì sao phải dùng Promise.all để xử lý bất đồng bộ?
+                  + Gợi ý hỏi: {suggestedAiPrompt}
                 </button>
 
                 <form onSubmit={handleSendAiQuestion} className="flex gap-2">
