@@ -12,6 +12,7 @@ import {
   OrderReceipt,
   CourseSkill,
   CourseCategoryItem,
+  Notification,
 } from '../types/domain';
 import {
   evaluateSessionQuizAndUnlock,
@@ -23,7 +24,7 @@ import {
   clearAuthTokens,
   hasStoredAuthSession,
 } from '../services/apiClient';
-import { catalogApi } from '../services/catalog.api';
+import { catalogApi, CatalogSummaryResponse } from '../services/catalog.api';
 import { learningApi } from '../services/learning.api';
 import { orderApi } from '../services/order.api';
 import { teachApi } from '../services/teach.api';
@@ -68,11 +69,13 @@ interface AcademyContextValue {
   currentUser: AuthUserProfile | null;
   setCurrentUser: React.Dispatch<React.SetStateAction<AuthUserProfile | null>>;
   refreshEnrollments: () => Promise<void>;
+  refreshCertificates: () => Promise<void>;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
   setTheme: (theme: 'light' | 'dark') => void;
   isCommandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
+  catalogSummary: CatalogSummaryResponse | null;
   courses: Course[];
   categories: CourseCategoryItem[];
   skills: CourseSkill[];
@@ -84,6 +87,7 @@ interface AcademyContextValue {
     name: string;
     curriculumVersion?: string;
     tuitionVnd: number;
+    maxSeats?: number;
     startDate: string;
     scheduleSlots: CohortScheduleSlot[];
     instructorName: string;
@@ -104,9 +108,16 @@ interface AcademyContextValue {
   enrolledCohortIds: string[];
   enrollInCohort: (cohortCode: string) => OrderReceipt | null;
   submitSessionQuiz: (sessionId: string, answers: number[]) => QuizEvaluationOutput | null;
-  updateWatchSec: (sessionId: string, sec: number) => void;
-  updateVideoProgress: (sessionId: string, sec: number) => Promise<void>;
+  updateWatchSec: (sessionId: string, sec: number, durationSeconds?: number) => void;
+  updateVideoProgress: (
+    sessionId: string,
+    sec: number,
+    durationSeconds?: number
+  ) => Promise<void>;
   upcomingTasks: UpcomingTaskItem[];
+  notifications: Notification[];
+  markNotificationRead: (notificationId: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
   discussions: DiscussionThread[];
   addDiscussionQuestion: (
     cohortId: string,
@@ -134,11 +145,11 @@ interface AcademyContextValue {
   certificates: Record<string, CertificateRecord>;
   toggleCertificateRevoke: (certCode: string) => void;
   issueNewCertificate: (
-    studentName: string,
-    studentEmail: string,
-    cohortCode: string,
-    finalScore: number
-  ) => string;
+    studentNameOrEnrollmentId: string,
+    studentEmail?: string,
+    cohortCode?: string,
+    finalScore?: number
+  ) => Promise<string>;
   receipts: OrderReceipt[];
   studentSidebarTab: StudentSidebarTab;
   setStudentSidebarTab: (tab: StudentSidebarTab) => void;
@@ -210,6 +221,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [theme, setThemeState] = useState<'light' | 'dark'>('light');
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
+  const [catalogSummary, setCatalogSummary] = useState<CatalogSummaryResponse | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
   const [categories, setCategories] = useState<CourseCategoryItem[]>([]);
   const [skills, setSkills] = useState<CourseSkill[]>([]);
@@ -217,6 +229,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [sessions, setSessions] = useState<ClassSession[]>([]);
   const [enrolledCohortIds, setEnrolledCohortIds] = useState<string[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<UpcomingTaskItem[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [discussions, setDiscussions] = useState<DiscussionThread[]>([]);
   const [materials, setMaterials] = useState<CohortMaterial[]>([]);
   const [certificates, setCertificates] = useState<Record<string, CertificateRecord>>({});
@@ -248,7 +261,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activePlayerSessionId, setActivePlayerSessionId] = useState<string | null>(null);
   const [searchQueryGlobal, setSearchQueryGlobal] = useState('');
 
-  // 1a. Hydrate Auth Session immediately (supports Bearer token, refreshToken & HttpOnly cookie)
+  // 1a. Hydrate Auth Session immediately
   useEffect(() => {
     const p = window.location.pathname || '/';
     const isProtected =
@@ -302,31 +315,31 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, []);
 
-  // 1a-2. Hydrate Public Catalog, Categories, Skills, Cohorts & Certificates on startup
+  // 1a-2. Hydrate Public Catalog, Summary, Categories, Skills & Cohorts (NO guest certificate fetch!)
   useEffect(() => {
     let isMounted = true;
     const hydratePublicCatalog = async () => {
       try {
         const [
+          summaryRes,
           coursesRes,
           categoriesRes,
           skillsRes,
           cohortsRes,
-          certsRes,
         ] = await Promise.all([
+          catalogApi.getSummary().catch(() => null),
           catalogApi.getCourses().catch(() => [] as Course[]),
           catalogApi.getCategories().catch(() => [] as CourseCategoryItem[]),
           catalogApi.getSkills().catch(() => [] as CourseSkill[]),
           catalogApi.getCohorts().catch(() => [] as Cohort[]),
-          catalogApi.getCertificates().catch(() => ({} as Record<string, CertificateRecord>)),
         ]);
 
         if (!isMounted) return;
+        if (summaryRes) setCatalogSummary(summaryRes);
         setCourses(coursesRes);
         setCategories(categoriesRes);
         setSkills(skillsRes);
         setCohorts(cohortsRes);
-        setCertificates(certsRes);
       } catch {
         // Keep safe initial state on error
       }
@@ -336,6 +349,41 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isMounted = false;
     };
   }, []);
+
+  const refreshCertificates = useCallback(async () => {
+    if (role === 'GUEST') {
+      setCertificates({});
+      return;
+    }
+    try {
+      const certsRes = await catalogApi.getCertificates();
+      setCertificates(certsRes || {});
+    } catch {
+      // Ignore error
+    }
+  }, [role]);
+
+  // Hydrate authenticated user's certificates whenever role / user changes
+  useEffect(() => {
+    if (role === 'GUEST') {
+      setCertificates({});
+      return;
+    }
+    let isMounted = true;
+    catalogApi
+      .getCertificates()
+      .then((certsRes) => {
+        if (isMounted) {
+          setCertificates(certsRes || {});
+        }
+      })
+      .catch(() => {
+        if (isMounted) setCertificates({});
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [role, currentUser?.id]);
 
   // 1b. Hydrate Instructor Schedule when role is INSTRUCTOR or ADMIN
   useEffect(() => {
@@ -356,6 +404,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (scheduleRes.materials) {
           setMaterials(scheduleRes.materials);
         }
+        if (scheduleRes.notifications) {
+          setNotifications(scheduleRes.notifications);
+        }
       })
       .catch(() => {
         // Ignore error when unauthorized
@@ -367,11 +418,15 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const refreshEnrollments = useCallback(async () => {
     try {
-      const [enrollmentsRes, ordersRes, cohortsRes] = await Promise.all([
-        learningApi.getMyEnrollments().catch(() => null),
-        orderApi.getMyOrderHistory().catch(() => null),
-        catalogApi.getCohorts().catch(() => [] as Cohort[]),
-      ]);
+      const [enrollmentsRes, ordersRes, cohortsRes, dashboardRes, certsRes, meRes] =
+        await Promise.all([
+          learningApi.getMyEnrollments().catch(() => null),
+          orderApi.getMyOrderHistory().catch(() => null),
+          catalogApi.getCohorts().catch(() => [] as Cohort[]),
+          learningApi.getStudentDashboard().catch(() => null),
+          catalogApi.getCertificates().catch(() => null),
+          authApi.getMe().catch(() => null),
+        ]);
       if (enrollmentsRes) {
         const enrolledCohortsList = Array.isArray(enrollmentsRes.cohorts)
           ? enrollmentsRes.cohorts
@@ -407,18 +462,35 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } else if (enrollmentsRes && Array.isArray(enrollmentsRes.receipts)) {
         setReceipts(enrollmentsRes.receipts);
       }
+      if (dashboardRes) {
+        if (Array.isArray(dashboardRes.upcomingTasks)) {
+          setUpcomingTasks(dashboardRes.upcomingTasks);
+        }
+        if (Array.isArray(dashboardRes.sessions)) {
+          setSessions(dashboardRes.sessions);
+        }
+        if (Array.isArray(dashboardRes.notifications)) {
+          setNotifications(dashboardRes.notifications);
+        }
+      }
+      if (certsRes) {
+        setCertificates(certsRes);
+      }
+      if (meRes && typeof meRes.interviewCredits === 'number') {
+        setInterviewCredits(meRes.interviewCredits);
+      }
     } catch {
       // Ignore refresh error
     }
   }, []);
 
-  // 2. When role === 'STUDENT', hydrate student enrollments, orders, dashboard, and current user
+  // 2. When role === 'STUDENT', hydrate student enrollments, orders, dashboard, sessions, notifications, and current user
   useEffect(() => {
     if (role !== 'STUDENT') return;
     let isMounted = true;
     const hydrateStudentAccount = async () => {
       try {
-        const [enrollmentsRes, ordersRes, meRes, dashboardRes, cohortsRes, coursesRes] =
+        const [enrollmentsRes, ordersRes, meRes, dashboardRes, cohortsRes, coursesRes, certsRes] =
           await Promise.all([
             learningApi.getMyEnrollments().catch(() => null),
             orderApi.getMyOrderHistory().catch(() => null),
@@ -426,6 +498,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             learningApi.getStudentDashboard().catch(() => null),
             catalogApi.getCohorts().catch(() => [] as Cohort[]),
             catalogApi.getCourses().catch(() => [] as Course[]),
+            catalogApi.getCertificates().catch(() => null),
           ]);
         if (!isMounted) return;
 
@@ -464,13 +537,22 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setCourses(coursesRes);
         }
 
-        if (Array.isArray(ordersRes) && ordersRes.length > 0) {
+        if (Array.isArray(ordersRes)) {
           setReceipts(ordersRes);
         } else if (enrollmentsRes && Array.isArray(enrollmentsRes.receipts)) {
           setReceipts(enrollmentsRes.receipts);
         }
-        if (dashboardRes?.upcomingTasks) {
-          setUpcomingTasks(dashboardRes.upcomingTasks);
+        if (dashboardRes) {
+          setUpcomingTasks(dashboardRes.upcomingTasks || []);
+          if (Array.isArray(dashboardRes.sessions)) {
+            setSessions(dashboardRes.sessions);
+          }
+          if (Array.isArray(dashboardRes.notifications)) {
+            setNotifications(dashboardRes.notifications);
+          }
+        }
+        if (certsRes) {
+          setCertificates(certsRes);
         }
         if (meRes) {
           const normalizedRole = normalizeAppRole(meRes.role);
@@ -563,7 +645,14 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setEnrolledCohortIds([]);
       setReceipts([]);
       setUpcomingTasks([]);
+      setNotifications([]);
+      setSessions([]);
+      setDiscussions([]);
+      setMaterials([]);
+      setCertificates({});
       setInterviewCredits(0);
+      setLatestCvFileName('');
+      setLatestCvUpdatedAt('');
       void authApi.logout().catch(() => undefined);
       if (
         window.location.pathname.startsWith('/app') ||
@@ -594,6 +683,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const enrollInCohort = useCallback(
     (cohortCode: string): OrderReceipt | null => {
       if (role !== 'STUDENT') {
+        navigate('/login');
         return null;
       }
 
@@ -602,11 +692,15 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       if (!targetCohort) return null;
 
-      void refreshEnrollments();
+      const existingReceipt = receipts.find((r) => r.cohortCode === targetCohort.code) ?? null;
+      if (enrolledCohortIds.includes(targetCohort.id) && existingReceipt) {
+        return existingReceipt;
+      }
 
-      return receipts.find((r) => r.cohortCode === targetCohort.code) ?? null;
+      navigate(`/checkout/${encodeURIComponent(targetCohort.code)}`);
+      return existingReceipt;
     },
-    [cohorts, receipts, refreshEnrollments, role]
+    [cohorts, enrolledCohortIds, navigate, receipts, role]
   );
 
   const createCohort = useCallback(
@@ -617,6 +711,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       name: string;
       curriculumVersion?: string;
       tuitionVnd: number;
+      maxSeats?: number;
       startDate: string;
       scheduleSlots: CohortScheduleSlot[];
       instructorName: string;
@@ -624,15 +719,17 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       void (async () => {
         const resolvedInstructorId =
           newCohort.instructorId ||
-          cohorts.find((c) => c.staff[0]?.fullName === newCohort.instructorName)?.instructorId ||
-          '1';
+          cohorts.find((c) => c.staff?.[0]?.fullName === newCohort.instructorName)?.instructorId ||
+          catalogSummary?.instructors?.find((inst) => inst.fullName === newCohort.instructorName)?.id ||
+          '2';
         const res = await adminApi.manageCohorts({
           courseId: newCohort.courseId,
           instructorId: resolvedInstructorId,
-          curriculumVersion: newCohort.curriculumVersion || 'v2.5',
+          curriculumVersion: newCohort.curriculumVersion || 'v2026.2',
           code: newCohort.code,
           name: newCohort.name,
           tuitionVnd: newCohort.tuitionVnd,
+          maxSeats: newCohort.maxSeats ?? 35,
           startDate: newCohort.startDate,
           scheduleSlots: newCohort.scheduleSlots,
           instructorName: newCohort.instructorName,
@@ -648,12 +745,12 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       })();
     },
-    [cohorts]
+    [catalogSummary?.instructors, cohorts]
   );
 
   const updateCohortSchedule = useCallback(
     (cohortId: string, scheduleSlots: CohortScheduleSlot[]) => {
-      const target = cohorts.find((c) => c.id === cohortId) ?? cohorts[0];
+      const target = cohorts.find((c) => c.id === cohortId);
       if (!target) return;
       void (async () => {
         const res = await adminApi.manageCohorts({
@@ -664,6 +761,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           code: target.code,
           name: target.name,
           tuitionVnd: target.tuitionVnd,
+          maxSeats: target.maxSeats,
           startDate: target.startDate,
           scheduleSlots,
         });
@@ -736,7 +834,7 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const submitSessionQuiz = useCallback(
     (sessionId: string, answers: number[]): QuizEvaluationOutput | null => {
-      const target = sessions.find((s) => s.id === sessionId) ?? sessions[0];
+      const target = sessions.find((s) => s.id === sessionId);
       const hasClientAnswerKey =
         Boolean(target?.quizQuestions?.length) &&
         typeof target?.quizQuestions?.[0]?.correctIndex === 'number';
@@ -749,13 +847,18 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       void (async () => {
         const apiEval = await learningApi.submitSessionQuiz(sessionId, answers);
         if (apiEval?.updatedSession) {
-          setSessions((prev) =>
-            prev.map((s) => (s.id === sessionId ? apiEval.updatedSession : s))
-          );
+          setSessions((prev) => {
+            const exists = prev.some((s) => s.id === sessionId);
+            if (!exists) return [...prev, apiEval.updatedSession];
+            return prev.map((s) => (s.id === sessionId ? apiEval.updatedSession : s));
+          });
         }
         const dashboardRes = await learningApi.getStudentDashboard();
         if (dashboardRes.upcomingTasks) {
           setUpcomingTasks(dashboardRes.upcomingTasks);
+        }
+        if (Array.isArray(dashboardRes.sessions)) {
+          setSessions(dashboardRes.sessions);
         }
       })();
 
@@ -764,25 +867,57 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [sessions]
   );
 
-  const updateVideoProgress = useCallback(async (sessionId: string, sec: number) => {
-    const res = await learningApi.updateVideoProgress(sessionId, sec);
-    if (res.updatedSession) {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? res.updatedSession! : s))
+  const updateVideoProgress = useCallback(
+    async (sessionId: string, sec: number, durationSeconds?: number) => {
+      const res = await learningApi.updateVideoProgress(
+        sessionId,
+        sec,
+        undefined,
+        durationSeconds
       );
-    } else {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? updateSessionWatchPosition(s, sec) : s))
-      );
-    }
-  }, []);
+      if (res.updatedSession) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? res.updatedSession! : s))
+        );
+      } else {
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...updateSessionWatchPosition(s, sec),
+                  maxWatchedSec: Math.max(s.maxWatchedSec ?? 0, sec),
+                  ...(typeof durationSeconds === 'number' && durationSeconds > 0
+                    ? { durationSeconds: Math.round(durationSeconds) }
+                    : {}),
+                }
+              : s
+          )
+        );
+      }
+    },
+    []
+  );
 
   const updateWatchSec = useCallback(
-    (sessionId: string, sec: number) => {
-      void updateVideoProgress(sessionId, sec);
+    (sessionId: string, sec: number, durationSeconds?: number) => {
+      void updateVideoProgress(sessionId, sec, durationSeconds);
     },
     [updateVideoProgress]
   );
+
+  const markNotificationRead = useCallback(async (notificationId: string) => {
+    const nowIso = new Date().toISOString();
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notificationId ? { ...n, isRead: true, readAt: nowIso } : n))
+    );
+    await learningApi.markNotificationRead(notificationId).catch(() => undefined);
+  }, []);
+
+  const markAllNotificationsRead = useCallback(async () => {
+    const nowIso = new Date().toISOString();
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true, readAt: nowIso })));
+    await learningApi.markAllNotificationsRead().catch(() => undefined);
+  }, []);
 
   const createDiscussionQuestion = useCallback(
     async (
@@ -792,10 +927,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       title: string,
       body: string
     ) => {
-      const targetSession =
-        sessions.find(
-          (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
-        ) ?? sessions[0];
+      const targetSession = sessions.find(
+        (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
+      );
       if (!targetSession) return;
 
       const parts = (timestampLabel || '00:00').split(':').map(Number);
@@ -855,10 +989,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       fileType: 'VIDEO' | 'PDF' | 'SLIDE' | 'REPO' | 'NOTEBOOK',
       materialUrl?: string
     ) => {
-      const targetSession =
-        sessions.find(
-          (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
-        ) ?? sessions[0];
+      const targetSession = sessions.find(
+        (s) => s.cohortId === cohortId && s.sessionOrder === sessionOrder
+      );
       if (!targetSession) return;
 
       void (async () => {
@@ -890,36 +1023,46 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const issueNewCertificate = useCallback(
-    (
-      _studentName: string,
-      studentEmail: string,
-      _cohortCode: string,
-      _finalScore: number
-    ): string => {
-      let issuedCode = '';
-      void (async () => {
-        if (role === 'ADMIN') {
-          const batchRes = await adminApi.issueCertificatesBatch([studentEmail]);
-          if (batchRes.certificateCodes?.[0]) {
-            issuedCode = batchRes.certificateCodes[0];
-          }
-          if (batchRes.issuedCertificates) {
-            setCertificates((prev) => ({
-              ...prev,
-              ...batchRes.issuedCertificates,
-            }));
-            return;
-          }
-        }
-        const certsRes = await catalogApi.getCertificates();
-        if (Object.keys(certsRes).length > 0) {
-          setCertificates(certsRes);
-        }
-      })();
+    async (
+      studentNameOrEnrollmentId: string,
+      studentEmail?: string,
+      cohortCode?: string
+    ): Promise<string> => {
+      if (role !== 'ADMIN') {
+        await refreshCertificates();
+        return '';
+      }
 
-      return issuedCode;
+      let enrollmentId = /^\d+$/.test(studentNameOrEnrollmentId.trim())
+        ? studentNameOrEnrollmentId.trim()
+        : '';
+
+      if (!enrollmentId && studentEmail) {
+        const overview = await adminApi.getAdminOverview();
+        const matched = overview.enrollments.find(
+          (e) =>
+            e.studentEmail.toLowerCase() === studentEmail.toLowerCase() &&
+            (!cohortCode || e.cohortCode.toLowerCase() === cohortCode.toLowerCase())
+        );
+        if (matched) {
+          enrollmentId = matched.id;
+        }
+      }
+
+      if (!enrollmentId) return '';
+
+      const batchRes = await adminApi.issueCertificatesBatch([enrollmentId]);
+      if (batchRes.issuedCertificates) {
+        setCertificates((prev) => ({
+          ...prev,
+          ...batchRes.issuedCertificates,
+        }));
+      } else {
+        await refreshCertificates();
+      }
+      return batchRes.certificateCodes?.[0] || '';
     },
-    [role]
+    [refreshCertificates, role]
   );
 
   return (
@@ -934,11 +1077,13 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentUser,
         setCurrentUser,
         refreshEnrollments,
+        refreshCertificates,
         theme,
         toggleTheme,
         setTheme,
         isCommandPaletteOpen,
         setCommandPaletteOpen,
+        catalogSummary,
         courses,
         categories,
         skills,
@@ -955,6 +1100,9 @@ export const AcademyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateWatchSec,
         updateVideoProgress,
         upcomingTasks,
+        notifications,
+        markNotificationRead,
+        markAllNotificationsRead,
         discussions,
         addDiscussionQuestion,
         createDiscussionQuestion,

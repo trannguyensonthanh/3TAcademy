@@ -1,0 +1,7 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:30.870
+TS. Lê Minh Khoa: Chào các bạn đến với buổi ba về thuật toán tìm kiếm lai Hybrid Search và hợp nhất thứ hạng Reciprocal Rank Fusion. Tìm kiếm vector rất mạnh khi hiểu ý nghĩa tự nhiên nhưng thường nhầm lẫn khi người dùng gõ mã lỗi hoặc mã đơn hàng cụ thể. Vì điểm cosine và điểm từ khóa có thang đo khác nhau, công thức RRF dùng hằng số làm mượt k bằng sáu mươi để cộng nghịch đảo thứ hạng cực kỳ ổn định.
+
+00:00:30.870 --> 00:00:58.400
+TS. Lê Minh Khoa: Sau khi RRF lấy ra hai mươi ứng viên tiềm năng nhất, chúng ta đưa qua tầng thứ hai là mô hình Cross Encoder Reranker. Cross Encoder chấm điểm trực tiếp sự tương tác giữa từng từ trong câu hỏi và văn bản để chọn ra bốn đoạn chuẩn xác nhất, đồng thời loại bỏ ngay các truy vấn lạc đề mà không cần tốn chi phí gọi mô hình sinh ngôn ngữ.

@@ -85,7 +85,7 @@ export const TECH_AI_AVATAR_PRESETS: TechAvatarPreset[] = [
 ];
 
 export interface CareerGoalTrackOption {
-  id: 'AI_ENGINEER' | 'BACKEND_CLOUD' | 'DATA_ANALYTICS';
+  id: 'AI_ENGINEER' | 'BACKEND_CLOUD' | 'DATA_PIPELINE' | 'PYTHON_SQL';
   title: string;
   description: string;
   defaultGoalText: string;
@@ -97,28 +97,37 @@ export const CAREER_GOAL_TRACKS: CareerGoalTrackOption[] = [
   {
     id: 'AI_ENGINEER',
     title: 'AI Engineer',
-    description: 'Chuyên sâu RAG, LLM Agents, Vector Search & Fine-tuning.',
+    description: 'Chuyên sâu Hybrid RAG, LLM Agents, pgvector HNSW & LLMOps.',
     defaultGoalText:
-      'AI Engineer — Chuyên sâu RAG, LLM Agents, Vector Search & Fine-tuning triển khai thực tế tại doanh nghiệp.',
-    recommendedCourseId: 'ky-su-ai-thuc-chien-rag-agents-llmops',
+      'AI Engineer — Chuyên sâu Hybrid RAG, LLM Agents, Vector Search & LLMOps triển khai thực tế tại doanh nghiệp.',
+    recommendedCourseId: 'ai-engineering-rag-agents-llmops',
     recommendedCohortId: 'AI-ENG-2026-K01',
   },
   {
     id: 'BACKEND_CLOUD',
     title: 'Backend & Distributed Systems',
-    description: 'Thiết kế API chịu tải cao, PostgreSQL, Microservices & Docker.',
+    description: 'Thiết kế API chịu tải cao, PostgreSQL ACID, Outbox & Distributed Systems.',
     defaultGoalText:
-      'Backend Engineer — Thiết kế API hiệu năng cao với TypeScript/FastAPI, PostgreSQL, Microservices & Docker.',
-    recommendedCourseId: 'kien-truc-backend-chuyen-sau-typescript-postgresql',
+      'Backend Engineer — Thiết kế API hiệu năng cao với TypeScript, PostgreSQL ACID, Redis & Distributed Systems.',
+    recommendedCourseId: 'backend-architecture-distributed-systems',
     recommendedCohortId: 'SWE-ARCH-2026-K01',
   },
   {
-    id: 'DATA_ANALYTICS',
-    title: 'Data Engineering & Python/SQL',
-    description: 'Xử lý dữ liệu lớn, Python/SQL phân tích và Data Pipeline thực chiến.',
+    id: 'DATA_PIPELINE',
+    title: 'Data Engineering & Lakehouse',
+    description: 'Streaming Pipeline với Kafka, DuckDB, Parquet & Data Quality.',
     defaultGoalText:
-      'Data & AI Foundation — Làm chủ lập trình Python 3.11, tối ưu truy vấn SQL phân tích và xây dựng Data Pipeline.',
-    recommendedCourseId: 'lap-trinh-python-sql-thuc-chien-data-ai',
+      'Data Engineer — Xây dựng đường ống dữ liệu thời gian thực (Streaming Pipeline) và kiến trúc Lakehouse.',
+    recommendedCourseId: 'data-engineering-streaming-lakehouse',
+    recommendedCohortId: 'DATA-PIPE-2026-K01',
+  },
+  {
+    id: 'PYTHON_SQL',
+    title: 'Python & SQL Thực Chiến',
+    description: 'Nền tảng lập trình Python 3.12, Window Functions & tối ưu SQL cho Data/AI.',
+    defaultGoalText:
+      'Data & AI Foundation — Làm chủ lập trình Python 3.12, tối ưu truy vấn PostgreSQL và chuẩn hóa dữ liệu.',
+    recommendedCourseId: 'python-sql-for-data-and-ai',
     recommendedCohortId: 'PY-SQL-2026-K01',
   },
 ];
@@ -150,7 +159,7 @@ export const OnboardingWizardView: React.FC = () => {
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [phone, setPhone] = useState<string>(currentUser?.phone || '');
   const [selectedTrackId, setSelectedTrackId] = useState<
-    'AI_ENGINEER' | 'BACKEND_CLOUD' | 'DATA_ANALYTICS'
+    'AI_ENGINEER' | 'BACKEND_CLOUD' | 'DATA_PIPELINE' | 'PYTHON_SQL'
   >('AI_ENGINEER');
   const [careerGoal, setCareerGoal] = useState<string>(
     currentUser?.careerGoal || CAREER_GOAL_TRACKS[0].defaultGoalText
@@ -547,7 +556,7 @@ export const OnboardingWizardView: React.FC = () => {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {CAREER_GOAL_TRACKS.map((track) => {
                 const active = selectedTrackId === track.id;
                 const TrackIcon =
@@ -655,7 +664,7 @@ export const OnboardingWizardView: React.FC = () => {
             <div className="flex items-center gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
               <ShieldCheck className="w-4 h-4 text-[#10B981] shrink-0" />
               <span>
-                Tặng sẵn <strong className="text-[#059669] dark:text-[#34D399]">02 lượt Phỏng vấn thử cùng AI</strong> ngay khi hoàn tất hồ sơ.
+                Tặng <strong className="text-[#059669] dark:text-[#34D399]">04 lượt Phỏng vấn thử 1-1 cùng AI</strong> ngay khi ghi danh khóa học bất kỳ.
               </span>
             </div>
 
@@ -774,7 +783,7 @@ export const OnboardingWizardView: React.FC = () => {
               <div className="p-3 rounded-lg bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24]">
                 <div className="text-[#475569] dark:text-[#94A3B8]">Giảng viên phụ trách chính</div>
                 <div className="font-semibold text-[#0F172A] dark:text-[#ECFDF5] mt-0.5">
-                  {recommendedCohort.staff[0]?.fullName ?? 'TS. Trần Minh Khoa'}
+                  {recommendedCohort.staff[0]?.fullName ?? 'TS. Lê Minh Khoa'}
                 </div>
               </div>
             </div>
@@ -792,11 +801,10 @@ export const OnboardingWizardView: React.FC = () => {
               type="button"
               onClick={() => {
                 enrollInCohort(recommendedCohort.code);
-                navigate('/app');
               }}
               className="px-6 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold cursor-pointer shadow-xs"
             >
-              Ghi Danh Đợt {recommendedCohort.code} &amp; Vào Góc Học Tập →
+              Ghi Danh Đợt {recommendedCohort.code} ({formatVnd(recommendedCohort.tuitionVnd)}) →
             </button>
           </div>
         </div>

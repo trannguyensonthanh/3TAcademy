@@ -30,7 +30,43 @@ export interface AcademyFaqItem {
   answer: string;
 }
 
+export interface CatalogInstructorItem {
+  id: string;
+  fullName: string;
+  headline: string;
+  organization: string;
+  yearsOfExperience: number;
+  expertiseSummaryMd?: string;
+  bio?: string;
+  avatarUrl: string;
+  socialLinks: Record<string, string>;
+}
+
+export interface CatalogSummaryResponse {
+  stats?: {
+    publishedCoursesCount: number;
+    openingOrActiveCohortsCount: number;
+    enrolledStudentsCount: number;
+    instructorsCount: number;
+    averageRating: number;
+    reviewsCount: number;
+    sessionsPerCourse?: number;
+  };
+  publishedCoursesCount?: number;
+  activeCohortsCount?: number;
+  sessionsPerCourse?: number;
+  totalEnrolledStudents?: number;
+  reviewCount?: number;
+  ratingAvg?: number;
+  instructors: CatalogInstructorItem[];
+}
+
 export const catalogApi = {
+  getSummary: () =>
+    httpRequest<CatalogSummaryResponse>('/catalog/summary', {
+      method: 'GET',
+    }),
+
   getCategories: () =>
     httpRequest<CourseCategoryItem[]>('/categories', {
       method: 'GET',

@@ -95,15 +95,31 @@ function formatUserResponse(
   account: { id: number; email: string; role: 'STUDENT' | 'INSTRUCTOR' | 'ADMIN' },
   profile?: {
     fullName: string;
+    phone?: string | null;
+    githubUrl?: string | null;
+    linkedinUrl?: string | null;
     avatarUrl: string | null;
     bio: string | null;
     careerGoal: string | null;
     interviewCredits: number;
+    preferences?: unknown;
     cvParsedData: unknown;
   }
 ) {
   const cvData = (profile?.cvParsedData ?? {}) as Record<string, unknown>;
-  const phone = typeof cvData.phone === 'string' && cvData.phone.trim() ? cvData.phone : undefined;
+  const phone =
+    (profile?.phone && profile.phone.trim()) ||
+    (typeof cvData.phone === 'string' && cvData.phone.trim() ? cvData.phone : undefined);
+  const githubUrl =
+    (profile?.githubUrl && profile.githubUrl.trim()) ||
+    (typeof cvData.githubUrl === 'string' && cvData.githubUrl.trim()
+      ? cvData.githubUrl
+      : undefined);
+  const linkedinUrl =
+    (profile?.linkedinUrl && profile.linkedinUrl.trim()) ||
+    (typeof cvData.linkedinUrl === 'string' && cvData.linkedinUrl.trim()
+      ? cvData.linkedinUrl
+      : undefined);
   return {
     id: String(account.id),
     email: account.email,
@@ -111,13 +127,16 @@ function formatUserResponse(
     role: account.role,
     avatarUrl: profile?.avatarUrl || undefined,
     phone,
+    githubUrl,
+    linkedinUrl,
+    preferences: profile?.preferences ?? {},
     bio:
       profile?.bio ||
       (typeof cvData.headline === 'string' ? cvData.headline : undefined),
     careerGoal:
       profile?.careerGoal ||
       (typeof cvData.careerObjective === 'string' ? cvData.careerObjective : undefined),
-    interviewCredits: profile?.interviewCredits ?? (account.role === 'STUDENT' ? 2 : 0),
+    interviewCredits: profile?.interviewCredits ?? 0,
   };
 }
 
@@ -248,6 +267,13 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
         })
         .returning();
 
+      await tx.insert(accountIdentities).values({
+        accountId: newAccount!.id,
+        provider: 'LOCAL',
+        providerUid: `local-${normalizedEmail}`,
+        providerEmail: normalizedEmail,
+      });
+
       const initialCvData = {
         fullName,
         email: normalizedEmail,
@@ -269,10 +295,11 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
         .values({
           accountId: newAccount!.id,
           fullName,
+          phone: phone || null,
           avatarUrl: defaultAvatar,
           bio: resolvedBio || null,
           careerGoal: resolvedGoal || null,
-          interviewCredits: 2,
+          interviewCredits: 0,
           cvParsedData: initialCvData,
         })
         .returning();
@@ -293,56 +320,95 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
   }
 });
 
+async function verifyGoogleIdTokenPayload(idToken: string): Promise<{
+  email: string;
+  name: string;
+  sub: string;
+  picture: string;
+} | null> {
+  const trimmed = (idToken || '').trim();
+  if (!trimmed) return null;
+
+  // Explicit dev-only Google sandbox token (never accepts forged unsigned 3-part JWTs!)
+  if (env.NODE_ENV !== 'production' && trimmed.startsWith('dev-google-oauth:')) {
+    const devEmail = trimmed.slice('dev-google-oauth:'.length).trim().toLowerCase();
+    if (devEmail && devEmail.includes('@')) {
+      return {
+        email: devEmail,
+        name: devEmail.split('@')[0] || 'Học viên Google',
+        sub: `dev_google_${devEmail}`,
+        picture: '',
+      };
+    }
+    return null;
+  }
+
+  // Real cryptographic verification via Google's official tokeninfo endpoint
+  try {
+    const res = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(trimmed)}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) return null;
+
+    const info = (await res.json()) as {
+      iss?: string;
+      aud?: string;
+      sub?: string;
+      email?: string;
+      email_verified?: string | boolean;
+      name?: string;
+      picture?: string;
+      exp?: string;
+    };
+
+    const validIss =
+      info.iss === 'https://accounts.google.com' || info.iss === 'accounts.google.com';
+    const isVerified = info.email_verified === true || info.email_verified === 'true';
+    const configuredClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
+    const validAud = !configuredClientId || info.aud === configuredClientId;
+    const notExpired = !info.exp || Number(info.exp) * 1000 > Date.now();
+
+    if (!validIss || !isVerified || !validAud || !notExpired || !info.email || !info.sub) {
+      return null;
+    }
+
+    return {
+      email: info.email.trim().toLowerCase(),
+      name: (info.name || info.email.split('@')[0] || 'Học viên').trim(),
+      sub: info.sub,
+      picture: info.picture || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 // 1.3 POST /auth/google
 authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) => {
   try {
     const { idToken } = req.body;
+    const verifiedGoogle = await verifyGoogleIdTokenPayload(idToken);
 
-    let targetEmail = '';
-    let targetName = '';
-    let targetUid = '';
-    let targetPicture = '';
-
-    const parts = idToken.split('.');
-    if (parts.length === 3 && parts[1]) {
-      try {
-        const decodedJson = Buffer.from(parts[1], 'base64url').toString('utf8');
-        const payload = JSON.parse(decodedJson) as {
-          email?: string;
-          name?: string;
-          sub?: string;
-          picture?: string;
-        };
-        if (payload.email) targetEmail = payload.email.trim().toLowerCase();
-        if (payload.name) targetName = payload.name.trim();
-        if (payload.sub) targetUid = payload.sub;
-        if (payload.picture) targetPicture = payload.picture;
-      } catch {
-        // Handled below if targetEmail is empty
-      }
-    }
-
-    if (!targetEmail) {
-      res.status(400).json({
+    if (!verifiedGoogle) {
+      res.status(401).json({
         success: false,
-        status: 400,
+        status: 401,
         code: 'INVALID_GOOGLE_TOKEN',
-        message: 'Google ID Token không hợp lệ hoặc không chứa thông tin email',
+        message: 'Google ID Token không hợp lệ, đã hết hạn hoặc không xác thực được chữ ký Google',
         error: {
           code: 'INVALID_GOOGLE_TOKEN',
-          message: 'Google ID Token không hợp lệ hoặc không chứa thông tin email',
+          message: 'Google ID Token không hợp lệ, đã hết hạn hoặc không xác thực được chữ ký Google',
         },
         requestId: req.correlationId,
       });
       return;
     }
 
-    if (!targetName) {
-      targetName = targetEmail.split('@')[0] || 'Học viên';
-    }
-    if (!targetUid) {
-      targetUid = `google_${targetEmail}`;
-    }
+    const targetEmail = verifiedGoogle.email;
+    const targetName = verifiedGoogle.name;
+    const targetUid = verifiedGoogle.sub;
+    const targetPicture = verifiedGoogle.picture;
 
     let [account] = await db
       .select()
@@ -382,7 +448,7 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
           avatarUrl,
           bio: null,
           careerGoal: null,
-          interviewCredits: 2,
+          interviewCredits: 0,
           cvParsedData: {
             fullName: targetName,
             email: targetEmail,

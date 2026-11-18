@@ -1,0 +1,10 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:34.800
+TS. Lê Minh Khoa: Chào mừng các bạn đến với buổi một khóa Kỹ sư AI Thực chiến tại Ba Tê Academy. Trong hệ thống doanh nghiệp, mô hình ngôn ngữ lớn rất dễ sinh ảo giác nếu tự suy diễn ngoài dữ liệu. Kiến trúc Production RAG giải quyết triệt để vấn đề này bằng cách truy xuất đúng đoạn tài liệu chuẩn xác từ cơ sở dữ liệu vector, sau đó ép mô hình chỉ được tổng hợp câu trả lời kèm trích dẫn mốc thời gian và trang tài liệu gốc.
+
+00:00:34.800 --> 00:01:01.930
+TS. Lê Minh Khoa: Điểm cốt lõi thứ hai trong thiết kế hệ thống thực tế là bảo mật phân quyền ngay tại tầng truy vấn SQL. Trước khi quét chỉ mục vector, chúng ta bắt buộc lọc cứng điều kiện khóa học và phạm vi hiển thị ngay trong PostgreSQL. Nhờ vậy, mô hình ngôn ngữ hoàn toàn không thể nhìn thấy bất kỳ tài liệu nào nằm ngoài quyền hạn của học viên.
+
+00:01:01.930 --> 00:01:29.330
+TS. Lê Minh Khoa: Cuối cùng, để vận hành ổn định trên môi trường thực tế, chúng ta không đánh giá cảm tính mà đo lường định lượng bằng bộ chỉ số Faithfulness và Context Recall. Mọi câu trả lời dưới ngưỡng tin cậy đều phải từ chối lịch sự thay vì đoán mò. Các bạn hãy hoàn thành bài kiểm tra cuối buổi đạt từ bảy mươi phần trăm trở lên để mở khóa kiến thức tiếp theo nhé.

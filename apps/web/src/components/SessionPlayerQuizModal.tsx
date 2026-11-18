@@ -20,15 +20,17 @@ export const SessionPlayerQuizModal: React.FC = () => {
     activePlayerSessionId,
     setActivePlayerSessionId,
     sessions,
-    submitSessionQuiz,
+    refreshEnrollments,
     updateWatchSec,
   } = useAcademy();
 
   const session = sessions.find((s) => s.id === activePlayerSessionId);
   const [activeMode, setActiveMode] = useState<'VIDEO_AI' | 'COMPETENCY_QUIZ'>('VIDEO_AI');
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentSec, setCurrentSec] = useState<number>(2535);
-  const [selectedAnswers, setSelectedAnswers] = useState<number[]>([1, 1, 1]);
+  const [currentSec, setCurrentSec] = useState<number>(0);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [isSubmittingQuiz, setIsSubmittingQuiz] = useState<boolean>(false);
   const [lateCatchupSummary, setLateCatchupSummary] = useState<string | null>(null);
   const [quizFeedback, setQuizFeedback] = useState<{
     passed: boolean;
@@ -41,11 +43,12 @@ export const SessionPlayerQuizModal: React.FC = () => {
 
   useEffect(() => {
     if (session) {
-      setCurrentSec(session.lastPositionSec || 1420);
+      setCurrentSec(session.lastPositionSec || 0);
       setQuizFeedback(null);
+      setQuizError(null);
       setTutorReply(null);
       setLateCatchupSummary(null);
-      setSelectedAnswers(session.quizQuestions.map((q) => q.correctIndex));
+      setSelectedAnswers({});
     }
   }, [session?.id]);
 
@@ -57,23 +60,41 @@ export const SessionPlayerQuizModal: React.FC = () => {
   };
 
   const handleSelectQuizOption = (qIdx: number, optIdx: number) => {
-    setSelectedAnswers((prev) => {
-      const next = [...prev];
-      next[qIdx] = optIdx;
-      return next;
-    });
+    setQuizError(null);
+    setSelectedAnswers((prev) => ({
+      ...prev,
+      [qIdx]: optIdx,
+    }));
   };
 
   const handleQuizSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await submitSessionQuiz(session.id, selectedAnswers);
-    if (res) {
+    const totalQ = session.quizQuestions.length;
+    if (totalQ === 0) return;
+    const orderedAnswers: number[] = [];
+    for (let i = 0; i < totalQ; i++) {
+      if (selectedAnswers[i] === undefined) {
+        setQuizError(`Vui lòng chọn đáp án cho Câu ${i + 1} trước khi nộp bài.`);
+        return;
+      }
+      orderedAnswers.push(selectedAnswers[i]!);
+    }
+
+    setIsSubmittingQuiz(true);
+    setQuizError(null);
+    try {
+      const res = await studentLearningApi.submitSessionQuiz(session.id, orderedAnswers);
       setQuizFeedback({
         passed: res.passed,
         scorePercent: res.scorePercent,
         correctCount: res.correctCount,
         totalQuestions: res.totalQuestions,
       });
+      await refreshEnrollments();
+    } catch (err) {
+      setQuizError(err instanceof Error ? err.message : 'Không thể nộp bài kiểm tra lúc này.');
+    } finally {
+      setIsSubmittingQuiz(false);
     }
   };
 
@@ -89,7 +110,9 @@ export const SessionPlayerQuizModal: React.FC = () => {
     );
     const firstCitation = res.citations?.[0];
     setTutorReply(
-      `[Chỉ dẫn tại phút ${firstCitation?.label || '14:20'} · ${firstCitation?.slideLabel || 'Slide 12'}]: ${res.answerMd}`
+      firstCitation
+        ? `[Chỉ dẫn tại mốc ${firstCitation.label}${firstCitation.slideLabel ? ` · ${firstCitation.slideLabel}` : ''}]: ${res.answerMd}`
+        : res.answerMd
     );
   };
 
@@ -319,8 +342,14 @@ export const SessionPlayerQuizModal: React.FC = () => {
         ) : (
           <form onSubmit={handleQuizSubmit} className="space-y-5">
             <div className="p-4 rounded-xl bg-[#D1FAE5]/50 dark:bg-emerald-950/60 border border-[#10B981]/40 text-xs text-[#065F46] dark:text-emerald-300">
-              <strong>Bài Tập Ngắn Củng Cố Kiến Thức:</strong> Bạn chỉ cần trả lời đúng từ 2/3 câu trở lên là hoàn thành buổi học hôm nay nhé. Câu nào chưa rõ đều có giải thích chi tiết ngay bên dưới!
+              <strong>Bài Tập Ngắn Củng Cố Kiến Thức:</strong> Bạn cần đạt tối thiểu <strong>70%</strong> số câu đúng để hoàn thành buổi học hôm nay nhé!
             </div>
+
+            {quizError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/40 text-xs font-semibold text-rose-600 dark:text-rose-300">
+                {quizError}
+              </div>
+            )}
 
             {quizFeedback && (
               <div
@@ -333,7 +362,7 @@ export const SessionPlayerQuizModal: React.FC = () => {
                 <span>
                   {quizFeedback.passed
                     ? `Tuyệt vời! Bạn đạt ${quizFeedback.scorePercent}/100 (${quizFeedback.correctCount}/${quizFeedback.totalQuestions} câu đúng) — Buổi học đã được đánh dấu Hoàn thành nhé!`
-                    : `Bạn đạt ${quizFeedback.scorePercent}/100 — Mình cùng xem lại gợi ý ở phút 18:45 và phút 42:15 rồi thử lại nhé!`}
+                    : `Bạn đạt ${quizFeedback.scorePercent}/100 (${quizFeedback.correctCount}/${quizFeedback.totalQuestions} câu đúng, cần tối thiểu 70%) — Hãy ôn lại nội dung bài giảng rồi thử lại nhé!`}
                 </span>
                 {quizFeedback.passed && (
                   <button
@@ -361,7 +390,7 @@ export const SessionPlayerQuizModal: React.FC = () => {
                       const chosen = selectedAnswers[qIdx] === optIdx;
                       return (
                         <button
-                          key={opt}
+                          key={`${q.id}-${optIdx}`}
                           type="button"
                           onClick={() => handleSelectQuizOption(qIdx, optIdx)}
                           className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-center justify-between gap-2 ${
@@ -383,9 +412,10 @@ export const SessionPlayerQuizModal: React.FC = () => {
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
               <button
                 type="submit"
-                className="px-6 py-2.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+                disabled={isSubmittingQuiz || session.quizQuestions.length === 0}
+                className="px-6 py-2.5 rounded-lg bg-[#10B981] hover:bg-[#059669] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
               >
-                Nộp Bài Tập &amp; Hoàn Thành Buổi Học
+                {isSubmittingQuiz ? 'Đang chấm điểm...' : 'Nộp Bài Tập & Hoàn Thành Buổi Học'}
               </button>
             </div>
           </form>

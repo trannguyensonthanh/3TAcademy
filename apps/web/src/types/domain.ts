@@ -107,6 +107,7 @@ export interface Cohort {
   tuitionVnd: number;
   enrolledCount: number;
   maxSeats?: number;
+  seatsRemaining?: number;
   enrollmentOpenAt: string;
   startDate: string;
   endDate: string;
@@ -118,14 +119,14 @@ export interface Cohort {
 
 export type SessionStatus = 'LIVE' | 'SCHEDULED' | 'REPLAY_READY';
 export type QuizStatus = 'PASSED' | 'PENDING' | 'NOT_STARTED';
-export type VideoProviderType = 'R2_HLS_AES128' | 'BUNNY_STREAM';
+export type VideoProviderType = 'R2_HLS_AES128' | 'BUNNY_STREAM' | 'R2_MP4';
 
 export interface SessionQuizQuestion {
   id: string;
   question: string;
   options: string[];
-  correctIndex: number;
-  explanation: string;
+  correctIndex?: number;
+  explanation?: string;
 }
 
 export interface AiTimestampCitation {
@@ -233,6 +234,9 @@ export interface CertificateRecord {
   cohortCode: string;
   issuedAt: string;
   verificationSignature: string;
+  isSignatureValid?: boolean;
+  instructorName?: string;
+  instructorTitle?: string;
   finalScore: number;
   proctoringIntegrity: string;
   isRevoked: boolean;
@@ -362,6 +366,9 @@ export interface UserProfileRecord {
   role: UserRole;
   avatarUrl?: string;
   phone?: string;
+  githubUrl?: string;
+  linkedinUrl?: string;
+  preferences?: Record<string, unknown>;
   bio?: string;
   careerGoal?: string;
   cvParsedData: CvParsedData;
@@ -399,6 +406,10 @@ export interface PaymentTransactionRecord {
   id: string;
   orderId: string | null;
   orderCode: string | null;
+  cohortCode?: string | null;
+  courseTitle?: string | null;
+  studentName?: string | null;
+  bankName?: string;
   gateway: 'SEPAY_VIETQR';
   amountVnd: number;
   transferContent: string;
@@ -449,12 +460,23 @@ export interface InterviewTranscriptTurn {
   createdAt?: string;
 }
 
+export interface InterviewTurnReview {
+  turnNumber: number;
+  stageTag: string;
+  question: string;
+  candidateAnswer: string;
+  score: number;
+  feedback: string;
+}
+
 export interface InterviewEvaluationReport {
   overallScore: number;
   projectDepthScore: number;
   communicationScore: number;
   strengths: string[];
   improvements: string[];
+  recommendedFocus?: string[];
+  turnReviews?: InterviewTurnReview[];
 }
 
 export interface MockInterviewRecord {

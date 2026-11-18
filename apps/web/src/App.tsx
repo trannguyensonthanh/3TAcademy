@@ -22,6 +22,7 @@ import { AssessmentRoomView } from './views/AssessmentRoomView';
 import { AssessmentResultView } from './views/AssessmentResultView';
 import { ProctoredExamRoomView } from './views/ProctoredExamRoomView';
 import { LivestreamClassView } from './views/LivestreamClassView';
+import { CertificateVerifyView } from './views/CertificateVerifyView';
 import { AppRole, UserRole } from './types/domain';
 
 interface RoleAccessGuardProps {
@@ -152,8 +153,9 @@ const AppRouter: React.FC = () => {
   }
 
   // 4. Livestream Classroom & 1-Click Guest Speaker (/live/:sessionId & /live/guest)
-  if (cleanPath === '/live/guest') {
-    return <LivestreamClassView sessionId="sess-k01-05" isGuestEntry={true} />;
+  if (cleanPath === '/live/guest' || cleanPath.startsWith('/live/guest/')) {
+    const guestSessionId = cleanPath.replace(/^\/live\/guest\/?/, '');
+    return <LivestreamClassView sessionId={guestSessionId} isGuestEntry={true} />;
   }
   if (cleanPath.startsWith('/live/')) {
     if (isAuthLoading) return <AuthRestoringScreen />;
@@ -165,7 +167,7 @@ const AppRouter: React.FC = () => {
         />
       );
     }
-    const liveSessionId = cleanPath.replace('/live/', '') || 'sess-k01-05';
+    const liveSessionId = decodeURIComponent(cleanPath.replace('/live/', ''));
     return <LivestreamClassView sessionId={liveSessionId} />;
   }
 
@@ -236,21 +238,23 @@ const AppRouter: React.FC = () => {
       cleanPath.startsWith('/app/assessments/') &&
       (cleanPath.endsWith('/results') || cleanPath.endsWith('/result'))
     ) {
-      const assessmentId = cleanPath
-        .replace('/app/assessments/', '')
-        .replace(/\/results?$/, '');
-      return <AssessmentResultView assessmentId={assessmentId || 'sess-k01-04'} />;
+      const assessmentId = decodeURIComponent(
+        cleanPath.replace('/app/assessments/', '').replace(/\/results?$/, '')
+      );
+      return <AssessmentResultView assessmentId={assessmentId} />;
     }
 
     // Assessment Room (/app/assessments/:assessmentId)
     if (cleanPath.startsWith('/app/assessments/')) {
-      const assessmentId = cleanPath.replace('/app/assessments/', '') || 'sess-k01-04';
+      const assessmentId = decodeURIComponent(cleanPath.replace('/app/assessments/', ''));
       return <AssessmentRoomView assessmentId={assessmentId} />;
     }
 
-    // Proctored Final Exam Room (/app/exams/:assessmentId)
+    // Proctored Final Exam Room (/app/exams/:assessmentId or /app/exams/:assessmentId/proctored)
     if (cleanPath.startsWith('/app/exams/')) {
-      const examId = cleanPath.replace('/app/exams/', '') || 'exam-final-k01';
+      const examId = decodeURIComponent(
+        cleanPath.replace('/app/exams/', '').replace(/\/proctored$/, '')
+      );
       return <ProctoredExamRoomView assessmentId={examId} />;
     }
 
@@ -285,8 +289,12 @@ const AppRouter: React.FC = () => {
     return <VietQrCheckoutView cohortCode={cohortCode} />;
   }
   if (cleanPath.startsWith('/verify') || cleanPath.startsWith('/certificates/verify')) {
-    // Tích hợp trực tiếp vào trang Góc học tập cá nhân
-    return <StudentDashboardView />;
+    const certCode = decodeURIComponent(
+      cleanPath
+        .replace(/^\/certificates\/verify\/?/, '')
+        .replace(/^\/verify\/?/, '')
+    );
+    return <CertificateVerifyView initialCode={certCode} />;
   }
   if (cleanPath === '/login') {
     return <AuthView initialMode="LOGIN" />;
@@ -298,13 +306,57 @@ const AppRouter: React.FC = () => {
   return <HomeView />;
 };
 
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { errorMessage: string | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { errorMessage: null };
+  }
+
+  static getDerivedStateFromError(err: unknown) {
+    return {
+      errorMessage: err instanceof Error ? err.message : 'Đã xảy ra lỗi hiển thị không mong muốn.',
+    };
+  }
+
+  render() {
+    if (this.state.errorMessage) {
+      return (
+        <div className="max-w-xl mx-auto px-6 py-20 text-center space-y-4">
+          <h2 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+            Đã xảy ra sự cố khi hiển thị màn hình này
+          </h2>
+          <p className="text-xs font-mono text-rose-600 dark:text-rose-400 break-words">
+            {this.state.errorMessage}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              this.setState({ errorMessage: null });
+              window.location.reload();
+            }}
+            className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
+          >
+            Tải lại trang
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
     <AcademyProvider>
       <div className="min-h-screen flex flex-col bg-[#F7FBF9] text-[#0F172A] dark:bg-[#090F0C] dark:text-[#ECFDF5]">
         <TopNavbar />
         <main className="flex-1">
-          <AppRouter />
+          <AppErrorBoundary>
+            <AppRouter />
+          </AppErrorBoundary>
         </main>
         <SessionPlayerQuizModal />
         <CommandPaletteModal />

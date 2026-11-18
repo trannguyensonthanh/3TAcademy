@@ -1,0 +1,7 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:27.670
+ThS. Nguyễn Thu Hà: Chào mừng các bạn đến với khóa Lập trình Python và SQL Thực chiến. Khi xử lý các tập dữ liệu lớn hàng trăm nghìn dòng, việc nạp toàn bộ file vào bộ nhớ và chạy vòng lặp thủ công sẽ rất chậm. Áp dụng Generator đọc theo lô kết hợp các phép toán vector hóa giúp tốc độ xử lý tăng gấp hàng chục lần mà vẫn giữ dung lượng bộ nhớ ổn định.
+
+00:00:27.670 --> 00:00:53.070
+ThS. Nguyễn Thu Hà: Ở phần SQL thực chiến, hàm cửa sổ Window Functions là vũ khí sắc bén nhất của người làm dữ liệu và AI. Thay vì phải nối bảng tự thân nhiều lần gây tốn kém, các hàm ROW NUMBER và LAG cho phép xếp hạng và so sánh chênh lệch điểm số giữa hai lần thi liên tiếp cực kỳ gọn gàng và nhanh chóng.

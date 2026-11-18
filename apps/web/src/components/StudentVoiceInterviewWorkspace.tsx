@@ -21,11 +21,9 @@ import { useAcademy } from '../context/AcademyContext';
 import {
   AvatarWithFallback,
   AVATAR_MINH_KHOA,
-  AVATAR_HOANG_NAM,
   AVATAR_THU_HA,
 } from './BotanicalStickers';
 import { profileAndInterviewApi } from '../services/profile-interview.api';
-import { API_CONFIG } from '../services/apiClient';
 import { CvScreeningResult, InterviewEvaluationReport } from '../types/domain';
 
 type TargetLevel = 'INTERN' | 'FRESHER' | 'JUNIOR' | 'SENIOR';
@@ -86,7 +84,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
     companyName: 'VNG Digital Business',
     roleTitle: 'AI Engineer (RAG & Enterprise Agents)',
     jdFileName: 'JD_VNG_AI_Engineer_2026.pdf',
-    interviewerName: 'Anh Trần Minh Khoa',
+    interviewerName: 'TS. Lê Minh Khoa',
     interviewerTitle: 'Principal AI Architect · Hội đồng Tuyển dụng Kỹ thuật',
     interviewerAvatar: AVATAR_MINH_KHOA,
     jdDefaultText:
@@ -100,9 +98,9 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 1/3 · Hỏi xoáy vào Đồ án trong CV của bạn',
         questionText:
-          'Chào An, anh đã đọc kỹ tờ CV trong Hồ sơ của em. Trong đồ án Trợ lý AI tra cứu hơn 500 tài liệu nội bộ, làm sao em giữ nguyên được các bảng biểu tài chính nhiều cột trong file PDF mà không bị vỡ dòng khi cắt nhỏ văn bản?',
+          'Chào bạn, tôi đã đọc kỹ bản CV trong Hồ sơ năng lực của bạn. Trong đồ án Trợ lý AI tra cứu tài liệu nội bộ, làm sao bạn giữ nguyên được các bảng biểu nhiều cột trong file PDF mà không bị vỡ dòng khi cắt nhỏ văn bản?',
         sampleSpokenAnswer:
-          'Dạ thưa anh, thay vì cắt văn bản thuần túy theo số ký tự cố định, em dùng bộ đọc tài liệu nhận diện cấu trúc bảng trước rồi chuyển nguyên bảng đó sang định dạng Markdown kèm theo tiêu đề mục cha. Nhờ vậy khi mô hình ngôn ngữ đọc vào, các con số trong hàng và cột vẫn giữ nguyên ngữ cảnh chính xác ạ.',
+          'Dạ thay vì cắt văn bản thuần túy theo số ký tự cố định, em dùng bộ đọc tài liệu nhận diện cấu trúc bảng trước rồi chuyển nguyên bảng đó sang định dạng Markdown kèm theo tiêu đề mục cha. Nhờ vậy khi mô hình ngôn ngữ đọc vào, các con số trong hàng và cột vẫn giữ nguyên ngữ cảnh chính xác ạ.',
         evaluationNote:
           'Trả lời đúng trọng tâm kỹ thuật xử lý tài liệu thực tế, giải thích rõ lý do giữ tiêu đề mục cha.',
         betterAnswerTip:
@@ -111,7 +109,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 2/3 · Kiểm tra kỹ năng PostgreSQL & FastAPI trong CV',
         questionText:
-          'Trong CV em có ghi kinh nghiệm tối ưu API FastAPI và PostgreSQL giảm thời gian phản hồi xuống 0.4 giây. Khi kết hợp tìm kiếm vector và lọc quyền truy cập theo phòng ban, em đặt bước kiểm tra quyền ở đâu để không bị lộ tài liệu nhạy cảm?',
+          'Trong CV bạn có ghi kinh nghiệm tối ưu API FastAPI và PostgreSQL. Khi kết hợp tìm kiếm vector và lọc quyền truy cập theo phòng ban, bạn đặt bước kiểm tra quyền ở đâu để không bị lộ tài liệu nhạy cảm?',
         sampleSpokenAnswer:
           'Dạ em gắn nhãn phòng ban trực tiếp vào từng đoạn tài liệu ngay lúc lưu vào PostgreSQL. Khi nhân viên gửi câu hỏi, câu truy vấn SQL sẽ lọc điều kiện phòng ban ngay tại tầng cơ sở dữ liệu trước khi lấy ra các đoạn văn bản gần nghĩa nhất, tuyệt đối không để mô hình ngôn ngữ nhìn thấy tài liệu ngoài thẩm quyền ạ.',
         evaluationNote:
@@ -122,7 +120,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 3/3 · Tình huống thực tế theo JD VNG Digital Business',
         questionText:
-          'Câu cuối cùng nhé: Nếu tài liệu nội bộ của công ty không có thông tin cho câu hỏi của người dùng, làm thế nào em kiểm soát để Trợ lý AI từ chối trả lời lịch sự thay vì tự suy diễn thông tin sai lệch?',
+          'Câu cuối cùng nhé: Nếu tài liệu nội bộ của công ty không có thông tin cho câu hỏi của người dùng, làm thế nào bạn kiểm soát để Trợ lý AI từ chối trả lời lịch sự thay vì tự suy diễn thông tin sai lệch?',
         sampleSpokenAnswer:
           'Dạ em thiết lập ngưỡng điểm tương đồng tối thiểu ở bước tìm kiếm. Nếu tất cả các đoạn tìm được đều dưới ngưỡng tin cậy, hệ thống trả về thông báo rõ ràng là chưa có quy định trong kho tài liệu hiện hành; đồng thời em buộc câu trả lời luôn phải đính kèm số trang trích dẫn gốc để người dùng đối chiếu ngay ạ.',
         evaluationNote:
@@ -136,9 +134,9 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
     companyName: 'FPT Smart Cloud',
     roleTitle: 'Backend & AI Platform Developer',
     jdFileName: 'JD_FPT_SmartCloud_Backend_AI.pdf',
-    interviewerName: 'Anh Đặng Hoàng Nam',
+    interviewerName: 'TS. Lê Minh Khoa',
     interviewerTitle: 'Senior Backend & Cloud Lead · Hội đồng Phỏng vấn',
-    interviewerAvatar: AVATAR_HOANG_NAM,
+    interviewerAvatar: AVATAR_MINH_KHOA,
     jdDefaultText:
       'Tuyển dụng Kỹ sư Backend Python & AI Platform: Xây dựng RESTful API bất đồng bộ với FastAPI, quản lý hàng đợi Redis Queue, tối ưu cơ sở dữ liệu PostgreSQL, đóng gói Docker và giám sát độ trễ dịch vụ AI.',
     interviewFocusTags: [
@@ -148,9 +146,9 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
     ],
     questionsByTurn: [
       {
-        stageTag: 'Câu 1/3 · Hỏi sâu dự án Đồng bộ Kho vận trong CV',
+        stageTag: 'Câu 1/3 · Hỏi sâu dự án Backend & Queue trong CV',
         questionText:
-          'Chào An, trong CV em có dự án dùng Redis Queue xử lý 50.000 bản ghi mỗi ngày. Nếu một tiến trình Worker đang xử lý dở mà gặp lỗi mạng tạm thời, em thiết kế cơ chế thử lại như thế nào để không bị nhân đôi dữ liệu?',
+          'Chào bạn, khi thiết kế hệ thống dùng hàng đợi xử lý bất đồng bộ, nếu một tiến trình Worker đang xử lý dở mà gặp lỗi mạng tạm thời, bạn thiết kế cơ chế thử lại như thế nào để không bị nhân đôi dữ liệu?',
         sampleSpokenAnswer:
           'Dạ em gắn mã định danh duy nhất cho mỗi bản ghi đồng bộ và kiểm tra trạng thái trước khi ghi vào PostgreSQL. Khi gặp lỗi mạng tạm thời, Worker sẽ thử lại với khoảng thời gian chờ tăng dần và nếu quá 3 lần thất bại thì đẩy vào hàng đợi lỗi riêng để kiểm tra ạ.',
         evaluationNote: 'Hiểu rõ nguyên tắc chống trùng lặp dữ liệu (idempotency) và cơ chế retry.',
@@ -159,7 +157,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 2/3 · Kiểm tra kỹ năng tối ưu API & SQL',
         questionText:
-          'Khi ghép nối dịch vụ AI vào hệ thống Backend hiện có, thời gian chờ mô hình sinh câu trả lời thường mất vài giây. Em thiết kế API như thế nào để giao diện người dùng không bị đơ?',
+          'Khi ghép nối dịch vụ AI vào hệ thống Backend hiện có, thời gian chờ mô hình sinh câu trả lời thường mất vài giây. Bạn thiết kế API như thế nào để giao diện người dùng không bị đơ?',
         sampleSpokenAnswer:
           'Dạ em sử dụng cơ chế truyền luồng trực tiếp (Server-Sent Events) trên FastAPI để trả từng cụm từ ngay khi mô hình vừa sinh ra, giúp người dùng đọc được kết quả đầu tiên chỉ sau khoảng 0.4 giây mà không phải đợi toàn bộ văn bản hoàn tất ạ.',
         evaluationNote: 'Giải quyết tốt bài toán trải nghiệm người dùng và giảm thời gian chờ cảm nhận.',
@@ -168,7 +166,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 3/3 · Tình huống vận hành thực tế theo JD',
         questionText:
-          'Làm sao em phát hiện sớm việc chất lượng câu trả lời của hệ thống giảm sút sau khi công ty cập nhật hàng loạt quy định mới?',
+          'Làm sao bạn phát hiện sớm việc chất lượng câu trả lời của hệ thống giảm sút sau khi công ty cập nhật hàng loạt quy định mới?',
         sampleSpokenAnswer:
           'Dạ em xây dựng bộ 50 câu hỏi kiểm thử chuẩn kèm đáp án mẫu và chạy đánh giá tự động mỗi khi cập nhật kho tài liệu mới, kết hợp nút phản hồi nhanh của người dùng để phát hiện ngay các câu trả lời thiếu chính xác ạ.',
         evaluationNote: 'Tư duy kiểm thử tự động rất bài bản.',
@@ -181,7 +179,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
     companyName: 'Shopee Vietnam',
     roleTitle: 'Search & Data Engineer (Python / SQL)',
     jdFileName: 'JD_Shopee_Search_Data_2026.pdf',
-    interviewerName: 'Chị Lê Thu Hà',
+    interviewerName: 'ThS. Nguyễn Thu Hà',
     interviewerTitle: 'Engineering Manager · Search & Recommendation',
     interviewerAvatar: AVATAR_THU_HA,
     jdDefaultText:
@@ -195,7 +193,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 1/3 · Hỏi về hệ thống tìm kiếm trong CV',
         questionText:
-          'Chào An, vì sao trong đồ án ở CV em lại kết hợp cả tìm kiếm từ khóa lẫn tìm kiếm theo ý nghĩa câu hỏi thay vì chỉ dùng một cách?',
+          'Chào bạn, vì sao trong hệ thống tra cứu thực tế người ta thường kết hợp cả tìm kiếm từ khóa lẫn tìm kiếm theo ý nghĩa câu hỏi thay vì chỉ dùng một cách?',
         sampleSpokenAnswer:
           'Dạ vì tìm kiếm theo ý nghĩa rất giỏi hiểu các câu hỏi diễn đạt tự nhiên nhưng lại dễ nhầm khi người dùng gõ chính xác mã sản phẩm hoặc mã văn bản. Khi kết hợp cả hai và xếp hạng lại, hệ thống vừa bắt trúng mã chính xác vừa hiểu đúng ngữ cảnh câu hỏi dài ạ.',
         evaluationNote: 'Giải thích rõ ràng ưu nhược điểm của từng phương pháp tìm kiếm.',
@@ -204,7 +202,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 2/3 · Kiểm tra kỹ năng PostgreSQL thực tế',
         questionText:
-          'Khi một câu truy vấn báo cáo trên bảng hàng triệu dòng bỗng nhiên chạy chậm, bước đầu tiên em làm để tìm nguyên nhân là gì?',
+          'Khi một câu truy vấn báo cáo trên bảng hàng triệu dòng bỗng nhiên chạy chậm, bước đầu tiên bạn làm để tìm nguyên nhân là gì?',
         sampleSpokenAnswer:
           'Dạ bước đầu tiên em kiểm tra kế hoạch thực thi thực tế của câu truy vấn (EXPLAIN ANALYZE) để xem cơ sở dữ liệu đang phải quét toàn bộ bảng ở bước nào, từ đó đánh lại chỉ mục phù hợp cho đúng cột lọc và cột sắp xếp ạ.',
         evaluationNote: 'Thói quen chẩn đoán có căn cứ rõ ràng, đúng tác phong kỹ sư thực chiến.',
@@ -213,7 +211,7 @@ const COMPANY_JD_PRESETS: CompanyJdPreset[] = [
       {
         stageTag: 'Câu 3/3 · Tình huống chịu tải cao theo JD Shopee',
         questionText:
-          'Trong ngày hội siêu mua sắm, lượng truy vấn tìm kiếm tăng gấp 10 lần bình thường. Em sẽ ưu tiên tối ưu ở tầng nào trước để hệ thống không bị quá tải?',
+          'Trong ngày hội siêu mua sắm, lượng truy vấn tìm kiếm tăng gấp 10 lần bình thường. Bạn sẽ ưu tiên tối ưu ở tầng nào trước để hệ thống không bị quá tải?',
         sampleSpokenAnswer:
           'Dạ em sẽ lưu sẵn kết quả của nhóm từ khóa phổ biến nhất vào bộ nhớ đệm Redis và giới hạn số lượng đoạn văn bản đưa vào bước chấm điểm sâu, nhờ đó giảm tải trực tiếp cho cơ sở dữ liệu chính trong khung giờ cao điểm ạ.',
         evaluationNote: 'Giải pháp thực tế, cân bằng tốt giữa tốc độ và độ chính xác.',
@@ -237,7 +235,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
     currentUser,
   } = useAcademy();
 
-  const studentFullName = currentUser?.fullName || 'Nguyễn Văn An';
+  const studentFullName = currentUser?.fullName || 'Ứng viên';
   const studentShortName =
     studentFullName.trim().split(/\s+/).slice(-1)[0] || studentFullName;
 
@@ -258,6 +256,8 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
   // Vòng 2: Phòng phỏng vấn giọng nói trực tiếp
   const [activeInterviewId, setActiveInterviewId] = useState<string>('');
   const [currentTurnIdx, setCurrentTurnIdx] = useState<number>(0);
+  const [activeQuestionText, setActiveQuestionText] = useState<string>('');
+  const [micNotice, setMicNotice] = useState<string | null>(null);
   const [isAiSpeaking, setIsAiSpeaking] = useState<boolean>(false);
   const [isStudentRecording, setIsStudentRecording] = useState<boolean>(false);
   const [liveSpokenDraft, setLiveSpokenDraft] = useState<string>('');
@@ -345,6 +345,8 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
     setCurrentTurnIdx(0);
     setCallSeconds(0);
     setLiveSpokenDraft('');
+    setMicNotice(null);
+    setActiveQuestionText(openingQuestionText);
     setCreditDeductedForCurrentSession(false);
     setTranscriptHistory([
       {
@@ -369,6 +371,8 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
     setIsAiSpeaking(false);
     setIsStudentRecording(false);
     setLiveSpokenDraft('');
+    setMicNotice(null);
+    setActiveQuestionText('');
     setTranscriptHistory([]);
     setCurrentTurnIdx(0);
     setCallSeconds(0);
@@ -407,14 +411,13 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
     const currentQ =
       activeCompany.questionsByTurn[currentTurnIdx] ??
       activeCompany.questionsByTurn[activeCompany.questionsByTurn.length - 1];
+    setMicNotice(null);
     setLiveSpokenDraft(currentQ.sampleSpokenAnswer);
   };
 
-  // Thu âm giọng nói trả lời của học viên ở Vòng 2 (Web Speech API STT + Fallback cho môi trường không có Mic)
+  // Thu âm giọng nói trả lời của học viên ở Vòng 2 (Web Speech API STT + nhập văn bản khi trình duyệt không có STT)
   const handleToggleStudentMic = async () => {
-    const currentQ =
-      activeCompany.questionsByTurn[currentTurnIdx] ??
-      activeCompany.questionsByTurn[activeCompany.questionsByTurn.length - 1];
+    setMicNotice(null);
 
     if (!isStudentRecording) {
       setIsAiSpeaking(false);
@@ -454,35 +457,21 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
             }
           };
           recognition.onerror = () => {
-            // Giữ chế độ nhập / mẫu nếu trình duyệt chặn mic
+            setMicNotice(
+              'Không nhận diện được Micro trên trình duyệt. Bạn có thể gõ trực tiếp câu trả lời vào ô bên dưới rồi bấm Gửi.'
+            );
           };
           recognition.start();
           speechRecRef.current = recognition;
           return;
         } catch {
-          // Fallback bên dưới nếu không khởi tạo được SpeechRecognition
+          // Chuyển sang thông báo nhập tay bên dưới
         }
       }
 
-      // Nếu chưa có nội dung nháp và trình duyệt không có SpeechRecognition vật lý, hiển thị gợi ý từng từ
-      if (!liveSpokenDraft.trim()) {
-        const words = currentQ.sampleSpokenAnswer.split(' ');
-        let idx = 0;
-        if (recordingTimerRef.current) {
-          window.clearInterval(recordingTimerRef.current);
-        }
-        recordingTimerRef.current = window.setInterval(() => {
-          idx += 3;
-          if (idx >= words.length) {
-            setLiveSpokenDraft(currentQ.sampleSpokenAnswer);
-            if (recordingTimerRef.current) {
-              window.clearInterval(recordingTimerRef.current);
-            }
-          } else {
-            setLiveSpokenDraft(words.slice(0, idx).join(' ') + ' ...');
-          }
-        }, 170);
-      }
+      setMicNotice(
+        'Trình duyệt hiện tại không hỗ trợ nhận diện giọng nói trực tiếp (Web Speech API). Vui lòng nhập câu trả lời của bạn vào ô bên dưới (hoặc bấm nút Điền câu trả lời mẫu để kiểm thử) rồi bấm GỬI CÂU TRẢ LỜI.'
+      );
     } else {
       if (recordingTimerRef.current) {
         window.clearInterval(recordingTimerRef.current);
@@ -494,9 +483,16 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
           // Ignore stop errors
         }
       }
-      setIsStudentRecording(false);
       const cleanedDraft = liveSpokenDraft.replace(/\s*\.\.\.$/, '').trim();
-      const finalSpokenText = cleanedDraft || currentQ.sampleSpokenAnswer;
+      if (!cleanedDraft) {
+        setIsStudentRecording(false);
+        setMicNotice(
+          'Bạn chưa nói hoặc nhập nội dung câu trả lời. Vui lòng trả lời câu hỏi vào ô bên dưới trước khi gửi.'
+        );
+        return;
+      }
+      setIsStudentRecording(false);
+      const finalSpokenText = cleanedDraft;
 
       const turnRes = await profileAndInterviewApi.sendVoiceTurn(
         activeInterviewId,
@@ -510,11 +506,12 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
       if (!isFinished && (turnRes?.nextQuestionText || nextQuestionObj)) {
         const nextText = turnRes?.nextQuestionText || nextQuestionObj.questionText;
         const nextStage = turnRes?.nextStageTag || nextQuestionObj.stageTag;
+        setActiveQuestionText(nextText);
         setTranscriptHistory((prev) => [
           ...prev,
           {
             speaker: 'STUDENT',
-            speakerLabel: `${studentFullName} (Trả lời bằng giọng nói)`,
+            speakerLabel: `${studentFullName} (Ứng viên trả lời)`,
             text: finalSpokenText,
           },
           {
@@ -530,12 +527,13 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
       } else {
         const closingText =
           turnRes?.nextQuestionText ||
-          `Cảm ơn ${studentShortName} rất nhiều! Em đã trả lời trọn vẹn cả 3 câu hỏi về đồ án trong CV cũng như tình huống thực tế theo JD. Bây giờ em hãy bấm nút "Hoàn tất phỏng vấn & Xem Kết quả đánh giá" để nhận bảng chấm điểm chi tiết nhé!`;
+          `Cảm ơn ${studentShortName} rất nhiều! Bạn đã hoàn thành các câu hỏi phỏng vấn về đồ án trong CV cũng như tình huống thực tế theo JD. Bây giờ hãy bấm nút "Hoàn tất phỏng vấn & Xem Kết quả đánh giá" để nhận bảng chấm điểm chi tiết nhé!`;
+        setActiveQuestionText(closingText);
         setTranscriptHistory((prev) => [
           ...prev,
           {
             speaker: 'STUDENT',
-            speakerLabel: `${studentFullName} (Trả lời bằng giọng nói)`,
+            speakerLabel: `${studentFullName} (Ứng viên trả lời)`,
             text: finalSpokenText,
           },
           {
@@ -589,7 +587,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* TRƯỜNG HỢP 0 CREDIT: KHÓA TRANG & NHẮC HOÀN THÀNH KHÓA HỌC */}
+      {/* TRƯỜNG HỢP 0 CREDIT: KHÓA TRANG & HƯỚNG DẪN ĐĂNG KÝ LỚP HỌC ĐỂ NHẬN +4 CREDITS */}
       {interviewCredits === 0 && stage !== 'STAGE_3_REPORT' ? (
         <section className="rounded-2xl bg-white dark:bg-[#111A15] border-2 border-amber-500/60 p-8 sm:p-12 text-center space-y-5 max-w-3xl mx-auto">
           <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-[#F59E0B] flex items-center justify-center mx-auto">
@@ -600,19 +598,26 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
               Bạn hiện có 0 Credit luyện phỏng vấn
             </h2>
             <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] max-w-xl mx-auto leading-relaxed">
-              Chỉ những học viên đã hoàn thành khóa học và có Credit (&gt; 0) mới mở được phòng luyện phỏng vấn 2 vòng. Hãy hoàn thành các buổi học và kỳ thi cuối khóa để nhận ngay 4 Credits miễn phí nhé!
+              Tài khoản mới đăng ký mặc định có <strong>0 Credit</strong> để bảo vệ tài nguyên hệ thống. Ngay khi bạn hoàn tất ghi danh vào một lớp học chính thức của Học viện, hệ thống tự động cấp <strong>+4 Credits</strong> luyện phỏng vấn 2 vòng thực chiến.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => navigate('/courses')}
+              className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold cursor-pointer"
+            >
+              Xem các khóa học &amp; Ghi danh nhận +4 Credits →
+            </button>
             <button
               type="button"
               onClick={() => {
                 setStudentSidebarTab('TODAY');
                 navigate('/app');
               }}
-              className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold cursor-pointer"
+              className="px-4 py-2.5 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] text-xs sm:text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
             >
-              Quay lại học tiếp khóa học đang theo học →
+              Về Tổng quan học tập
             </button>
           </div>
         </section>
@@ -1018,7 +1023,7 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
                           const currentQ =
                             activeCompany.questionsByTurn[currentTurnIdx] ??
                             activeCompany.questionsByTurn[0];
-                          triggerAiVoiceSpeech(currentQ.questionText);
+                          triggerAiVoiceSpeech(activeQuestionText || currentQ.questionText);
                         }}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-300 cursor-pointer"
                       >
@@ -1076,6 +1081,11 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
                     </button>
 
                     <div className="w-full space-y-2">
+                      {micNotice && (
+                        <div className="p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-[11px] text-left leading-relaxed">
+                          {micNotice}
+                        </div>
+                      )}
                       <textarea
                         rows={3}
                         value={liveSpokenDraft}
@@ -1190,24 +1200,25 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
                 {[
                   {
                     label: `Điểm phỏng vấn cấp bậc ${activeLevelObj.label}`,
-                    score: `${completedReport?.overallScore ?? 89} / 100`,
+                    score: `${completedReport?.overallScore ?? 0} / 100`,
                     note:
                       completedReport?.strengths?.[0] ??
-                      `Đáp ứng tốt kỳ vọng tuyển dụng của ${activeCompany.companyName} ở vị trí ${activeCompany.roleTitle}.`,
+                      `Kết quả tổng hợp dựa trên câu trả lời thực tế của bạn cho vị trí ${activeCompany.roleTitle}.`,
                   },
                   {
                     label: 'Độ sâu hiểu biết về Đồ án trong CV',
-                    score: `${completedReport?.projectDepthScore ?? 92} / 100`,
+                    score: `${completedReport?.projectDepthScore ?? 0} / 100`,
                     note:
                       completedReport?.strengths?.[1] ??
-                      'Giải thích rất thuyết phục cách bóc tách bảng biểu PDF và lọc phân quyền SQL.',
+                      completedReport?.strengths?.[0] ??
+                      'Đánh giá khả năng bảo vệ kiến trúc kỹ thuật và số liệu trong đồ án cá nhân.',
                   },
                   {
                     label: 'Sự mạch lạc & Phản xạ trả lời giọng nói',
-                    score: `${completedReport?.communicationScore ?? 88} / 100`,
+                    score: `${completedReport?.communicationScore ?? 0} / 100`,
                     note:
                       completedReport?.improvements?.[0] ??
-                      'Trình bày rõ ràng theo cấu trúc nguyên nhân — giải pháp — kết quả thực tế.',
+                      'Đánh giá bố cục lập luận Nguyên nhân — Giải pháp — Kết quả thực tế.',
                   },
                 ].map((metric) => (
                   <div
@@ -1225,37 +1236,70 @@ export const StudentVoiceInterviewWorkspace: React.FC = () => {
                 ))}
               </div>
 
-              {/* Nhận xét chi tiết từng câu trả lời & Lời khuyên cải thiện */}
+              {/* Điểm mạnh & Khuyến nghị cải thiện từ AI */}
+              {(Boolean(completedReport?.strengths?.length) ||
+                Boolean(completedReport?.improvements?.length)) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="p-4 rounded-xl bg-emerald-500/5 border border-[#10B981]/30 space-y-2">
+                    <div className="font-bold text-[#065F46] dark:text-[#34D399]">
+                      Điểm mạnh ghi nhận trong buổi phỏng vấn
+                    </div>
+                    <ul className="list-disc pl-4 space-y-1 text-[#0F172A] dark:text-[#ECFDF5]">
+                      {(completedReport?.strengths || []).map((item, idx) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/30 space-y-2">
+                    <div className="font-bold text-amber-800 dark:text-amber-300">
+                      Điểm cần bổ sung để nâng điểm vòng sau
+                    </div>
+                    <ul className="list-disc pl-4 space-y-1 text-[#0F172A] dark:text-[#ECFDF5]">
+                      {(completedReport?.improvements || []).map((item, idx) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {/* Nhận xét chi tiết từng câu trả lời thực tế của học viên */}
               <div className="space-y-3">
                 <h3 className="text-sm sm:text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  Nhận xét chi tiết từng câu trả lời &amp; Lời khuyên cải thiện
+                  Nhận xét chi tiết từng câu trả lời thực tế của bạn
                 </h3>
-                <div className="space-y-3">
-                  {activeCompany.questionsByTurn.map((turn, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2 text-xs"
-                    >
-                      <div className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        {turn.stageTag}
+                {completedReport?.turnReviews && completedReport.turnReviews.length > 0 ? (
+                  <div className="space-y-3">
+                    {completedReport.turnReviews.map((turn, idx) => (
+                      <div
+                        key={`${turn.turnNumber}-${idx}`}
+                        className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2 text-xs"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                            {turn.stageTag || `Lượt hỏi #${turn.turnNumber}`}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-mono font-bold">
+                            Điểm câu trả lời: {turn.score}/100
+                          </span>
+                        </div>
+                        <div className="font-bold text-sm text-[#0F172A] dark:text-[#ECFDF5]">
+                          Câu hỏi: {turn.question}
+                        </div>
+                        <p className="text-[#475569] dark:text-[#94A3B8] italic">
+                          Câu trả lời của bạn: “{turn.candidateAnswer || 'Chưa ghi nhận câu trả lời'}”
+                        </p>
+                        <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] text-[#0F172A] dark:text-[#ECFDF5] leading-relaxed">
+                          <strong>Nhận xét chuyên môn:</strong> {turn.feedback}
+                        </div>
                       </div>
-                      <div className="font-bold text-sm text-[#0F172A] dark:text-[#ECFDF5]">
-                        Câu hỏi: {turn.questionText}
-                      </div>
-                      <p className="text-[#475569] dark:text-[#94A3B8] italic">
-                        Câu trả lời của bạn: “{turn.sampleSpokenAnswer}”
-                      </p>
-                      <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-[#E2ECE7] dark:border-[#1E2D24]">
-                        <span className="text-[#0F172A] dark:text-[#ECFDF5]">
-                          <strong>Nhận xét:</strong> {turn.evaluationNote}
-                        </span>
-                        <span className="text-[#059669] dark:text-[#34D399] font-semibold">
-                          <strong>Lời khuyên:</strong> {turn.betterAnswerTip}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-xs text-[#475569] dark:text-[#94A3B8] text-center">
+                    Phiên phỏng vấn đã kết thúc trước khi có lượt trả lời hoàn chỉnh nên chưa có chi tiết chấm từng câu.
+                  </div>
+                )}
               </div>
             </section>
           )}

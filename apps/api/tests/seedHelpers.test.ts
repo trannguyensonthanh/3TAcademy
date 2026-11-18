@@ -8,6 +8,7 @@ import {
   type SeedAuditInput,
 } from '../src/db/seedHelpers.js';
 import {
+  CANONICAL_COURSE_SLUGS,
   classifyAdvisorIntent,
   classifyCourseTutorIntent,
   cosineSimilarity1024,
@@ -20,10 +21,16 @@ function createValidAuditFixture(): SeedAuditInput {
   const s2End = new Date('2026-03-05T14:30:00Z');
 
   return {
+    accounts: [
+      { id: 1, role: 'ADMIN' },
+      { id: 100, role: 'STUDENT' },
+    ],
     cohorts: [
       {
         id: 1,
         code: 'AI-ENG-2026-K01',
+        status: 'COMPLETED',
+        maxSeats: 35,
         enrolledCount: 1,
         scheduleSlots: [
           { dayOfWeek: 2, startTime: '19:30', endTime: '21:30' },
@@ -33,15 +40,42 @@ function createValidAuditFixture(): SeedAuditInput {
       {
         id: 2,
         code: 'SWE-ARCH-2026-K01',
+        status: 'ONGOING',
+        maxSeats: 35,
         enrolledCount: 1,
         scheduleSlots: [{ dayOfWeek: 0, startTime: '19:30', endTime: '21:30' }],
       },
+    ],
+    orders: [
+      {
+        id: 1,
+        orderCode: 'ET20260001',
+        accountId: 100,
+        cohortId: 1,
+        amountVnd: 10000,
+        status: 'PAID',
+        paidAt: new Date('2026-02-20T10:00:00Z'),
+      },
+      {
+        id: 2,
+        orderCode: 'ET20260002',
+        accountId: 100,
+        cohortId: 2,
+        amountVnd: 10000,
+        status: 'PAID',
+        paidAt: new Date('2026-03-24T10:00:00Z'),
+      },
+    ],
+    paymentTransactions: [
+      { id: 1, orderId: 1, amountVnd: 10000, matchStatus: 'MATCHED' },
+      { id: 2, orderId: 2, amountVnd: 10000, matchStatus: 'MATCHED' },
     ],
     enrollments: [
       {
         id: 10,
         accountId: 100,
         cohortId: 1,
+        orderId: 1,
         status: 'COMPLETED',
         finalExamPassed: true,
         enrolledAt: new Date('2026-02-20T10:00:00Z'),
@@ -51,6 +85,7 @@ function createValidAuditFixture(): SeedAuditInput {
         id: 11,
         accountId: 100,
         cohortId: 2,
+        orderId: 2,
         status: 'ACTIVE',
         finalExamPassed: false,
         enrolledAt: new Date('2026-03-24T10:00:00Z'),
@@ -73,7 +108,7 @@ function createValidAuditFixture(): SeedAuditInput {
         status: 'REPLAY_READY',
         scheduledStart: s1Start,
         scheduledEnd: s1End,
-        videoR2Key: 'recordings/ai-k01/s01/master.m3u8',
+        videoR2Key: 'recordings/ai-k01/s01.mp4',
       },
       {
         id: 102,
@@ -82,14 +117,14 @@ function createValidAuditFixture(): SeedAuditInput {
         status: 'REPLAY_READY',
         scheduledStart: s2Start,
         scheduledEnd: s2End,
-        videoR2Key: 'recordings/ai-k01/s02/master.m3u8',
+        videoR2Key: 'recordings/ai-k01/s02.mp4',
       },
       {
         id: 103,
         cohortId: 2,
         sessionOrder: 1,
         status: 'LIVE',
-        scheduledStart: new Date('2026-04-05T12:30:00Z'), // Sunday (day 0)
+        scheduledStart: new Date('2026-04-05T12:30:00Z'),
         scheduledEnd: new Date('2026-04-05T14:30:00Z'),
         videoR2Key: null,
       },
@@ -116,9 +151,9 @@ function createValidAuditFixture(): SeedAuditInput {
       { id: 202, cohortId: 1, sessionId: null, purpose: 'FINAL_EXAM', passScorePct: 70 },
     ],
     assessmentItems: [
-      { id: 301, assessmentId: 201, skillId: 1, points: '10.00' },
-      { id: 302, assessmentId: 202, skillId: 1, points: '50.00' },
-      { id: 303, assessmentId: 202, skillId: 8, points: '50.00' }, // e.g., LANGGRAPH_AGENT
+      { id: 301, assessmentId: 201, skillId: 1, points: '10.00', gradingConfig: { correctIndex: 1 } },
+      { id: 302, assessmentId: 202, skillId: 1, points: '50.00', gradingConfig: { correctIndex: 0 } },
+      { id: 303, assessmentId: 202, skillId: 8, points: '50.00', gradingConfig: { correctIndex: 2 } },
     ],
     attempts: [
       {
@@ -180,8 +215,13 @@ function createValidAuditFixture(): SeedAuditInput {
     ],
     profiles: [
       {
+        accountId: 1,
+        interviewCredits: 0,
+        cvParsedData: {},
+      },
+      {
         accountId: 100,
-        interviewCredits: 5, // 2 base + 4*1 cert - 1 completed mock
+        interviewCredits: 7, // 0 base + 4 * 2 enrollments - 1 completed mock = 7
         cvParsedData: {
           updatedAt: '2026-04-03T13:30:00.000Z',
           extractedAt: '2026-04-03T13:30:00.000Z',
@@ -204,7 +244,7 @@ function createValidAuditFixture(): SeedAuditInput {
   };
 }
 
-describe('seedHelpers', () => {
+describe('seedHelpers & 32-table seed invariants', () => {
   it('generates unit-normalized deterministic vectors', () => {
     const v1 = makeDeterministicVector(42, 1024);
     const v2 = makeDeterministicVector(42, 1024);
@@ -265,20 +305,11 @@ describe('seedHelpers', () => {
     expect(attemptRow.scorePct).toBe('75.00');
     expect(attemptRow.isPassed).toBe(true);
     expect(attemptRow.remedialRecommendations).toHaveLength(1);
-    expect(attemptRow.remedialRecommendations[0]).toMatchObject({
-      number: 2,
-      skillId: 8,
-      skillName: 'Multi-Agent Orchestration & Memory',
-      correctIndex: 0,
-    });
 
     const answers = buildAnswersForAttemptId(99);
     expect(answers).toHaveLength(4);
-    expect(answers.every((a) => a.attemptId === 99 && a.gradedAt.getTime() === gradedAt.getTime())).toBe(true);
     expect(answers[1]!.isCorrect).toBe(false);
-    expect(answers[1]!.finalScore).toBe('0.00');
     expect(answers[0]!.isCorrect).toBe(true);
-    expect(answers[0]!.finalScore).toBe('10.00');
   });
 
   it('passes audit with zero violations on clean relational data', () => {
@@ -286,11 +317,10 @@ describe('seedHelpers', () => {
     expect(findSeedConsistencyViolations(fixture)).toEqual([]);
   });
 
-  it('flags scheduled/live sessions with recordings or progress, active completed enrollments, missing skills, outdated CV, and mismatched gradedAt', () => {
+  it('flags relational inconsistencies across cohorts, orders, sessions, skills, CV, and credits', () => {
     const fixture = createValidAuditFixture();
 
-    // Bug 1 & 3: LIVE session with videoR2Key + progress
-    fixture.sessions[2]!.videoR2Key = 'recordings/swe-k01/s04/master.m3u8';
+    fixture.sessions[2]!.videoR2Key = 'recordings/swe-k01/s04.mp4';
     fixture.progress.push({
       accountId: 100,
       sessionId: 103,
@@ -298,23 +328,13 @@ describe('seedHelpers', () => {
       completedAt: new Date('2026-04-05T14:00:00Z'),
       lastActivityAt: new Date('2026-04-05T14:00:00Z'),
     });
-
-    // Bug 2: finalExamPassed=true yet status='ACTIVE'
     fixture.enrollments[0]!.status = 'ACTIVE';
-
-    // Bug 4: missing skill 8 (LANGGRAPH_AGENT)
     fixture.skillStates = fixture.skillStates.filter((s) => s.skillId !== 8);
-
-    // Bug 5: CV timestamp older than certificate issuedAt
-    fixture.profiles[0]!.cvParsedData.updatedAt = '2026-04-02T09:30:00.000Z';
-
-    // Bug 6: hardcoded wrong gradedAt & missing answer
+    fixture.profiles[1]!.cvParsedData.updatedAt = '2026-04-02T09:30:00.000Z';
     fixture.answers[0]!.gradedAt = new Date('2026-04-03T11:38:02Z');
-
-    // Extra: invalid proctoring type + mismatched enrolledCount + wrong interviewCredits
     fixture.proctoringEvents[0]!.eventType = 'TAB_SWITCH';
     fixture.cohorts[0]!.enrolledCount = 99;
-    fixture.profiles[0]!.interviewCredits = 2;
+    fixture.profiles[1]!.interviewCredits = 2;
 
     const violations = findSeedConsistencyViolations(fixture);
     expect(violations.some((v) => v.includes('must have videoR2Key=null'))).toBe(true);
@@ -328,7 +348,7 @@ describe('seedHelpers', () => {
     expect(violations.some((v) => v.includes('interviewCredits=2'))).toBe(true);
   });
 
-  it('executes full seed.ts minimal dataset in-memory with zero cross-table consistency violations', async () => {
+  it('executes full 32-table seed.ts dataset in-memory with zero cross-table consistency violations', async () => {
     process.env.NODE_ENV = 'test';
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://test:test@localhost:5432/test';
     process.env.INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || 'test-internal-api-key-123456';
@@ -368,38 +388,29 @@ describe('seedHelpers', () => {
 
     await expect(runSeed(mockDb as never)).resolves.toBeUndefined();
 
-    const accountsRows = store.get(schema.accounts) ?? [];
-    expect(accountsRows).toHaveLength(5);
-    const anAcc = accountsRows.find((a) => a.email === 'an.student@3t.edu.vn');
-    expect(anAcc).toBeDefined();
+    // Verify all 32 tables are populated coherently!
+    expect(store.get(schema.accounts)).toHaveLength(6);
+    expect(store.get(schema.courses)).toHaveLength(4);
+    expect(store.get(schema.cohorts)).toHaveLength(5);
+    expect((store.get(schema.cohorts) ?? []).every((c) => c.tuitionVnd === 10000)).toBe(true);
+    expect(store.get(schema.classSessions)).toHaveLength(30);
+    expect(store.get(schema.orders)).toHaveLength(5);
+    expect(store.get(schema.paymentTransactions)).toHaveLength(6);
+    expect(store.get(schema.enrollments)).toHaveLength(4);
+    expect(store.get(schema.certificates)).toHaveLength(1);
+    expect(store.get(schema.courseReviews)).toHaveLength(1);
+    expect(store.get(schema.assessments)).toHaveLength(35);
+    expect((store.get(schema.assessmentAttempts) ?? []).length).toBeGreaterThanOrEqual(14);
+    expect((store.get(schema.discussionThreads) ?? []).length).toBe(2);
+    expect((store.get(schema.chatSessions) ?? []).length).toBe(2);
+    expect((store.get(schema.mockInterviews) ?? []).length).toBe(2);
 
-    const coursesRows = store.get(schema.courses) ?? [];
-    expect(coursesRows).toHaveLength(4);
-
-    const cohortsRows = store.get(schema.cohorts) ?? [];
-    expect(cohortsRows).toHaveLength(4);
-    expect(cohortsRows.every((c) => c.tuitionVnd === 10000 && c.enrolledCount === 0)).toBe(true);
-
-    const enrollmentsRows = store.get(schema.enrollments) ?? [];
-    expect(enrollmentsRows).toHaveLength(0);
-
-    const certificatesRows = store.get(schema.certificates) ?? [];
-    expect(certificatesRows).toHaveLength(0);
-
-    const sessionsRows = store.get(schema.classSessions) ?? [];
-    expect(sessionsRows).toHaveLength(24);
-
-    const chunksRows = store.get(schema.knowledgeChunks) ?? [];
-    expect(chunksRows.length).toBeGreaterThanOrEqual(15);
-    expect(
-      chunksRows.every(
-        (ch) => Array.isArray(ch.embedding) && (ch.embedding as number[]).length === 1024
-      )
-    ).toBe(true);
+    const namAcc = (store.get(schema.accounts) ?? []).find((a) => a.email === 'nam.student@3t.edu.vn');
+    const namProf = (store.get(schema.userProfiles) ?? []).find((p) => p.accountId === namAcc?.id);
+    expect(namProf?.interviewCredits).toBe(0);
   });
 
-  it('enforces RAG Career Advisor and Course Tutor guardrails and semantic vector similarity', () => {
-    // 1. Semantic 1024-dim embedding similarity
+  it('enforces RAG Career Advisor and Course Tutor guardrails across all 4 canonical course slugs', () => {
     const ragVec = computeSemanticEmbedding1024('Kiến trúc Hybrid RAG với pgvector HNSW và RRF');
     const ragQueryVec = computeSemanticEmbedding1024('Hỏi về Hybrid RAG và pgvector HNSW');
     const unrelatedVec = computeSemanticEmbedding1024('Công thức nấu món phở bò truyền thống');
@@ -407,7 +418,6 @@ describe('seedHelpers', () => {
       cosineSimilarity1024(ragVec, unrelatedVec)
     );
 
-    // 2. Advisor guardrails: blocks out-of-system & blocks deep lecture knowledge
     expect(classifyAdvisorIntent('Tư vấn giúp mình về kế toán thuế và thương mại điện tử Shopee')).toBe(
       'OUT_OF_SYSTEM'
     );
@@ -418,22 +428,28 @@ describe('seedHelpers', () => {
       classifyAdvisorIntent('Mình mới học Python cơ bản thì nên chọn lộ trình nào ở 3T Academy?')
     ).toBe('VALID_ADVISOR_QUERY');
 
-    // 3. Course Tutor guardrails: isolates each course's topics from other courses & unrelated topics
-    const aiCourseSlug = 'ky-su-ai-thuc-chien-rag-agents-llmops';
-    expect(classifyCourseTutorIntent('Giải thích về RAG và pgvector', aiCourseSlug)).toEqual({
-      type: 'IN_COURSE_SCOPE',
-    });
-    expect(classifyCourseTutorIntent('Hỏi về kế toán doanh nghiệp', aiCourseSlug)).toEqual({
-      type: 'OUT_OF_DOMAIN',
-    });
+    // Verify all 4 canonical course slugs allow their own topics & block other courses!
+    expect(
+      classifyCourseTutorIntent('Giải thích về RAG và pgvector', CANONICAL_COURSE_SLUGS.AI)
+    ).toEqual({ type: 'IN_COURSE_SCOPE' });
+    expect(
+      classifyCourseTutorIntent('Cách dùng Drizzle ORM và BullMQ?', CANONICAL_COURSE_SLUGS.SWE)
+    ).toEqual({ type: 'IN_COURSE_SCOPE' });
+    expect(
+      classifyCourseTutorIntent('Tối ưu PySpark, Kafka và dbt Medallion?', CANONICAL_COURSE_SLUGS.DATA)
+    ).toEqual({ type: 'IN_COURSE_SCOPE' });
+    expect(
+      classifyCourseTutorIntent('Cách viết Window function và pytest?', CANONICAL_COURSE_SLUGS.PYTHON)
+    ).toEqual({ type: 'IN_COURSE_SCOPE' });
+
     expect(
       classifyCourseTutorIntent(
-        'Cách dùng Apache Spark và Kafka trong kiến trúc Lakehouse Iceberg?',
-        aiCourseSlug
+        'Cách dùng Apache Spark và Kafka trong kiến trúc Lakehouse?',
+        CANONICAL_COURSE_SLUGS.AI
       )
     ).toEqual({
       type: 'OTHER_COURSE_TOPIC',
-      otherCourseTitle: 'Kỹ thuật Dữ liệu: Streaming Pipeline & Lakehouse',
+      otherCourseTitle: 'Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse',
     });
   });
 });

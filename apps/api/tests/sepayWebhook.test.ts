@@ -7,7 +7,7 @@ import {
   isSepaySecretAuthorized,
 } from '../src/modules/order/sepay.helpers.js';
 
-const { insertedTxns } = vi.hoisted(() => {
+const { insertedTxns, mockOrders } = vi.hoisted(() => {
   process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/test_db';
   process.env.INTERNAL_API_KEY ??= 'test_internal_api_key_123456';
   process.env.JWT_ACCESS_SECRET ??= 'test_jwt_access_secret_key_must_be_at_least_32_chars';
@@ -17,15 +17,31 @@ const { insertedTxns } = vi.hoisted(() => {
 
   return {
     insertedTxns: [] as Array<Record<string, unknown>>,
+    mockOrders: [] as Array<Record<string, unknown>>,
   };
 });
 
 vi.mock('../src/db/index.js', () => {
+  let currentTableName = '';
+  const getTableName = (t: unknown) => {
+    if (!t || typeof t !== 'object') return '';
+    for (const sym of Object.getOwnPropertySymbols(t)) {
+      if (String(sym).includes('drizzle:Name')) {
+        return String((t as Record<symbol, unknown>)[sym]);
+      }
+    }
+    return '';
+  };
+
   const selectChain = {
-    from: () => selectChain,
+    from: (table: unknown) => {
+      currentTableName = getTableName(table);
+      return selectChain;
+    },
     where: () => selectChain,
     orderBy: () => selectChain,
-    limit: async () => [],
+    for: () => selectChain,
+    limit: async () => (currentTableName === 'orders' ? [...mockOrders] : []),
   };
 
   const dbMock = {
@@ -230,5 +246,59 @@ describe('SePay primary and backup Express endpoints', () => {
     const outgoingJson = (await outgoingRes.json()) as { ignored: boolean; reason: string };
     expect(outgoingJson.ignored).toBe(true);
     expect(outgoingJson.reason).toBe('OUTGOING_TRANSFER');
+  });
+
+  it('rejects 0-VND and underpaid transfers as AMOUNT_MISMATCH without fulfilling PENDING orders', async () => {
+    mockOrders.length = 0;
+    mockOrders.push({
+      id: 77,
+      orderCode: '3T770001',
+      accountId: 4,
+      cohortId: 1,
+      amountVnd: 10000,
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 600000),
+      createdAt: new Date(),
+    });
+
+    const zeroRes = await fetch(`${baseUrl}/api/v1/webhooks/sepay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 8801,
+        transferType: 'in',
+        transferAmount: 0,
+        content: 'Thanh toan 3T770001',
+      }),
+    });
+    expect(zeroRes.status).toBe(200);
+    const zeroBody = (await zeroRes.json()) as {
+      success: boolean;
+      status: string;
+      matchStatus: string;
+    };
+    expect(zeroBody.success).toBe(true);
+    expect(zeroBody.status).toBe('PENDING');
+    expect(zeroBody.matchStatus).toBe('AMOUNT_MISMATCH');
+
+    const underpaidRes = await fetch(`${baseUrl}/api/v1/webhooks/sepay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 8802,
+        transferType: 'in',
+        transferAmount: 2000,
+        content: 'Thanh toan 3T770001',
+      }),
+    });
+    expect(underpaidRes.status).toBe(200);
+    const underpaidBody = (await underpaidRes.json()) as {
+      status: string;
+      matchStatus: string;
+    };
+    expect(underpaidBody.status).toBe('PENDING');
+    expect(underpaidBody.matchStatus).toBe('AMOUNT_MISMATCH');
+
+    mockOrders.length = 0;
   });
 });

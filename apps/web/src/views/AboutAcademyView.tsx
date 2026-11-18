@@ -60,14 +60,13 @@ export const AboutAcademyView: React.FC = () => {
   const { navigate } = useAcademy();
   const { data: faqsData } = useAsyncData(() => catalogApi.getFaqs(), []);
   const ACADEMY_FAQS = faqsData ?? [];
-  const [openFaqIds, setOpenFaqIds] = useState<string[]>([
-    'faq-1',
-    'faq-2',
-    'faq-3',
-    'faq-4',
-    'faq-5',
-    'faq-6',
-  ]);
+  const [openFaqIds, setOpenFaqIds] = useState<string[]>([]);
+
+  React.useEffect(() => {
+    if (ACADEMY_FAQS.length > 0 && openFaqIds.length === 0) {
+      setOpenFaqIds(ACADEMY_FAQS.slice(0, 6).map((f) => f.id));
+    }
+  }, [ACADEMY_FAQS, openFaqIds.length]);
 
   const toggleFaq = (id: string) => {
     setOpenFaqIds((prev) =>

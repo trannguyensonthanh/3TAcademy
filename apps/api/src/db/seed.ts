@@ -1,8 +1,11 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 import { db as defaultDb, pool } from './index.js';
+import { runMigrations } from './migrate.js';
+import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import {
   accounts,
@@ -17,24 +20,55 @@ import {
   classSessions,
   sessionAttachments,
   sessionSubtitles,
-   assessments,
+  orders,
+  paymentTransactions,
+  enrollments,
+  sessionProgress,
+  courseReviews,
+  certificates,
+  discussionThreads,
+  discussionPosts,
+  notifications,
+  assessments,
   assessmentItems,
+  assessmentAttempts,
+  submissionAnswers,
+  proctoringEvents,
   knowledgeChunks,
+  studentSkillStates,
+  chatSessions,
+  chatMessages,
+  mockInterviews,
   systemSettings,
 } from './schema/index.js';
 import {
+  buildAttemptDraftAndAnswerBuilders,
   buildSessionQuizItems,
   computeSemanticEmbedding1024,
   findSeedConsistencyViolations,
   makeDeterministicVector,
+  sha256Hex,
+  type SeedQuestionBase,
 } from './seedHelpers.js';
+import { computeProgressiveSkillMastery } from '../modules/assessment/skillMasteryModel.js';
 
 export { makeDeterministicVector, computeSemanticEmbedding1024 };
 
-export async function runSeed(db: typeof defaultDb = defaultDb) {
-  logger.info('Starting minimal, clean 3T Academy database seed (10,000 VND tuition, zero pre-seeded enrollments/orders/certificates)...');
+interface CourseTopicQuestionSeed {
+  sessionOrder: number;
+  topic: string;
+  primarySkillId: number;
+  secondarySkillId: number;
+  questions: SeedQuestionBase[];
+  chunkContent: string;
+  attachmentFileName: string;
+}
 
-  // Clean existing tables using TRUNCATE RESTART IDENTITY CASCADE
+export async function runSeed(db: typeof defaultDb = defaultDb) {
+  logger.info(
+    'Starting clean, deterministic 32-table 3T Academy seed (10,000 VND tuition, end-to-end flow consistent)...'
+  );
+
   await db.execute(sql`
     TRUNCATE TABLE
       mock_interviews,
@@ -75,7 +109,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
   const defaultPasswordHash = await argon2.hash('123456');
 
   // =========================================================================
-  // 1. SYSTEM SETTINGS
+  // 1. SYSTEM SETTINGS (Table 1/32)
   // =========================================================================
   await db.insert(systemSettings).values([
     {
@@ -103,7 +137,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       key: 'proctoring_max_strikes',
       value: '3',
-      description: 'Số lần cảnh báo vi phạm tối đa trước khi tự động đình chỉ bài thi cuối khóa',
+      description: 'Số lần cảnh báo vi phạm tối đa trước khi đánh dấu hậu kiểm bài thi cuối khóa',
       isPublic: false,
     },
     {
@@ -113,37 +147,37 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
           id: 'faq-1',
           question: 'Hình thức học tại 3T Academy là học trực tiếp cùng giảng viên hay xem video thu sẵn?',
           answer:
-            'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các buổi tối cố định trong tuần (2 buổi/tuần). Sau mỗi buổi học, bản ghi hình chất lượng cao kèm phụ đề và tài liệu sẽ được cập nhật trên hệ thống để bạn chủ động ôn tập lại bất cứ lúc nào.',
+            'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các khung giờ cố định (2 buổi/tuần). Sau mỗi buổi học, bản ghi MP4 chất lượng cao kèm phụ đề và slide sẽ được cập nhật để bạn chủ động ôn tập bất cứ lúc nào.',
         },
         {
           id: 'faq-2',
           question: 'Nếu hôm đó mình bận việc đột xuất không vào lớp kịp thì có bị mất bài không?',
           answer:
-            'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải slide và mã nguồn thực hành. Trong lúc tự ôn bài, nếu có đoạn nào chưa rõ, bạn có thể hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích cặn kẽ theo đúng mốc thời gian giảng viên đã giảng.',
+            'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải tài liệu và hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích theo đúng mốc thời gian giảng viên đã giảng.',
         },
         {
           id: 'faq-3',
           question: 'Mình mới bắt đầu hoặc trái ngành thì nên chọn khóa học nào trước?',
           answer:
-            'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố lại nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI. Sau khi nắm vững tư duy viết code Python và truy vấn cơ sở dữ liệu PostgreSQL, bạn có thể học tiếp lên các khóa chuyên sâu về Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
+            'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI, sau đó tiến lên các khóa chuyên sâu Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
         },
         {
           id: 'faq-4',
           question: 'Điều kiện để hoàn thành mỗi buổi học và nhận chứng chỉ tốt nghiệp là gì?',
           answer:
-            'Để đảm bảo chất lượng đầu ra thực chất, mỗi buổi học yêu cầu bạn theo dõi tối thiểu 80% thời lượng bài giảng và làm đạt từ 7.0/10 trở lên bài kiểm tra ngắn (10 câu trắc nghiệm) cuối buổi. Khi hoàn thành đầy đủ các buổi học và vượt qua kỳ thi sát hạch cuối khóa (25 câu), hệ thống sẽ cấp Chứng chỉ tốt nghiệp có mã định danh xác thực trực tuyến.',
+            'Mỗi buổi học được đánh dấu hoàn thành khi bạn làm đạt tối thiểu 70% bài Quiz kiểm tra năng lực cuối buổi. Khi hoàn thành trọn vẹn 6/6 buổi học của đợt học và vượt qua Kỳ thi sát hạch cuối khóa (đạt từ 70% trở lên, không vi phạm quy chế giám sát AI Proctoring), hệ thống tự động cấp Chứng chỉ tốt nghiệp xác thực chữ ký số HMAC và QR trực tuyến.',
         },
         {
           id: 'faq-5',
-          question: 'Tính năng Hồ sơ của tôi (CV) và Luyện phỏng vấn 1-1 hoạt động như thế nào?',
+          question: 'Tính năng Hồ sơ năng lực (CV) và Luyện phỏng vấn 1-1 cùng AI hoạt động như thế nào?',
           answer:
-            'Khi bạn thiết lập hồ sơ ban đầu và hoàn thành các khóa học, toàn bộ thông tin cá nhân, mục tiêu nghề nghiệp, kỹ năng chuyên môn và đồ án bạn đã làm sẽ được đồng bộ vào mục Hồ sơ của tôi để tạo bản CV chuẩn kỹ sư công nghệ. Bạn cũng có thể sử dụng lượt Luyện phỏng vấn 1-1 bằng giọng nói để rà soát độ khớp của CV với vị trí ứng tuyển và tập trả lời phỏng vấn sát thực tế.',
+            'Tài khoản mới đăng ký có mặc định 0 lượt phỏng vấn AI. Ngay khi bạn đăng ký thành công một đợt học chính thức, hệ thống cấp ngay 4 lượt Luyện phỏng vấn giọng nói 1-1 hai vòng (Vòng 1 rà soát CV theo JD, Vòng 2 phỏng vấn chuyên môn cùng AI) và đồng bộ kỹ năng/chứng chỉ đạt được vào Hồ sơ năng lực.',
         },
         {
           id: 'faq-6',
           question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
           answer:
-            'Bạn chỉ cần chọn đợt học phù hợp với lịch cá nhân và bấm Đăng ký đợt học. Hệ thống sẽ hiển thị mã QR chuyển khoản ngân hàng (VietQR) với nội dung tự động. Ngay sau khi hoàn tất chuyển khoản trên ứng dụng ngân hàng, lớp học sẽ được mở khóa tự động chỉ sau vài giây mà không cần chờ duyệt thủ công.',
+            'Bạn chọn đợt học đang mở tuyển sinh và quét mã VietQR trên ứng dụng ngân hàng (mức phí trải nghiệm thực tế 10.000đ/khóa trên môi trường kiểm thử). Ngay khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
         },
       ]),
       description: 'Danh sách câu hỏi thường gặp công khai tại trang Về học viện',
@@ -152,7 +186,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
   ]);
 
   // =========================================================================
-  // 2. CATEGORIES & SKILLS TAXONOMY
+  // 2. CATEGORIES & SKILLS TAXONOMY (Tables 2–3/32)
   // =========================================================================
   const [catAi, catSwe, catData, catProg] = await db
     .insert(categories)
@@ -161,25 +195,25 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         name: 'Trí tuệ nhân tạo & AI',
         slug: 'ai-llm-engineering',
         description:
-          'Xây dựng hệ thống RAG thực chiến, Multi-Agent Workflows, Function Calling và triển khai mô hình ngôn ngữ lớn (LLMOps) lên môi trường Production.',
+          'Xây dựng hệ thống RAG thực chiến, Multi-Agent Workflows, Function Calling và triển khai LLMOps lên Production.',
       },
       {
         name: 'Lập trình Backend & Hệ thống',
         slug: 'software-system-architecture',
         description:
-          'Thiết kế kiến trúc Backend phân tán, Microservices, tối ưu hóa cơ sở dữ liệu PostgreSQL/Redis và vận hành hệ thống chịu tải cao.',
+          'Thiết kế kiến trúc Backend phân tán, tối ưu PostgreSQL/Redis, Idempotent Webhook và vận hành hệ thống chịu tải cao.',
       },
       {
         name: 'Kỹ thuật Dữ liệu',
         slug: 'data-engineering-analytics',
         description:
-          'Xây dựng đường ống dữ liệu lớn (Data Pipeline) với Python, SQL nâng cao, Apache Spark, Kafka và kiến trúc Data Lakehouse.',
+          'Xây dựng Data Pipeline thời gian thực và xử lý dữ liệu lớn với Python, SQL nâng cao, Apache Spark, Kafka và dbt Lakehouse.',
       },
       {
         name: 'Lập trình Nền tảng',
         slug: 'core-programming-sql',
         description:
-          'Nền tảng lập trình Python hiện đại, cấu trúc dữ liệu, xử lý bất đồng bộ (AsyncIO) và truy vấn SQL phân tích chuyên sâu.',
+          'Nền tảng lập trình Python hiện đại, Type Hints, OOP, xử lý bất đồng bộ (AsyncIO) và truy vấn SQL phân tích chuyên sâu.',
       },
     ])
     .returning();
@@ -192,84 +226,84 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         code: 'PYTHON_ASYNC',
         name: 'Lập trình Python & AsyncIO',
         description:
-          'Làm chủ Python 3.11+, Type Hints, cấu trúc dữ liệu, Generator và lập trình bất đồng bộ với asyncio/httpx.',
+          'Làm chủ Python 3.11+, Type Hints, Generator, Pytest và lập trình bất đồng bộ với asyncio/httpx.',
       },
       {
         categoryId: catAi!.id,
         code: 'HYBRID_RAG',
         name: 'Kiến trúc Hybrid RAG & Vector DB',
         description:
-          'Thiết kế pipeline băm tài liệu (Chunking), nhúng vector (Embedding), kết hợp Dense Vector (pgvector HNSW) + BM25 RRF và Cross-Encoder Reranking.',
+          'Thiết kế pipeline Chunking, Embedding, kết hợp Dense Vector (pgvector HNSW) + BM25 RRF và Reranking.',
       },
       {
         categoryId: catAi!.id,
         code: 'TOOL_CALLING',
         name: 'Function Calling & Agentic Workflows',
         description:
-          'Xây dựng AI Agent có khả năng gọi công cụ bên ngoài (Tool Use), kiểm soát đầu ra có cấu trúc với Pydantic v2 và vòng lặp suy luận ReAct.',
+          'Xây dựng AI Agent gọi công cụ an toàn với JSON Schema, Pydantic v2 và vòng lặp suy luận ReAct.',
       },
       {
         categoryId: catSwe!.id,
         code: 'NODE_TS',
         name: 'Backend TypeScript & Clean Architecture',
         description:
-          'Xây dựng RESTful API chuẩn công nghiệp với Node.js, TypeScript, Express, Zod validation và phân tầng dịch vụ rõ ràng.',
+          'Xây dựng RESTful API chuẩn công nghiệp với Node.js, TypeScript, Express, Drizzle ORM và Zod.',
       },
       {
         categoryId: catSwe!.id,
         code: 'DOCKER_CI',
         name: 'Docker, CI/CD & Triển khai Production',
         description:
-          'Đóng gói ứng dụng với Multi-stage Dockerfile, Docker Compose, kiểm tra sức khỏe dịch vụ (Healthcheck) và tự động hóa kiểm thử.',
+          'Đóng gói Multi-stage Dockerfile, Docker Compose, Healthcheck, bảo mật JWT/RBAC và kiểm thử tự động.',
       },
       {
         categoryId: catData!.id,
         code: 'SQL_VECTOR',
         name: 'Tối ưu PostgreSQL & pgvector',
         description:
-          'Thiết kế lược đồ quan hệ chuẩn hóa, giao dịch ACID, CTE, Window Functions, chỉ mục B-Tree/GIN và chỉ mục láng giềng gần đúng HNSW.',
+          'Thiết kế lược đồ chuẩn hóa, giao dịch ACID, CTE, Window Functions, chỉ mục B-Tree/GIN và HNSW.',
       },
       {
         categoryId: catAi!.id,
         code: 'FASTAPI_ARCH',
         name: 'Kiến trúc FastAPI & Pydantic v2',
         description:
-          'Xây dựng cổng dịch vụ AI tốc độ cao với FastAPI, Dependency Injection, Server-Sent Events (SSE) streaming và kiểm tra dữ liệu nghiêm ngặt.',
+          'Xây dựng cổng dịch vụ AI tốc độ cao với FastAPI, Dependency Injection và SSE streaming.',
       },
       {
         categoryId: catAi!.id,
         code: 'LANGGRAPH_AGENT',
         name: 'Multi-Agent Orchestration & Memory',
         description:
-          'Điều phối hệ thống đa tác tử (Supervisor/Worker Agents), quản lý trạng thái hội thoại dài hạn và cơ chế tự sửa lỗi (Self-Reflection).',
+          'Điều phối hệ thống đa tác tử, quản lý bộ nhớ hội thoại dài hạn và cơ chế tự kiểm chứng.',
       },
       {
         categoryId: catSwe!.id,
         code: 'SYSTEM_DESIGN',
         name: 'Thiết kế Hệ thống Phân tán & Caching',
         description:
-          'Áp dụng Redis Caching, Rate Limiting, Idempotent Webhook, Message Queue và xử lý đồng thời quy mô lớn.',
+          'Áp dụng Redis Caching, Rate Limiting, Idempotent Webhook, Pessimistic Locking và Message Queue.',
       },
       {
         categoryId: catData!.id,
         code: 'SPARK_KAFKA',
         name: 'Xử lý Dữ liệu Lớn với Spark & Kafka',
         description:
-          'Xây dựng luồng xử lý dữ liệu thời gian thực (Streaming) và xử lý theo lô (Batch) với Apache Kafka và PySpark.',
+          'Xây dựng luồng xử lý Streaming và Batch với Apache Kafka Consumer Group và PySpark Structured Streaming.',
       },
       {
         categoryId: catData!.id,
         code: 'DBT_WAREHOUSE',
         name: 'Data Modeling & Analytics với dbt',
         description:
-          'Thiết kế mô hình dữ liệu Star Schema, chuẩn hóa tầng Bronze-Silver-Gold và kiểm định chất lượng dữ liệu tự động.',
+          'Thiết kế Star Schema, kiến trúc Medallion Bronze-Silver-Gold và kiểm định chất lượng dữ liệu tự động.',
       },
       {
         categoryId: catAi!.id,
         code: 'EVAL_GUARDRAILS',
         name: 'LLMOps, Ragas Evaluation & Guardrails',
         description:
-          'Đo lường chất lượng hệ thống RAG (Faithfulness, Answer Relevancy, Context Precision), phòng chống Prompt Injection và tối ưu chi phí token.',
+          'Đo lường Faithfulness, Answer Relevancy, Context Precision với Ragas và phòng chống Prompt Injection.',
       },
     ])
     .returning();
@@ -289,8 +323,10 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     skEval,
   ] = insertedSkills;
 
+  const skillNamesById = new Map(insertedSkills.map((s) => [s.id, s.name]));
+
   // =========================================================================
-  // 3. ACCOUNTS (5 Minimal Accounts: 1 Admin, 2 Instructors, 2 Students)
+  // 3. ACCOUNTS & IDENTITIES (Tables 4–5/32) — 6 Canonical Personas
   // =========================================================================
   const insertedAccounts = await db
     .insert(accounts)
@@ -302,7 +338,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T08:00:00Z'),
         createdAt: new Date('2026-01-01T08:00:00Z'),
-        lastLoginAt: new Date('2026-04-06T07:30:00Z'),
+        lastLoginAt: new Date('2026-11-18T02:00:00Z'),
       },
       {
         email: 'khoa.instructor@3t.edu.vn',
@@ -311,7 +347,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T08:00:00Z'),
         createdAt: new Date('2026-01-01T08:00:00Z'),
-        lastLoginAt: new Date('2026-04-06T08:15:00Z'),
+        lastLoginAt: new Date('2026-11-18T02:15:00Z'),
       },
       {
         email: 'ha.instructor@3t.edu.vn',
@@ -320,42 +356,57 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         status: 'ACTIVE',
         emailVerifiedAt: new Date('2026-01-01T08:00:00Z'),
         createdAt: new Date('2026-01-01T08:00:00Z'),
-        lastLoginAt: new Date('2026-04-06T06:45:00Z'),
+        lastLoginAt: new Date('2026-11-18T02:20:00Z'),
       },
       {
         email: 'an.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-02-15T08:00:00Z'),
-        createdAt: new Date('2026-02-15T08:00:00Z'),
-        lastLoginAt: new Date('2026-04-06T09:00:00Z'),
+        emailVerifiedAt: new Date('2026-01-02T08:00:00Z'),
+        createdAt: new Date('2026-01-02T08:00:00Z'),
+        lastLoginAt: new Date('2026-11-18T02:30:00Z'),
       },
       {
         email: 'mai.student@3t.edu.vn',
         passwordHash: defaultPasswordHash,
         role: 'STUDENT',
         status: 'ACTIVE',
-        emailVerifiedAt: new Date('2026-02-16T08:00:00Z'),
-        createdAt: new Date('2026-02-16T08:00:00Z'),
-        lastLoginAt: new Date('2026-04-06T08:40:00Z'),
+        emailVerifiedAt: new Date('2026-10-20T08:00:00Z'),
+        createdAt: new Date('2026-10-20T08:00:00Z'),
+        lastLoginAt: new Date('2026-11-17T14:00:00Z'),
+      },
+      {
+        email: 'nam.student@3t.edu.vn',
+        passwordHash: defaultPasswordHash,
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        emailVerifiedAt: new Date('2026-11-15T09:00:00Z'),
+        createdAt: new Date('2026-11-15T09:00:00Z'),
+        lastLoginAt: new Date('2026-11-18T01:45:00Z'),
       },
     ])
     .returning();
 
-  const [adminAcc, instKhoaAcc, instHaAcc, stuAnAcc, stuMaiAcc] = insertedAccounts;
+  const [adminAcc, instKhoaAcc, instHaAcc, stuAnAcc, stuMaiAcc, stuNamAcc] = insertedAccounts;
 
-  await db.insert(accountIdentities).values(
-    insertedAccounts.map((acc) => ({
+  await db.insert(accountIdentities).values([
+    ...insertedAccounts.map((acc) => ({
       accountId: acc.id,
       provider: 'LOCAL' as const,
       providerUid: `local-${acc.email}`,
       providerEmail: acc.email,
-    }))
-  );
+    })),
+    {
+      accountId: stuAnAcc!.id,
+      provider: 'GOOGLE' as const,
+      providerUid: 'google-oauth2-an-student-3t',
+      providerEmail: stuAnAcc!.email,
+    },
+  ]);
 
   // =========================================================================
-  // 4. INSTRUCTOR PROFILES & USER PROFILES
+  // 4. INSTRUCTOR PROFILES (Table 6/32)
   // =========================================================================
   await db.insert(instructorProfiles).values([
     {
@@ -364,7 +415,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       organization: 'Học viện Công nghệ 3T Academy',
       yearsOfExperience: 11,
       expertiseSummaryMd:
-        'Chuyên gia thiết kế kiến trúc hệ thống Hybrid RAG, Multi-Agent Orchestration và LLMOps quy mô doanh nghiệp.',
+        'Chuyên gia thiết kế kiến trúc Hybrid RAG, Multi-Agent Orchestration, Python AsyncIO và LLMOps quy mô doanh nghiệp.',
       socialLinks: {
         github: 'https://github.com/leminhkhoa-ai',
         linkedin: 'https://linkedin.com/in/leminhkhoa-ai',
@@ -376,7 +427,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       organization: 'Học viện Công nghệ 3T Academy',
       yearsOfExperience: 9,
       expertiseSummaryMd:
-        'Chuyên gia tối ưu cơ sở dữ liệu PostgreSQL, thiết kế hệ thống phân tán chịu tải cao và đường ống dữ liệu thời gian thực.',
+        'Chuyên gia tối ưu cơ sở dữ liệu PostgreSQL, thiết kế hệ thống phân tán chịu tải cao và Data Lakehouse với Spark/Kafka/dbt.',
       socialLinks: {
         github: 'https://github.com/nguyenthuha-arch',
         linkedin: 'https://linkedin.com/in/nguyenthuha-arch',
@@ -384,134 +435,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     },
   ]);
 
-  const anCvParsedData = {
-    fileName: '',
-    updatedAt: '',
-    extractedAt: '',
-    fullName: 'Nguyễn Văn An',
-    candidateName: 'Nguyễn Văn An',
-    headline: 'Học viên Kỹ thuật Phần mềm & Trí tuệ nhân tạo',
-    targetRole: 'Fresher AI & Backend Engineer',
-    email: 'an.student@3t.edu.vn',
-    phone: '0908 234 567',
-    location: 'Quận Cầu Giấy, Hà Nội',
-    avatarUrl: 'https://cdn.3t.edu.vn/avatars/student_nguyen_van_an.jpg',
-    githubUrl: 'https://github.com/nguyenvanan-ai',
-    linkedinUrl: 'https://linkedin.com/in/nguyenvanan-ai',
-    careerObjective:
-      'Xây dựng nền tảng vững chắc về Python, Backend và hệ thống AI thực chiến thông qua các dự án thực tế.',
-    summaryBio:
-      'Học viên định hướng phát triển phần mềm và hệ thống Trí tuệ nhân tạo ứng dụng.',
-    skills: [],
-    externalSkills: [],
-    projects: [],
-    workExperience: [],
-    education: [],
-    awardsAndCerts: [],
-  };
-
-  const maiCvParsedData = {
-    fileName: '',
-    updatedAt: '',
-    extractedAt: '',
-    fullName: 'Lê Hoàng Mai',
-    candidateName: 'Lê Hoàng Mai',
-    headline: 'Học viên Phát triển Phần mềm & Kỹ thuật Dữ liệu',
-    targetRole: 'Junior AI & Data Engineer',
-    email: 'mai.student@3t.edu.vn',
-    phone: '0912 345 678',
-    location: 'Quận 1, TP. Hồ Chí Minh',
-    avatarUrl: 'https://cdn.3t.edu.vn/avatars/student_le_hoang_mai.jpg',
-    githubUrl: 'https://github.com/lehoangmai-dev',
-    linkedinUrl: 'https://linkedin.com/in/lehoangmai-dev',
-    careerObjective:
-      'Phát triển kỹ năng thiết kế hệ thống Backend, cơ sở dữ liệu và ứng dụng AI thực tế.',
-    summaryBio:
-      'Học viên công nghệ tại 3T Academy.',
-    skills: [],
-    externalSkills: [],
-    projects: [],
-    workExperience: [],
-    education: [],
-    awardsAndCerts: [],
-  };
-
-  const insertedProfiles = await db
-    .insert(userProfiles)
-    .values([
-      {
-        accountId: adminAcc!.id,
-        fullName: 'Trần Quản Trị (Admin 3T)',
-        avatarUrl: 'https://cdn.3t.edu.vn/avatars/admin_tran_quan_tri.jpg',
-        bio: 'Giám đốc Vận hành & Quản trị Học vụ tại Học viện Công nghệ 3T Academy.',
-        careerGoal: 'Chuẩn hóa chất lượng đào tạo công nghệ thực chiến theo chuẩn doanh nghiệp.',
-        cvParsedData: {
-          fullName: 'Trần Quản Trị (Admin 3T)',
-          headline: 'Head of Academic Operations @ 3T Academy',
-          phone: '0901 000 111',
-          location: 'Hà Nội, Việt Nam',
-        },
-        interviewCredits: 10,
-      },
-      {
-        accountId: instKhoaAcc!.id,
-        fullName: 'TS. Lê Minh Khoa',
-        avatarUrl: '/assets/aistudio/image_49d8b1b9.png',
-        bio: 'Principal AI Architect · 10+ năm kinh nghiệm xây dựng hệ thống NLP, Hybrid RAG và Multi-Agent tại Singapore & Việt Nam.',
-        careerGoal: 'Đào tạo thế hệ Kỹ sư AI thực chiến làm chủ kiến trúc hệ thống Production.',
-        cvParsedData: {
-          fullName: 'TS. Lê Minh Khoa',
-          headline: 'Principal AI Architect · Giảng viên Trưởng khối AI Engineering',
-          phone: '0902 111 222',
-          location: 'TP. Hồ Chí Minh & Hà Nội',
-          skills: ['Hybrid RAG', 'Multi-Agent Systems', 'LLMOps', 'Distributed Systems', 'PyTorch'],
-        },
-        interviewCredits: 10,
-      },
-      {
-        accountId: instHaAcc!.id,
-        fullName: 'ThS. Nguyễn Thu Hà',
-        avatarUrl: '/assets/aistudio/image_aa8c5a52.png',
-        bio: 'Staff Data & Backend Architect · Chuyên gia tối ưu cơ sở dữ liệu phân tán, Data Lakehouse và kiến trúc Microservices.',
-        careerGoal: 'Đồng hành cùng học viên xây dựng tư duy thiết kế hệ thống bền vững.',
-        cvParsedData: {
-          fullName: 'ThS. Nguyễn Thu Hà',
-          headline: 'Staff Data & Backend Architect · Giảng viên Trưởng khối Backend & Data',
-          phone: '0903 222 333',
-          location: 'Hà Nội, Việt Nam',
-          skills: ['PostgreSQL', 'System Design', 'TypeScript', 'Apache Spark', 'Kafka', 'dbt'],
-        },
-        interviewCredits: 10,
-      },
-      {
-        accountId: stuAnAcc!.id,
-        fullName: 'Nguyễn Văn An',
-        avatarUrl: 'https://cdn.3t.edu.vn/avatars/student_nguyen_van_an.jpg',
-        bio: 'Fresher AI Engineer · Đam mê xây dựng hệ thống Hybrid RAG, Function Calling và ứng dụng LLM vào bài toán doanh nghiệp.',
-        careerGoal: 'Trở thành Junior AI Engineer tại các công ty sản phẩm công nghệ hàng đầu.',
-        goalEmbedding: makeDeterministicVector(401, 1024),
-        cvParsedData: anCvParsedData,
-        interviewCredits: 2,
-        faceReferenceR2Key: 'kyc/2026/stu-an-face-ref-v1.jpg',
-        faceEmbedding: makeDeterministicVector(101, 512),
-      },
-      {
-        accountId: stuMaiAcc!.id,
-        fullName: 'Lê Hoàng Mai',
-        avatarUrl: 'https://cdn.3t.edu.vn/avatars/student_le_hoang_mai.jpg',
-        bio: 'Junior Backend Developer chuyển dịch sang AI Engineering · Yêu thích tối ưu Vector DB và hệ thống độ trễ thấp.',
-        careerGoal: 'Trở thành AI Platform Engineer chuyên thiết kế hạ tầng suy luận mô hình lớn.',
-        goalEmbedding: makeDeterministicVector(402, 1024),
-        cvParsedData: maiCvParsedData,
-        interviewCredits: 2,
-        faceReferenceR2Key: 'kyc/2026/stu-mai-face-ref-v1.jpg',
-        faceEmbedding: makeDeterministicVector(102, 512),
-      },
-    ])
-    .returning();
-
   // =========================================================================
-  // 5. COURSES (4 Published Courses with complete 6-session Syllabus Templates)
+  // 5. COURSES & COURSE SKILLS (Tables 8–9/32)
   // =========================================================================
   const [courseAi, courseSwe, courseData, coursePython] = await db
     .insert(courses)
@@ -521,58 +446,50 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         title: 'Kỹ sư AI Thực chiến: RAG, Agents & LLMOps',
         slug: 'ky-su-ai-thuc-chien-rag-agents-llmops',
         shortDescription:
-          'Làm chủ kiến trúc Hybrid RAG (pgvector + BM25 RRF), Multi-Agent Orchestration, Function Calling và triển khai hệ thống AI Production chuẩn doanh nghiệp.',
-        descriptionMd: `### Mục tiêu chương trình đào tạo
-Khóa học **Kỹ sư AI Thực chiến: RAG, Agents & LLMOps** được thiết kế dành riêng cho các lập trình viên muốn vượt qua giai đoạn viết kịch bản thử nghiệm trên Notebook để làm chủ toàn diện kiến trúc **Production AI System**.
-
-- **Kiến trúc Hybrid RAG chuyên sâu**: Kết hợp tìm kiếm ngữ nghĩa Dense Vector (\`pgvector\` HNSW) và tìm kiếm từ khóa chính xác BM25 (\`tsvector\`) với thuật toán **Reciprocal Rank Fusion (RRF)** và **Cross-Encoder Reranker**.
-- **Agentic Workflows & Function Calling**: Kiểm soát chặt chẽ đầu ra có cấu trúc bằng **Pydantic v2**, điều phối đa tác tử (Multi-Agent) và thiết lập hàng rào bảo mật chống Prompt Injection.
-- **LLMOps & Giám sát chất lượng**: Đánh giá tự động bằng bộ chỉ số **Ragas** (Faithfulness, Context Precision), tối ưu độ trễ bằng Semantic Cache trên Redis và đóng gói dịch vụ với Docker/FastAPI.`,
+          'Làm chủ kiến trúc Hybrid RAG (pgvector + BM25 RRF), Multi-Agent Orchestration, Function Calling và triển khai AI Production.',
+        descriptionMd:
+          'Chương trình đào tạo chuyên sâu thiết kế hệ thống Production AI: từ FastAPI SSE Gateway, Hybrid RAG kết hợp pgvector HNSW và tsvector RRF, Function Calling với Pydantic v2 đến đánh giá tự động bằng Ragas và bảo mật Guardrails.',
         thumbnailUrl: '/assets/aistudio/image_087a245c.png',
         difficultyLevel: 2,
         status: 'PUBLISHED',
-        embedding: makeDeterministicVector(501, 1024),
+        embedding: computeSemanticEmbedding1024(
+          'Kỹ sư AI Thực chiến Hybrid RAG pgvector BM25 RRF Multi-Agent Function Calling FastAPI Ragas LLMOps'
+        ),
         syllabusTemplate: [
           {
             order: 1,
-            title: 'Kiến trúc Hệ thống AI Production & Xử lý Bất đồng bộ với Python AsyncIO',
-            description:
-              'Thiết kế cổng LLM Gateway chịu tải cao với FastAPI, quản lý vòng đời kết nối bất đồng bộ, cơ chế Retry/Exponential Backoff và streaming phản hồi thời gian thực qua Server-Sent Events (SSE).',
+            title: 'Kiến trúc AI Production & Xử lý Bất đồng bộ với FastAPI / SSE',
+            description: 'Thiết kế cổng LLM Gateway chịu tải cao, quản lý timeout/retry và streaming SSE.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 2,
-            title: 'Chiến lược Chunking Đa tầng & Lưu trữ Vector trên PostgreSQL pgvector',
-            description:
-              'Phân tích ưu nhược điểm của Fixed-size, Recursive Markdown và Semantic Chunking. Cấu hình chỉ mục HNSW trên pgvector (m, ef_construction) và thiết kế lược đồ phân quyền tài liệu.',
-            activityTags: ['THEORY', 'LIVE_CODING', 'EXERCISE_REVIEW'],
+            title: 'Chiến lược Chunking Đa tầng & Chỉ mục Vector HNSW trên pgvector',
+            description: 'Thiết kế lược đồ tài liệu phân quyền và cấu hình chỉ mục HNSW m, ef_construction.',
+            activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 3,
             title: 'Thuật toán Hybrid Search (Dense + BM25) & Reciprocal Rank Fusion (RRF)',
-            description:
-              'Khắc phục điểm mù của Vector Search đối với mã định danh, tên riêng và thuật ngữ chuyên ngành bằng kết hợp Full-Text Search (tsvector) cùng thuật toán hợp nhất hạng RRF và Reranking.',
+            description: 'Kết hợp pgvector cosine và PostgreSQL tsvector với RRF k=60 và Cross-Encoder Rerank.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 4,
             title: 'Function Calling, Structured Outputs & Điều phối ReAct Agent',
-            description:
-              'Xây dựng công cụ (Tools) an toàn với Pydantic v2 JSON Schema, xử lý vòng lặp suy luận - hành động (Reasoning + Acting) và kiểm soát giới hạn bước chạy của Agent.',
-            activityTags: ['THEORY', 'LIVE_CODING', 'WORKSHOP'],
+            description: 'Kiểm soát đầu ra JSON Schema bằng Pydantic v2 và giới hạn vòng lặp suy luận Agent.',
+            activityTags: ['LIVE_CODING', 'WORKSHOP'],
           },
           {
             order: 5,
-            title: 'LLMOps: Đánh giá Hệ thống RAG với Ragas, Guardrails & Tối ưu Chi phí',
-            description:
-              'Thiết lập bộ kiểm thử tự động đo lường Faithfulness, Answer Relevancy, Context Recall; tích hợp Semantic Caching trên Redis và bảo vệ hệ thống trước tấn công Prompt Injection.',
+            title: 'LLMOps: Đánh giá Hệ thống RAG với Ragas, Guardrails & Semantic Cache',
+            description: 'Đo lường Faithfulness, Context Precision và phòng chống Prompt Injection.',
             activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
           },
           {
             order: 6,
-            title: 'Bảo vệ Đồ án Tốt nghiệp & Đánh giá Kiến trúc AI Toàn diện',
-            description:
-              'Tổng kết kiến trúc End-to-End, rà soát hiệu năng truy xuất và thực hiện bài thi sát hạch chứng chỉ kỹ sư AI dưới sự giám sát trực tuyến.',
+            title: 'Bảo vệ Đồ án Hệ thống AI & Tổng ôn Kiến trúc Cuối khóa',
+            description: 'Rà soát kiến trúc End-to-End, tối ưu chi phí suy luận và chuẩn bị thi sát hạch.',
             activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
           },
         ],
@@ -582,57 +499,50 @@ Khóa học **Kỹ sư AI Thực chiến: RAG, Agents & LLMOps** được thiế
         title: 'Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems',
         slug: 'kien-truc-backend-chuyen-sau-typescript-postgresql-distributed-systems',
         shortDescription:
-          'Xây dựng hệ thống Backend chịu tải cao với Node.js/TypeScript, Drizzle ORM, thiết kế giao dịch ACID, Idempotent Webhook và kiến trúc bất đồng bộ Redis/BullMQ.',
-        descriptionMd: `### Làm chủ Kiến trúc Backend Hiện đại
-Chương trình tập trung giải quyết các bài toán thực tế trong hệ thống tài chính, thương mại điện tử và nền tảng giáo dục trực tuyến:
-- Thiết kế lược đồ cơ sở dữ liệu chuẩn hóa, khóa bi quan/lạc quan (Pessimistic/Optimistic Locking) và tối ưu chỉ mục PostgreSQL.
-- Xây dựng luồng thanh toán tự động qua Webhook có đảm bảo tính **Idempotency** (bất biến khi nhận thông báo trùng lặp).
-- Quản lý hàng đợi công việc nền với Redis, giám sát nhật ký chuẩn JSON cùng Correlation ID xuyên suốt các tầng dịch vụ.`,
+          'Xây dựng Backend chịu tải cao với Node.js/TypeScript, Drizzle ORM, giao dịch ACID, Idempotent Webhook và Redis/BullMQ.',
+        descriptionMd:
+          'Làm chủ kiến trúc phân tầng Clean Architecture, tối ưu Execution Plan PostgreSQL, khóa đồng thời Pessimistic/Optimistic Locking cho cổng thanh toán SePay Webhook và hệ thống hàng đợi Redis.',
         thumbnailUrl: '/assets/aistudio/image_2a72f9f9.png',
         difficultyLevel: 2,
         status: 'PUBLISHED',
-        embedding: makeDeterministicVector(502, 1024),
+        embedding: computeSemanticEmbedding1024(
+          'Kiến trúc Backend Chuyên sâu TypeScript Node.js Express Drizzle ORM PostgreSQL ACID Idempotent Webhook Redis BullMQ Docker'
+        ),
         syllabusTemplate: [
           {
             order: 1,
-            title: 'Kiến trúc Phân tầng (Clean Layered Architecture) & Kiểm soát Kiểu với TypeScript/Zod',
-            description:
-              'Tổ chức mã nguồn module hóa, chuẩn hóa hợp đồng dữ liệu DTO, xử lý lỗi tập trung và theo dõi truy vết với Correlation ID.',
+            title: 'Clean Layered Architecture & Kiểm soát Hợp đồng API với TypeScript / Zod',
+            description: 'Tổ chức module tách biệt Controller-Service-Repository và chuẩn hóa xử lý lỗi.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 2,
-            title: 'Thiết kế Cơ sở dữ liệu Quan hệ Nâng cao & Tối ưu Truy vấn PostgreSQL',
-            description:
-              'Phân tích Execution Plan với EXPLAIN ANALYZE, lựa chọn chỉ mục B-Tree/GIN/Partial Index và phòng chống lỗi N+1 Query.',
+            title: 'Tối ưu Truy vấn PostgreSQL với EXPLAIN ANALYZE & Partial / GIN Index',
+            description: 'Phân tích kế hoạch thực thi, loại bỏ N+1 Query và thiết kế chỉ mục thực chiến.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 3,
-            title: 'Giao dịch ACID, Khóa Đồng thời (Concurrency Control) & Tích hợp Cổng Thanh toán',
-            description:
-              'Xử lý đối soát biên lai ngân hàng tự động qua Webhook, thiết kế bảng giao dịch bất biến và ngăn chặn lỗi cộng tiền kép.',
+            title: 'Giao dịch ACID, Khóa SELECT FOR UPDATE & Idempotent Payment Webhook',
+            description: 'Đảm bảo đối soát giao dịch ngân hàng bất biến, chống cộng tiền kép khi nhận webhook lặp.',
             activityTags: ['LIVE_CODING', 'WORKSHOP'],
           },
           {
             order: 4,
             title: 'Chiến lược Caching Đa tầng với Redis & Hàng đợi Bất đồng bộ',
-            description:
-              'Triển khai mẫu Cache-Aside, Write-Through, xử lý bài toán Cache Stampede và điều phối tác vụ nặng qua Worker.',
+            description: 'Triển khai Cache-Aside, chống Cache Stampede và xử lý tác vụ nền an toàn.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 5,
             title: 'Bảo mật API (JWT, RBAC, Rate Limiting) & Đóng gói Docker Production',
-            description:
-              'Thiết kế cơ chế phân quyền theo vai trò, bảo vệ hệ thống trước tấn công brute-force và thiết lập quy trình CI/CD tự động.',
+            description: 'Phân quyền chặt chẽ theo vai trò/sở hữu tài nguyên và đóng gói Multi-stage Docker.',
             activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
           },
           {
             order: 6,
-            title: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Hệ thống',
-            description:
-              'Đo kiểm hiệu năng thực tế với k6, phân tích điểm nghẽn cổ chai và hoàn thiện đồ án tốt nghiệp.',
+            title: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Phân tán',
+            description: 'Đo kiểm độ trễ p95/p99, xử lý điểm nghẽn cổ chai và tổng kết đồ án.',
             activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
           },
         ],
@@ -642,50 +552,50 @@ Chương trình tập trung giải quyết các bài toán thực tế trong h�
         title: 'Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse',
         slug: 'ky-su-du-lieu-hien-dai-streaming-kafka-pyspark-lakehouse',
         shortDescription:
-          'Thiết kế hạ tầng Data Pipeline thời gian thực và xử lý dữ liệu lớn với Apache Kafka, PySpark, dbt và kiến trúc Data Lakehouse chuẩn doanh nghiệp.',
-        descriptionMd: `### Kiến tạo Hạ tầng Dữ liệu Doanh nghiệp
-Khóa học trang bị kỹ năng toàn diện để xây dựng đường ống dữ liệu (Data Pipeline) tin cậy, phục vụ cả nhu cầu báo cáo BI lẫn huấn luyện/truy xuất cho hệ thống AI.`,
+          'Thiết kế hạ tầng Data Pipeline thời gian thực và xử lý dữ liệu lớn với Apache Kafka, PySpark, dbt và Data Lakehouse.',
+        descriptionMd:
+          'Trang bị năng lực xây dựng đường ống dữ liệu doanh nghiệp theo kiến trúc Medallion (Bronze-Silver-Gold), xử lý luồng sự kiện Kafka, tối ưu PySpark chống Data Skew và mô hình hóa kho dữ liệu với dbt.',
         thumbnailUrl: '/assets/aistudio/image_cae9b584.png',
         difficultyLevel: 3,
         status: 'PUBLISHED',
-        embedding: makeDeterministicVector(503, 1024),
+        embedding: computeSemanticEmbedding1024(
+          'Kỹ sư Dữ liệu Hiện đại Data Engineering Streaming Apache Kafka PySpark dbt Medallion Lakehouse Star Schema'
+        ),
         syllabusTemplate: [
           {
             order: 1,
-            title: 'Kiến trúc Data Lakehouse & Thiết kế Đường ống Dữ liệu Bền vững',
-            description: 'Phân biệt kiến trúc Medallion (Bronze, Silver, Gold) và tiêu chuẩn chất lượng dữ liệu.',
+            title: 'Kiến trúc Data Lakehouse & Mô hình Medallion (Bronze, Silver, Gold)',
+            description: 'Thiết kế đường ống dữ liệu bền vững, Idempotent Ingestion và Data Governance.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 2,
             title: 'Xử lý Dữ liệu Phân tán Quy mô lớn với Apache Spark & PySpark',
-            description: 'Tối ưu Spark DAG, quản lý bộ nhớ Executor, Partitioning và phòng tránh Data Skew.',
+            description: 'Hiểu sâu Spark DAG, Narrow vs Wide Transformation, Partitioning và xử lý Data Skew.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 3,
             title: 'Thu thập & Xử lý Luồng Sự kiện Thời gian thực với Apache Kafka',
-            description:
-              'Thiết kế Kafka Topic, Consumer Group, đảm bảo ngữ nghĩa Exactly-once và tích hợp Spark Structured Streaming.',
+            description: 'Thiết kế Topic Partition, Consumer Group, Offset Commit và Spark Structured Streaming.',
             activityTags: ['LIVE_CODING', 'WORKSHOP'],
           },
           {
             order: 4,
-            title: 'Analytics Engineering: Chuẩn hóa Kho Dữ liệu với dbt (Data Build Tool)',
-            description: 'Xây dựng mô hình Star Schema, viết kiểm thử dữ liệu tự động và sinh tài liệu Data Lineage.',
+            title: 'Analytics Engineering: Chuẩn hóa Kho Dữ liệu Star Schema với dbt',
+            description: 'Xây dựng Fact/Dimension models, Incremental Materialization và Data Quality Tests.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 5,
-            title: 'Tích hợp Vector Store & Feature Store cho Hệ thống AI/ML',
-            description:
-              'Đồng bộ dữ liệu từ tầng Gold sang PostgreSQL pgvector để cấp ngữ cảnh tươi mới cho ứng dụng RAG.',
+            title: 'Đồng bộ Feature Store & Vector Store từ tầng Gold cho Hệ thống AI',
+            description: 'Kết nối đường ống Lakehouse cấp dữ liệu sạch theo lịch cho PostgreSQL pgvector.',
             activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
           },
           {
             order: 6,
-            title: 'Bảo vệ Đồ án Data Pipeline & Sát hạch Cuối khóa',
-            description: 'Đánh giá kiến trúc đường ống dữ liệu End-to-End và kiểm tra năng lực kỹ thuật.',
+            title: 'Bảo vệ Đồ án Data Pipeline End-to-End & Tổng ôn Cuối khóa',
+            description: 'Giám sát SLA đường ống dữ liệu, xử lý Backfill và chuẩn bị thi sát hạch.',
             activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
           },
         ],
@@ -695,50 +605,50 @@ Khóa học trang bị kỹ năng toàn diện để xây dựng đường ống
         title: 'Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI',
         slug: 'lap-trinh-python-sql-thuc-chien-cho-ky-su-du-lieu-ai',
         shortDescription:
-          'Xây dựng nền tảng cốt lõi vững chắc về Python hiện đại (Type Hints, OOP, AsyncIO) và truy vấn SQL phân tích chuyên sâu trên PostgreSQL.',
-        descriptionMd: `### Nền tảng Vững chắc cho Lộ trình AI & Data
-Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm chủ cấu trúc dữ liệu, xử lý bất đồng bộ trong Python và viết các truy vấn SQL phân tích phức tạp (CTE, Window Functions, JSONB) trên PostgreSQL.`,
+          'Xây dựng nền tảng cốt lõi vững chắc về Python hiện đại (Type Hints, OOP, Pytest, AsyncIO) và SQL phân tích trên PostgreSQL.',
+        descriptionMd:
+          'Khóa học nền tảng chuẩn kỹ sư: rèn luyện Python sạch với Type Hints, Generator, kiểm thử tự động Pytest, lập trình bất đồng bộ AsyncIO/httpx và truy vấn SQL phân tích chuyên sâu (JOIN, CTE, Window Functions, JSONB).',
         thumbnailUrl: '/assets/aistudio/image_d79fa6f8.png',
         difficultyLevel: 1,
         status: 'PUBLISHED',
-        embedding: makeDeterministicVector(504, 1024),
+        embedding: computeSemanticEmbedding1024(
+          'Lập trình Python SQL Thực chiến nền tảng Type Hints Generator OOP Pytest AsyncIO PostgreSQL CTE Window Functions'
+        ),
         syllabusTemplate: [
           {
             order: 1,
-            title: 'Tư duy Python Hiện đại: Cấu trúc Dữ liệu, Type Hints & Quản lý Bộ nhớ',
-            description: 'Làm chủ List/Dict Comprehension, Generator, Decorator và chuẩn kiểm tra kiểu tĩnh.',
+            title: 'Tư duy Python Hiện đại: Cấu trúc Dữ liệu, Type Hints & Generator',
+            description: 'Tối ưu bộ nhớ với Generator/Iterator, Comprehension và kiểm tra kiểu tĩnh.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 2,
             title: 'Lập trình Hướng đối tượng (OOP), Xử lý Ngoại lệ & Kiểm thử với Pytest',
-            description: 'Thiết kế module tái sử dụng, sử dụng Pydantic cơ bản và viết Unit Test chuẩn kỹ sư.',
+            description: 'Thiết kế module sạch, chuẩn hóa dữ liệu đầu vào và viết Unit Test với Pytest fixture.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 3,
             title: 'Lập trình Bất đồng bộ (AsyncIO) & Thu thập Dữ liệu qua HTTP API',
-            description: 'Hiểu rõ Event Loop, sử dụng httpx bất đồng bộ và xử lý đồng thời hàng trăm yêu cầu mạng.',
+            description: 'Làm chủ Event Loop, asyncio.gather, Semaphore giới hạn tải và httpx.AsyncClient.',
             activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
           },
           {
             order: 4,
-            title: 'Thiết kế Cơ sở Dữ liệu Quan hệ & Truy vấn SQL Cốt lõi trên PostgreSQL',
-            description: 'Chuẩn hóa bảng, ràng buộc khóa ngoại, các phép kết nối JOIN và gom nhóm dữ liệu.',
+            title: 'Thiết kế CSDL Quan hệ, Ràng buộc Toàn vẹn & Truy vấn JOIN trên PostgreSQL',
+            description: 'Chuẩn hóa 3NF, khóa ngoại, giao dịch cơ bản và gom nhóm GROUP BY / HAVING.',
             activityTags: ['THEORY', 'LIVE_CODING'],
           },
           {
             order: 5,
             title: 'SQL Phân tích Nâng cao: CTE, Window Functions & Truy vấn JSONB',
-            description:
-              'Giải quyết các bài toán xếp hạng, tính tổng lũy kế, phân tích cohort và trích xuất dữ liệu bán cấu trúc.',
+            description: 'Ứng dụng ROW_NUMBER, DENSE_RANK, LAG/LEAD và Keyset Pagination hiệu năng cao.',
             activityTags: ['LIVE_CODING', 'WORKSHOP'],
           },
           {
             order: 6,
-            title: 'Xây dựng Ứng dụng Tổng hợp Python + PostgreSQL & Thi Cuối khóa',
-            description:
-              'Kết nối Python với PostgreSQL qua connection pool, hoàn thiện dự án thực tế và làm bài thi sát hạch.',
+            title: 'Ứng dụng Tổng hợp Python + PostgreSQL Connection Pool & Tổng kết',
+            description: 'Kết nối Python bất đồng bộ với PostgreSQL, chống SQL Injection và hoàn thiện dự án.',
             activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
           },
         ],
@@ -746,9 +656,6 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     ])
     .returning();
 
-  // =========================================================================
-  // 6. COURSE SKILLS (Prerequisite & Learning Outcome Mappings)
-  // =========================================================================
   await db.insert(courseSkills).values([
     { courseId: courseAi!.id, skillId: skPython!.id, skillRole: 'PREREQUISITE', targetWeight: 1.0 },
     { courseId: courseAi!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
@@ -759,2193 +666,3046 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
     { courseId: courseAi!.id, skillId: skEval!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
     { courseId: courseSwe!.id, skillId: skNode!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseSwe!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
+    { courseId: courseSwe!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.1 },
     { courseId: courseSwe!.id, skillId: skSysDesign!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
     { courseId: courseSwe!.id, skillId: skDocker!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
     { courseId: courseData!.id, skillId: skPython!.id, skillRole: 'PREREQUISITE', targetWeight: 1.0 },
-    { courseId: courseData!.id, skillId: skSqlVec!.id, skillRole: 'PREREQUISITE', targetWeight: 1.0 },
     { courseId: courseData!.id, skillId: skSparkKafka!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseData!.id, skillId: skDbt!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
-    { courseId: courseData!.id, skillId: skDocker!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
+    { courseId: courseData!.id, skillId: skDbt!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: courseData!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
     { courseId: coursePython!.id, skillId: skPython!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
     { courseId: coursePython!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: coursePython!.id, skillId: skFastApi!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 0.8 },
   ]);
 
   // =========================================================================
-  // 7. COHORTS (4 Cohorts — 1 per course, 10,000 VND tuition, 0 enrolled)
+  // 6. COHORTS (Table 10/32) — All 10,000 VND for real VietQR SePay testing
   // =========================================================================
-  const [cohortAiK01, cohortSweK01, cohortDataK01, cohortPyK01] = await db
+  const [cohortPyK01, cohortAiK01, cohortAiK02, cohortSweK01, cohortDataK01] = await db
     .insert(cohorts)
     .values([
       {
-        courseId: courseAi!.id,
-        instructorId: instKhoaAcc!.id,
-        code: 'AI-ENG-2026-K01',
-        name: 'Đợt K01 — Kỹ sư AI Thực chiến (Tối Thứ 3 & Thứ 5)',
-        status: 'OPENING',
-        curriculumVersion: 'v2.4-2026',
-        techStackNotes:
-          'Python 3.11 · FastAPI · PostgreSQL 16 (pgvector 0.7) · OpenAI / Gemini SDK · Redis 7 · Docker',
-        tuitionVnd: 10000,
-        enrolledCount: 0,
-        enrollmentOpenAt: new Date('2026-02-01T00:00:00Z'),
-        startDate: '2026-03-03',
-        endDate: '2026-05-14',
-        scheduleSlots: [
-          { dayOfWeek: 2, startTime: '19:30', endTime: '21:30' },
-          { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
-        ],
-      },
-      {
-        courseId: courseSwe!.id,
-        instructorId: instHaAcc!.id,
-        code: 'SWE-ARCH-2026-K01',
-        name: 'Đợt K01 — Kiến trúc Backend Chuyên sâu (Tối Thứ 4 & Chủ Nhật)',
-        status: 'OPENING',
-        curriculumVersion: 'v1.8-2026',
-        techStackNotes: 'Node.js 22 · TypeScript 5.8 · Express · Drizzle ORM · PostgreSQL 16 · Redis · Docker',
-        tuitionVnd: 10000,
-        enrolledCount: 0,
-        enrollmentOpenAt: new Date('2026-03-01T00:00:00Z'),
-        startDate: '2026-03-25',
-        endDate: '2026-05-26',
-        scheduleSlots: [
-          { dayOfWeek: 3, startTime: '19:30', endTime: '21:30' },
-          { dayOfWeek: 0, startTime: '19:30', endTime: '21:30' },
-        ],
-      },
-      {
-        courseId: courseData!.id,
-        instructorId: instHaAcc!.id,
-        code: 'DATA-PIPE-2026-K01',
-        name: 'Đợt K01 — Kỹ sư Data Streaming & Lakehouse (Thứ 7 & Chủ Nhật)',
-        status: 'OPENING',
-        curriculumVersion: 'v1.2-2026',
-        techStackNotes: 'Python 3.11 · Apache Spark 3.5 · Apache Kafka · dbt Core · PostgreSQL · Docker',
-        tuitionVnd: 10000,
-        enrolledCount: 0,
-        enrollmentOpenAt: new Date('2026-04-01T00:00:00Z'),
-        startDate: '2026-06-13',
-        endDate: '2026-08-02',
-        scheduleSlots: [
-          { dayOfWeek: 6, startTime: '14:00', endTime: '16:30' },
-          { dayOfWeek: 0, startTime: '14:00', endTime: '16:30' },
-        ],
-      },
-      {
         courseId: coursePython!.id,
-        instructorId: instKhoaAcc!.id,
         code: 'PY-SQL-2026-K01',
-        name: 'Đợt K01 — Lập trình Python & SQL Thực chiến (Tối Thứ 2 & Thứ 5)',
-        status: 'OPENING',
-        curriculumVersion: 'v3.0-2026',
-        techStackNotes: 'Python 3.11 · AsyncIO · Pytest · PostgreSQL 16 · CTE & Window Functions',
+        name: 'Khóa K01 · Python & SQL Thực chiến (Đã tốt nghiệp)',
+        instructorId: instKhoaAcc!.id,
+        curriculumVersion: 'v2026.1',
+        techStackNotes: 'Python 3.12 · AsyncIO · httpx · Pytest · PostgreSQL 16',
         tuitionVnd: 10000,
-        enrolledCount: 0,
-        enrollmentOpenAt: new Date('2026-01-01T00:00:00Z'),
+        maxSeats: 35,
+        enrolledCount: 1, // An (COMPLETED)
+        enrollmentOpenAt: new Date('2025-12-15T00:00:00Z'),
         startDate: '2026-01-05',
-        endDate: '2026-05-25',
+        endDate: '2026-01-25',
         scheduleSlots: [
           { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
           { dayOfWeek: 4, startTime: '19:30', endTime: '21:30' },
         ],
+        replayExpiresAt: new Date('2027-06-30T23:59:59Z'),
+        status: 'COMPLETED',
+      },
+      {
+        courseId: courseAi!.id,
+        code: 'AI-ENG-2026-K01',
+        name: 'Khóa K01 · Kỹ sư AI Thực chiến (Đang học T3 & T6)',
+        instructorId: instKhoaAcc!.id,
+        curriculumVersion: 'v2026.1',
+        techStackNotes: 'Python 3.12 · FastAPI · PostgreSQL pgvector · Pydantic v2 · Ragas',
+        tuitionVnd: 10000,
+        maxSeats: 35,
+        enrolledCount: 2, // An (ACTIVE) + Mai (ACTIVE)
+        enrollmentOpenAt: new Date('2026-10-10T00:00:00Z'),
+        startDate: '2026-11-03',
+        endDate: '2026-11-28',
+        scheduleSlots: [
+          { dayOfWeek: 2, startTime: '19:30', endTime: '21:30' },
+          { dayOfWeek: 5, startTime: '19:30', endTime: '21:30' },
+        ],
+        replayExpiresAt: new Date('2027-11-30T23:59:59Z'),
+        status: 'ONGOING',
+      },
+      {
+        courseId: courseAi!.id,
+        code: 'AI-ENG-2026-K02',
+        name: 'Khóa K02 · Kỹ sư AI Thực chiến (Mở tuyển sinh T12/2026)',
+        instructorId: instKhoaAcc!.id,
+        curriculumVersion: 'v2026.2',
+        techStackNotes: 'Python 3.12 · FastAPI · Hybrid RAG RRF · Multi-Agent LangGraph · Guardrails',
+        tuitionVnd: 10000,
+        maxSeats: 30,
+        enrolledCount: 0,
+        enrollmentOpenAt: new Date('2026-11-01T00:00:00Z'),
+        startDate: '2026-12-02',
+        endDate: '2026-12-22',
+        scheduleSlots: [
+          { dayOfWeek: 3, startTime: '19:30', endTime: '21:30' },
+          { dayOfWeek: 6, startTime: '19:30', endTime: '21:30' },
+        ],
+        replayExpiresAt: new Date('2027-12-31T23:59:59Z'),
+        status: 'OPENING',
+      },
+      {
+        courseId: courseSwe!.id,
+        code: 'SWE-ARCH-2026-K01',
+        name: 'Khóa K01 · Kiến trúc Backend Chuyên sâu (Đang học T4 & CN)',
+        instructorId: instHaAcc!.id,
+        curriculumVersion: 'v2026.1',
+        techStackNotes: 'Node.js 22 · TypeScript 5 · Drizzle ORM · PostgreSQL 16 · Redis 7 · Docker',
+        tuitionVnd: 10000,
+        maxSeats: 35,
+        enrolledCount: 1, // An (ACTIVE)
+        enrollmentOpenAt: new Date('2026-10-12T00:00:00Z'),
+        startDate: '2026-11-04',
+        endDate: '2026-11-29',
+        scheduleSlots: [
+          { dayOfWeek: 3, startTime: '19:30', endTime: '21:30' },
+          { dayOfWeek: 0, startTime: '19:30', endTime: '21:30' },
+        ],
+        replayExpiresAt: new Date('2027-11-30T23:59:59Z'),
+        status: 'ONGOING',
+      },
+      {
+        courseId: courseData!.id,
+        code: 'DATA-PIPE-2026-K01',
+        name: 'Khóa K01 · Kỹ sư Dữ liệu Hiện đại (Mở tuyển sinh T12/2026)',
+        instructorId: instHaAcc!.id,
+        curriculumVersion: 'v2026.1',
+        techStackNotes: 'Apache Kafka · PySpark 3.5 · dbt Core · Medallion Lakehouse · PostgreSQL',
+        tuitionVnd: 10000,
+        maxSeats: 30,
+        enrolledCount: 0,
+        enrollmentOpenAt: new Date('2026-11-05T00:00:00Z'),
+        startDate: '2026-12-05',
+        endDate: '2026-12-21',
+        scheduleSlots: [
+          { dayOfWeek: 6, startTime: '14:00', endTime: '16:00' },
+          { dayOfWeek: 0, startTime: '14:00', endTime: '16:00' },
+        ],
+        replayExpiresAt: new Date('2027-12-31T23:59:59Z'),
+        status: 'OPENING',
       },
     ])
     .returning();
 
   // =========================================================================
-  // 8. CLASS SESSIONS (24 Sessions: Complete 6-session schedules for 4 cohorts)
+  // 7. CURRICULUM CONTENT DEFINITIONS FOR ALL 4 COURSES (Balanced A/B/C/D!)
   // =========================================================================
-  const insertedSessions = await db
-    .insert(classSessions)
-    .values([
-      // --- AI-ENG-2026-K01 (Sessions 1-5 REPLAY_READY, Session 6 SCHEDULED for live teaching & final review) ---
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 1,
-        title: 'Kiến trúc Hệ thống AI Production & Xử lý Bất đồng bộ với Python AsyncIO',
-        descriptionMd:
-          'Xây dựng nền tảng dịch vụ AI Gateway bằng FastAPI + AsyncIO, quản lý Connection Pool, cơ chế Exponential Backoff khi gọi LLM API và truyền phát câu trả lời theo thời gian thực qua Server-Sent Events (SSE).',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-03T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-03T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-ai-k01-s01',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s01/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 1: Phân biệt kiến trúc thử nghiệm trên Notebook và hệ thống AI Production (kiểm soát độ trễ p95, giới hạn tốc độ gọi API và xử lý lỗi tự động). Sử dụng httpx bất đồng bộ cùng FastAPI và truyền phát phản hồi qua Server-Sent Events (SSE) để giảm thời gian nhận từ đầu tiên xuống dưới 400ms.',
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 2,
-        title: 'Chiến lược Chunking Đa tầng & Lưu trữ Vector trên PostgreSQL pgvector',
-        descriptionMd:
-          'Thiết kế quy trình bóc tách tài liệu PDF/Markdown theo cấu trúc ngữ nghĩa, lựa chọn mô hình Embedding 1024 chiều và cấu hình chỉ mục HNSW trên PostgreSQL pgvector.',
-        activityTags: ['THEORY', 'LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-03-05T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-05T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-ai-k01-s02',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s02/master.m3u8',
-        durationSeconds: 5700,
-        aiSummaryMd:
-          'Trọng tâm buổi 2: Kết hợp tách tài liệu theo tiêu đề Markdown và đệ quy với độ gối đầu (chunk overlap) 10%–15% để giữ trọn ngữ cảnh đoạn văn. Thiết lập chỉ mục HNSW trên PostgreSQL pgvector với khoảng cách Cosine (m = 16, ef_construction = 64) giúp cân bằng tốc độ truy vấn và dung lượng bộ nhớ.',
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 3,
-        title: 'Thuật toán Hybrid Search (Dense + BM25) & Reciprocal Rank Fusion (RRF)',
-        descriptionMd:
-          'Kết hợp tìm kiếm ngữ nghĩa pgvector với tìm kiếm từ khóa PostgreSQL Full-Text Search (tsvector/GIN), hợp nhất bảng xếp hạng bằng RRF (k=60) và tinh chỉnh kết quả với Cross-Encoder Reranker.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-10T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-10T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-ai-k01-s03',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s03/master.m3u8',
-        durationSeconds: 6000,
-        aiSummaryMd:
-          'Trọng tâm buổi 3: Khắc phục hạn chế của tìm kiếm vector đối với mã sản phẩm và thuật ngữ chuyên ngành bằng cách kết hợp tìm kiếm toàn văn BM25. Hợp nhất thứ hạng bằng thuật toán Reciprocal Rank Fusion (RRF với k = 60), chấm điểm lại với Cross-Encoder Reranker và lọc phân quyền truy cập tài liệu ngay ở tầng SQL.',
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 4,
-        title: 'Function Calling, Structured Outputs & Điều phối ReAct Agent',
-        descriptionMd:
-          'Xây dựng các công cụ (Tools) có kiểm tra kiểu dữ liệu nghiêm ngặt bằng Pydantic v2, xử lý vòng lặp suy luận ReAct và kết nối Agent với hệ thống cơ sở dữ liệu nghiệp vụ.',
-        activityTags: ['THEORY', 'LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-03-12T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-12T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-ai-k01-s04',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s04/master.m3u8',
-        durationSeconds: 5850,
-        aiSummaryMd:
-          'Trọng tâm buổi 4: Định nghĩa lược đồ tham số rõ ràng bằng Pydantic v2 để mô hình sinh lời gọi hàm chính xác. Kiểm soát vòng lặp suy luận ReAct (giới hạn tối đa 3–5 bước) và tự động phản hồi lỗi kiểm tra kiểu để Agent tự hiệu chỉnh tham số đầu vào.',
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 5,
-        title: 'LLMOps: Đánh giá Hệ thống RAG với Ragas, Guardrails & Tối ưu Chi phí',
-        descriptionMd:
-          'Thực hành đo lường định lượng chất lượng hệ thống RAG (Faithfulness, Answer Relevancy, Context Precision), thiết lập Semantic Cache trên Redis và bảo vệ hệ thống trước Prompt Injection.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-03-17T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-17T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-ai-k01-s05',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/ai-k01/s05/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 5: Đo lường chất lượng hệ thống RAG qua 4 chỉ số Ragas (Context Precision, Context Recall, Faithfulness và Answer Relevancy). Thiết lập bộ nhớ đệm ngữ nghĩa (Semantic Cache) trên Redis giúp tiết kiệm 35%–50% chi phí gọi mô hình cho các truy vấn tương tự.',
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 6,
-        title: 'Bảo vệ Đồ án Tốt nghiệp & Đánh giá Kiến trúc AI Toàn diện',
-        descriptionMd:
-          'Tổng duyệt kiến trúc dự án cuối khóa, kiểm tra hiệu năng truy xuất thực tế và hướng dẫn quy chế phòng thi sát hạch chứng chỉ có giám sát AI Proctoring.',
-        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-03-19T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-19T14:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-ai-k01-s06',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Tài liệu chuẩn bị cho Buổi 6: Danh mục nghiệm thu đồ án Production AI (Docker Compose, chỉ mục pgvector, kiểm thử Ragas đạt Faithfulness >= 0.85) và hướng dẫn quy chế thi sát hạch cuối khóa.',
-      },
-
-      // --- PY-SQL-2026-K01 (Sessions 1-5 REPLAY_READY, Session 6 SCHEDULED) ---
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 1,
-        title: 'Tư duy Python Hiện đại: Cấu trúc Dữ liệu, Type Hints & Quản lý Bộ nhớ',
-        descriptionMd:
-          'Làm chủ Python 3.11, List/Dict Comprehension, Generator, Decorator và chuẩn kiểm tra kiểu tĩnh.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-01-05T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-05T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-py-k01-s01',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s01/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 1: Tối ưu bộ nhớ với Generator (yield), cấu trúc bảng băm dict/set đạt tốc độ tra cứu O(1) và chuẩn khai báo kiểu tĩnh Type Hints trên Python 3.11.',
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 2,
-        title: 'Lập trình Hướng đối tượng (OOP), Xử lý Ngoại lệ & Kiểm thử với Pytest',
-        descriptionMd:
-          'Thiết kế module tái sử dụng, kiểm tra dữ liệu với Pydantic cơ bản và viết Unit Test bằng pytest.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-01-08T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-08T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-py-k01-s02',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s02/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 2: Thiết kế lớp đối tượng dễ bảo trì, quản lý tài nguyên an toàn với Context Manager và viết kiểm thử tự động nhiều bộ dữ liệu biên bằng Pytest.',
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 3,
-        title: 'Lập trình Bất đồng bộ (AsyncIO) & Thu thập Dữ liệu qua HTTP API',
-        descriptionMd:
-          'Hiểu rõ Event Loop, quản lý Connection Pool và httpx bất đồng bộ.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-01-12T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-12T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-py-k01-s03',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s03/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 3: Cơ chế hoạt động của Event Loop, chạy tác vụ mạng đồng thời bằng asyncio.gather và kiểm soát giới hạn kết nối với Semaphore.',
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 4,
-        title: 'Thiết kế Cơ sở Dữ liệu Quan hệ & Truy vấn SQL Cốt lõi trên PostgreSQL',
-        descriptionMd:
-          'Chuẩn hóa bảng dữ liệu, ràng buộc khóa ngoại, JOIN và tối ưu chỉ mục B-Tree.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-01-15T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-15T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-py-k01-s04',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s04/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 4: Chuẩn hóa lược đồ quan hệ 3NF, đọc hiểu kế hoạch thực thi EXPLAIN ANALYZE và thiết kế chỉ mục B-Tree trên PostgreSQL.',
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 5,
-        title: 'SQL Phân tích Nâng cao: CTE, Window Functions & Truy vấn JSONB',
-        descriptionMd:
-          'Giải quyết các bài toán xếp hạng, tính tổng lũy kế, phân tích cohort và truy vấn JSONB + GIN.',
-        activityTags: ['LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-01-19T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-19T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-py-k01-s05',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/py-k01/s05/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Trọng tâm buổi 5: Ứng dụng bảng tạm CTE, các hàm cửa sổ (RANK, DENSE_RANK, LAG) để phân tích dữ liệu chuỗi thời gian và đánh chỉ mục GIN cho cột JSONB.',
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        instructorId: instKhoaAcc!.id,
-        sessionOrder: 6,
-        title: 'Xây dựng Ứng dụng Tổng hợp Python + PostgreSQL & Chuẩn bị Thi Cuối khóa',
-        descriptionMd:
-          'Kết nối Python AsyncPG với PostgreSQL qua Keyset Pagination, tổng kết kiến thức trước kỳ thi tốt nghiệp.',
-        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-01-22T12:30:00Z'),
-        scheduledEnd: new Date('2026-01-22T14:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-py-k01-s06',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd:
-          'Tài liệu chuẩn bị cho Buổi 6: Kỹ thuật phân trang Keyset Pagination với AsyncPG và tổng duyệt kiến trúc dự án Python + PostgreSQL.',
-      },
-
-      // --- SWE-ARCH-2026-K01 (s01-s03 REPLAY_READY, s04-s06 SCHEDULED) ---
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 1,
-        title: 'Kiến trúc Phân tầng (Clean Layered Architecture) & Kiểm soát Kiểu với TypeScript/Zod',
-        descriptionMd:
-          'Tổ chức mã nguồn module hóa, chuẩn hóa hợp đồng dữ liệu DTO, xử lý lỗi tập trung và theo dõi truy vết với Correlation ID.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-25T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-25T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-swe-k01-s01',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/swe-k01/s01/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd: 'Trọng tâm buổi 1: Kiến trúc 3 tầng Routes - Services - Repositories, kiểm tra dữ liệu đầu vào với Zod và gắn mã truy vết Correlation ID.',
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 2,
-        title: 'Thiết kế Cơ sở dữ liệu Quan hệ Nâng cao & Tối ưu Truy vấn PostgreSQL',
-        descriptionMd:
-          'Phân tích Execution Plan với EXPLAIN ANALYZE, lựa chọn chỉ mục B-Tree/GIN/Partial Index và phòng chống lỗi N+1 Query.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-03-29T12:30:00Z'),
-        scheduledEnd: new Date('2026-03-29T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-swe-k01-s02',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/swe-k01/s02/master.m3u8',
-        durationSeconds: 5550,
-        aiSummaryMd: 'Trọng tâm buổi 2: Cách đọc kế hoạch thực thi EXPLAIN (ANALYZE, BUFFERS) và thiết kế chỉ mục kết hợp (Composite / Partial Index).',
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 3,
-        title: 'Giao dịch ACID, Khóa Đồng thời (Concurrency Control) & Tích hợp Cổng Thanh toán',
-        descriptionMd:
-          'Xử lý đối soát biên lai ngân hàng tự động qua Webhook, thiết kế bảng giao dịch bất biến và ngăn chặn lỗi cộng tiền kép.',
-        activityTags: ['LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-04-01T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-01T14:30:00Z'),
-        status: 'REPLAY_READY',
-        livekitRoomName: 'room-swe-k01-s03',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: 'recordings/swe-k01/s03/master.m3u8',
-        durationSeconds: 5400,
-        aiSummaryMd: 'Trọng tâm buổi 3: Khóa dòng dữ liệu với SELECT FOR UPDATE, đảm bảo tính bất biến (Idempotency) và xử lý SePay Webhook an toàn.',
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 4,
-        title: 'Chiến lược Caching Đa tầng với Redis & Hàng đợi Bất đồng bộ (BullMQ)',
-        descriptionMd:
-          'Triển khai mẫu Cache-Aside, Write-Through, xử lý bài toán Cache Stampede và điều phối tác vụ nặng qua Worker.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-04-05T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-05T14:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-swe-k01-s04',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Tài liệu chuẩn bị cho Buổi 4: Chiến lược Redis TTL Jitter và BullMQ Worker.',
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 5,
-        title: 'Bảo mật API (JWT, RBAC, Rate Limiting) & Đóng gói Docker Production',
-        descriptionMd:
-          'Thiết kế cơ chế phân quyền theo vai trò, bảo vệ hệ thống trước tấn công brute-force và thiết lập quy trình CI/CD tự động.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-04-08T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-08T14:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-swe-k01-s05',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Tài liệu chuẩn bị cho Buổi 5: Refresh Token Rotation và Multi-stage Dockerfile.',
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 6,
-        title: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Hệ thống',
-        descriptionMd:
-          'Đo kiểm hiệu năng thực tế với k6, phân tích điểm nghẽn cổ chai và hoàn thiện đồ án tốt nghiệp.',
-        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-04-12T12:30:00Z'),
-        scheduledEnd: new Date('2026-04-12T14:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-swe-k01-s06',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Tài liệu chuẩn bị cho Buổi 6: Kịch bản k6 Load Testing và tổng duyệt đồ án cuối khóa.',
-      },
-
-      // --- DATA-PIPE-2026-K01 (All 6 sessions SCHEDULED on Sat/Sun) ---
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 1,
-        title: 'Kiến trúc Data Lakehouse & Thiết kế Đường ống Dữ liệu Bền vững',
-        descriptionMd: 'Phân biệt kiến trúc Medallion (Bronze, Silver, Gold) và tiêu chuẩn chất lượng dữ liệu.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-06-13T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-13T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s01',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Tài liệu chuẩn bị cho buổi khai giảng đợt DATA-PIPE-2026-K01.',
-      },
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 2,
-        title: 'Xử lý Dữ liệu Phân tán Quy mô lớn với Apache Spark & PySpark',
-        descriptionMd: 'Tối ưu Spark DAG, quản lý bộ nhớ Executor, Partitioning và phòng tránh Data Skew.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-06-14T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-14T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s02',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Nội dung dự kiến cho Buổi 2.',
-      },
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 3,
-        title: 'Thu thập & Xử lý Luồng Sự kiện Thời gian thực với Apache Kafka',
-        descriptionMd: 'Thiết kế Kafka Topic, Consumer Group và tích hợp Spark Structured Streaming.',
-        activityTags: ['LIVE_CODING', 'WORKSHOP'],
-        scheduledStart: new Date('2026-06-20T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-20T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s03',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Nội dung dự kiến cho Buổi 3.',
-      },
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 4,
-        title: 'Analytics Engineering: Chuẩn hóa Kho Dữ liệu với dbt (Data Build Tool)',
-        descriptionMd: 'Xây dựng mô hình Star Schema, viết kiểm thử dữ liệu tự động và sinh tài liệu Data Lineage.',
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        scheduledStart: new Date('2026-06-21T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-21T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s04',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Nội dung dự kiến cho Buổi 4.',
-      },
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 5,
-        title: 'Tích hợp Vector Store & Feature Store cho Hệ thống AI/ML',
-        descriptionMd: 'Đồng bộ dữ liệu từ tầng Gold sang PostgreSQL pgvector để cấp ngữ cảnh cho ứng dụng RAG.',
-        activityTags: ['LIVE_CODING', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-06-27T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-27T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s05',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Nội dung dự kiến cho Buổi 5.',
-      },
-      {
-        cohortId: cohortDataK01!.id,
-        instructorId: instHaAcc!.id,
-        sessionOrder: 6,
-        title: 'Bảo vệ Đồ án Data Pipeline & Sát hạch Cuối khóa',
-        descriptionMd: 'Đánh giá kiến trúc đường ống dữ liệu End-to-End và kiểm tra năng lực kỹ thuật.',
-        activityTags: ['WORKSHOP', 'EXERCISE_REVIEW'],
-        scheduledStart: new Date('2026-06-28T07:00:00Z'),
-        scheduledEnd: new Date('2026-06-28T09:30:00Z'),
-        status: 'SCHEDULED',
-        livekitRoomName: 'room-data-k01-s06',
-        videoProvider: 'R2_HLS_AES128',
-        videoR2Key: null,
-        durationSeconds: 5400,
-        aiSummaryMd: 'Nội dung dự kiến cho Buổi 6.',
-      },
-    ])
-    .returning();
-
-  const [
-    sess1,
-    sess2,
-    sess3,
-    sess4,
-    sess5,
-    sess6,
-    sessPy1,
-    sessPy2,
-    sessPy3,
-    sessPy4,
-    sessPy5,
-    sessPy6,
-    sessSwe1,
-    sessSwe2,
-    sessSwe3,
-    sessSwe4,
-    sessSwe5,
-    sessSwe6,
-  ] = insertedSessions;
-
-  // =========================================================================
-  // 9. SESSION ATTACHMENTS & SUBTITLES
-  // =========================================================================
-  const insertedAttachments = await db
-    .insert(sessionAttachments)
-    .values([
-      {
-        sessionId: sess1!.id,
-        fileName: 'Slide_Buoi_01_FastAPI_AsyncIO_LLM_Gateway.pdf',
-        r2ObjectKey: 'materials/ai-k01/s01/Slide_Buoi_01_FastAPI_AsyncIO_LLM_Gateway.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 4280000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sess2!.id,
-        fileName: 'Slide_Buoi_02_Semantic_Chunking_pgvector_HNSW.pdf',
-        r2ObjectKey: 'materials/ai-k01/s02/Slide_Buoi_02_Semantic_Chunking_pgvector_HNSW.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 5120000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sess3!.id,
-        fileName: 'Slide_Buoi_03_Hybrid_Search_BM25_RRF_Reranker.pdf',
-        r2ObjectKey: 'materials/ai-k01/s03/Slide_Buoi_03_Hybrid_Search_BM25_RRF_Reranker.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 6300000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sess4!.id,
-        fileName: 'Slide_Buoi_04_Function_Calling_Pydantic_ReAct_Agent.pdf',
-        r2ObjectKey: 'materials/ai-k01/s04/Slide_Buoi_04_Function_Calling_Pydantic_ReAct_Agent.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 5800000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sess5!.id,
-        fileName: 'Slide_Buoi_05_LLMOps_Ragas_Evaluation_Guardrails.pdf',
-        r2ObjectKey: 'materials/ai-k01/s05/Slide_Buoi_05_LLMOps_Ragas_Evaluation_Guardrails.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 4950000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sess6!.id,
-        fileName: 'Slide_Buoi_06_Checklist_Nghiem_Thu_Do_An_AI_Production.pdf',
-        r2ObjectKey: 'materials/ai-k01/s06/Slide_Buoi_06_Checklist_Nghiem_Thu_Do_An_AI_Production.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 3600000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sessPy1!.id,
-        fileName: 'Slide_Py01_Python_Data_Structures_Type_Hints.pdf',
-        r2ObjectKey: 'materials/py-k01/s01/Slide_Py01_Python_Data_Structures_Type_Hints.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 3500000,
-        uploadedBy: instKhoaAcc!.id,
-      },
-      {
-        sessionId: sessSwe1!.id,
-        fileName: 'Slide_SWE01_Clean_Layered_Architecture_Zod.pdf',
-        r2ObjectKey: 'materials/swe-k01/s01/Slide_SWE01_Clean_Layered_Architecture_Zod.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 3900000,
-        uploadedBy: instHaAcc!.id,
-      },
-      {
-        sessionId: sessSwe2!.id,
-        fileName: 'Slide_SWE02_PostgreSQL_EXPLAIN_ANALYZE_Indexing.pdf',
-        r2ObjectKey: 'materials/swe-k01/s02/Slide_SWE02_PostgreSQL_EXPLAIN_ANALYZE_Indexing.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 4500000,
-        uploadedBy: instHaAcc!.id,
-      },
-      {
-        sessionId: sessSwe3!.id,
-        fileName: 'Slide_SWE03_ACID_Locking_Idempotent_Webhook.pdf',
-        r2ObjectKey: 'materials/swe-k01/s03/Slide_SWE03_ACID_Locking_Idempotent_Webhook.pdf',
-        mimeType: 'application/pdf',
-        fileSizeBytes: 4700000,
-        uploadedBy: instHaAcc!.id,
-      },
-    ])
-    .returning();
-
-  const [
-    attS1Slide,
-    attS2Slide,
-    attS3Slide,
-    attS4Slide,
-    attS5Slide,
-    attS6Slide,
-    attPy1Slide,
-    attSwe1Slide,
-    attSwe2Slide,
-    attSwe3Slide,
-  ] = insertedAttachments;
-
-  // Subtitles strictly for REPLAY_READY sessions
-  await db.insert(sessionSubtitles).values([
-    { sessionId: sess1!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s01/vi.vtt', isAutoGenerated: true },
-    { sessionId: sess2!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s02/vi.vtt', isAutoGenerated: true },
-    { sessionId: sess3!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s03/vi.vtt', isAutoGenerated: true },
-    { sessionId: sess4!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s04/vi.vtt', isAutoGenerated: true },
-    { sessionId: sess5!.id, languageCode: 'vi', vttR2Key: 'subtitles/ai-k01/s05/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy1!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s01/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy2!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s02/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy3!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s03/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy4!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s04/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessPy5!.id, languageCode: 'vi', vttR2Key: 'subtitles/py-k01/s05/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessSwe1!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s01/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessSwe2!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s02/vi.vtt', isAutoGenerated: true },
-    { sessionId: sessSwe3!.id, languageCode: 'vi', vttR2Key: 'subtitles/swe-k01/s03/vi.vtt', isAutoGenerated: true },
-  ]);
-
-  // =========================================================================
-  // 10. ASSESSMENTS & ASSESSMENT ITEMS (Session Quizzes + Final Exams)
-  // =========================================================================
-  const [
-    quizSess1,
-    quizSess2,
-    quizSess3,
-    quizSess4,
-    quizSess5,
-    quizSess6,
-    finalExamAiK01,
-    quizPy1,
-    quizPy2,
-    quizPy3,
-    quizPy4,
-    quizPy5,
-    quizPy6,
-    finalExamPyK01,
-    quizSwe1,
-    quizSwe2,
-    quizSwe3,
-    quizSwe4,
-    quizSwe5,
-    quizSwe6,
-    finalExamSweK01,
-  ] = await db
-    .insert(assessments)
-    .values([
-      // --- AI-ENG-2026-K01 ---
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess1!.id,
-        title: 'Trắc nghiệm Buổi 1: Kiến trúc AI Gateway, FastAPI & Python AsyncIO',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-08T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess2!.id,
-        title: 'Trắc nghiệm Buổi 2: Chiến lược Chunking & Chỉ mục HNSW trên pgvector',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-10T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess3!.id,
-        title: 'Trắc nghiệm Buổi 3: Thuật toán Hybrid Search (BM25 + Dense) & RRF',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-15T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess4!.id,
-        title: 'Trắc nghiệm Buổi 4: Function Calling, Pydantic Schema & ReAct Agent',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-17T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess5!.id,
-        title: 'Trắc nghiệm Buổi 5: Đánh giá Hệ thống RAG với Ragas & Semantic Cache',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-22T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: sess6!.id,
-        title: 'Trắc nghiệm Buổi 6: Tổng duyệt Kiến trúc Production AI & Bảo mật Hệ thống',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 15,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-24T16:59:59Z'),
-      },
-      {
-        cohortId: cohortAiK01!.id,
-        sessionId: null,
-        title: 'Kỳ thi Sát hạch Tốt nghiệp: Kỹ sư AI Thực chiến (Giám sát AI)',
-        purpose: 'FINAL_EXAM',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 45,
-        maxAttempts: 3,
-        passScorePct: 70,
-        proctoringConfig: { enabled: true, maxViolations: 3, snapshotIntervalSec: 30 },
-        dueAt: new Date('2026-06-14T16:59:59Z'),
-      },
-
-      // --- PY-SQL-2026-K01 ---
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy1!.id,
-        title: 'Trắc nghiệm Python Buổi 1: Cấu trúc Dữ liệu & Type Hints',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-10T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy2!.id,
-        title: 'Trắc nghiệm Python Buổi 2: OOP, Pydantic & Kiểm thử Pytest',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-13T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy3!.id,
-        title: 'Trắc nghiệm Python Buổi 3: AsyncIO & HTTP Connection Pool',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-17T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy4!.id,
-        title: 'Trắc nghiệm Python Buổi 4: Thiết kế Quan hệ & Chỉ mục B-Tree',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-20T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy5!.id,
-        title: 'Trắc nghiệm Python Buổi 5: CTE, Window Functions & JSONB',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-24T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: sessPy6!.id,
-        title: 'Trắc nghiệm Python Buổi 6: Keyset Pagination & Tích hợp Hệ thống',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 10,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-27T16:59:59Z'),
-      },
-      {
-        cohortId: cohortPyK01!.id,
-        sessionId: null,
-        title: 'Kỳ thi Tốt nghiệp: Lập trình Python & SQL Phân tích Thực chiến',
-        purpose: 'FINAL_EXAM',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 30,
-        maxAttempts: 3,
-        passScorePct: 70,
-        proctoringConfig: { enabled: true, maxViolations: 3 },
-        dueAt: new Date('2026-06-25T16:59:59Z'),
-      },
-
-      // --- SWE-ARCH-2026-K01 ---
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe1!.id,
-        title: 'Trắc nghiệm Backend Buổi 1: Clean Layered Architecture & Zod',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-05-30T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe2!.id,
-        title: 'Trắc nghiệm Backend Buổi 2: EXPLAIN ANALYZE & Tối ưu PostgreSQL',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-06-03T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe3!.id,
-        title: 'Trắc nghiệm Backend Buổi 3: Giao dịch ACID & Idempotent Webhook',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-06-06T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe4!.id,
-        title: 'Trắc nghiệm Backend Buổi 4: Redis Cache-Aside & Hàng đợi BullMQ',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'DRAFT',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-06-10T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe5!.id,
-        title: 'Trắc nghiệm Backend Buổi 5: Bảo mật JWT RBAC & Docker Production',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'DRAFT',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-06-13T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: sessSwe6!.id,
-        title: 'Trắc nghiệm Backend Buổi 6: Kiểm thử Chịu tải k6 & Kiến trúc Phân tán',
-        purpose: 'SESSION_ASSIGNMENT',
-        gradingMode: 'AUTO',
-        status: 'DRAFT',
-        durationMinutes: 12,
-        maxAttempts: 5,
-        passScorePct: 70,
-        proctoringConfig: { enabled: false },
-        dueAt: new Date('2026-06-17T16:59:59Z'),
-      },
-      {
-        cohortId: cohortSweK01!.id,
-        sessionId: null,
-        title: 'Kỳ thi Sát hạch Tốt nghiệp: Kiến trúc Backend Chuyên sâu',
-        purpose: 'FINAL_EXAM',
-        gradingMode: 'AUTO',
-        status: 'PUBLISHED',
-        durationMinutes: 30,
-        maxAttempts: 3,
-        passScorePct: 70,
-        proctoringConfig: { enabled: true, maxViolations: 3 },
-        dueAt: new Date('2026-06-26T16:59:59Z'),
-      },
-    ])
-    .returning();
-
-  const sess1Items = buildSessionQuizItems(
-    quizSess1!.id,
-    1,
-    'AsyncIO & FastAPI Gateway',
-    skPython!.id,
-    skFastApi!.id,
-    [
-      {
-        prompt:
-          'Điều gì xảy ra khi gọi hàm đồng bộ `time.sleep(5)` hoặc `requests.post()` trực tiếp bên trong một endpoint `async def` của FastAPI?',
-        options: [
-          'FastAPI tự động chuyển hàm đó sang tiến trình GPU riêng biệt',
-          'Event Loop chính bị chặn (block), khiến toàn bộ các request đồng thời khác trên cùng worker phải chờ đợi',
-          'Trình biên dịch Python báo lỗi cú pháp SyntaxError ngay lúc khởi động',
-          'Request đó bị hủy tự động sau 100ms',
-        ],
-        correctIndex: 1,
-        explanationMd:
-          'Trong `async def`, các tác vụ đồng bộ chặn I/O sẽ làm đứng toàn bộ Event Loop của worker đó. Cần dùng `asyncio.sleep()` và `httpx.AsyncClient()`.',
-      },
-      {
-        prompt:
-          'Khi gọi API của nhà cung cấp LLM gặp lỗi HTTP 429 (Rate Limit Exceeded), chiến lược xử lý nào chuẩn xác nhất trong môi trường Production?',
-        options: [
-          'Gửi lại request liên tục trong vòng lặp `while True` không có độ trễ',
-          'Áp dụng cơ chế Exponential Backoff kèm Jitter ngẫu nhiên và giới hạn số lần thử lại tối đa',
-          'Khởi động lại toàn bộ container cơ sở dữ liệu PostgreSQL',
-          'Tắt tính năng xác thực JWT của người dùng',
-        ],
-        correctIndex: 1,
-        explanationMd:
-          'Exponential Backoff with Jitter giúp phân tán thời điểm thử lại, tránh hiện tượng Thundering Herd tiếp tục đánh sập cổng API.',
-      },
-      {
-        prompt:
-          'Cơ chế Server-Sent Events (SSE) trong giao diện chat AI cải thiện chỉ số trải nghiệm người dùng nào rõ rệt nhất?',
-        options: [
-          'Giảm dung lượng ổ cứng lưu trữ mô hình ngôn ngữ',
-          'Giảm thời gian phản hồi token đầu tiên (TTFT - Time To First Token) giúp người dùng đọc được kết quả ngay khi mô hình đang sinh văn bản',
-          'Tăng số chiều của vector embedding từ 1024 lên 4096',
-          'Thay thế hoàn toàn cơ sở dữ liệu PostgreSQL',
-        ],
-        correctIndex: 1,
-        explanationMd:
-          'Streaming qua SSE giúp hiển thị từng cụm từ ngay khi sinh ra, giảm cảm giác chờ đợi xuống dưới 400ms cho token đầu tiên.',
-      },
-      {
-        prompt:
-          'Hàm nào trong thư viện `asyncio` cho phép chạy đồng thời nhiều coroutine và thu thập toàn bộ kết quả?',
-        options: [
-          '`asyncio.gather(*tasks)`',
-          '`asyncio.sleep_all(tasks)`',
-          '`asyncio.block_forever()`',
-          '`threading.lock_all()`',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          '`asyncio.gather()` lên lịch thực thi đồng thời các coroutine trên Event Loop và trả về danh sách kết quả theo đúng thứ tự đầu vào.',
-      },
-    ]
-  );
-
-  const sess2Items = buildSessionQuizItems(
-    quizSess2!.id,
-    2,
-    'Chunking & pgvector HNSW',
-    skSqlVec!.id,
-    skRag!.id,
-    [
-      {
-        prompt:
-          'Tại sao cần thiết lập độ chồng lấp (`chunk_overlap` khoảng 10%–15%) khi cắt nhỏ tài liệu phục vụ hệ thống RAG?',
-        options: [
-          'Để bảo toàn ngữ cảnh ở ranh giới giữa hai đoạn liên tiếp, tránh việc một câu hoặc một mệnh đề quan trọng bị cắt đôi làm mất ý nghĩa',
-          'Để làm tăng gấp đôi hóa đơn lưu trữ đám mây',
-          'Để xóa toàn bộ dấu câu trong văn bản tiếng Việt',
-          'Vì PostgreSQL không cho phép lưu các đoạn văn có độ dài khác nhau',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Overlap giữ lại một phần câu cuối của đoạn trước ở đầu đoạn sau, giúp vector embedding của cả hai đoạn không bị đứt gãy ngữ nghĩa.',
-      },
-      {
-        prompt:
-          'Trong PostgreSQL `pgvector`, toán tử nào dùng để tính khoảng cách Cosine (Cosine Distance) khi truy vấn tìm kiếm tương đồng?',
-        options: ['`<=>`', '`<->`', '`<#>`', '`===`'],
-        correctIndex: 0,
-        explanationMd:
-          'Trong `pgvector`, `<=>` là Cosine Distance (`vector_cosine_ops`), `<->` là khoảng cách Euclid L2, và `<#>` là tích vô hướng âm.',
-      },
-      {
-        prompt:
-          'Khi khởi tạo chỉ mục HNSW trên bảng `knowledge_chunks`, tham số `m` và `ef_construction` có ý nghĩa gì?',
-        options: [
-          '`m` là số liên kết hai chiều tối đa trên mỗi nút đồ thị, còn `ef_construction` là kích thước danh sách ứng viên động trong lúc xây dựng chỉ mục',
-          '`m` là số lượng bảng trong database, còn `ef_construction` là dung lượng ổ cứng tối đa',
-          '`m` là mật khẩu quản trị, còn `ef_construction` là cổng kết nối TCP',
-          'Cả hai tham số chỉ dùng để trang trí câu lệnh SQL',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Giá trị `m` và `ef_construction` càng cao thì độ chính xác (Recall) của đồ thị HNSW càng tốt nhưng tốn thêm RAM và thời gian tạo index.',
-      },
-      {
-        prompt:
-          'Trong câu lệnh SQL tạo chỉ mục `CREATE INDEX ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)`, truy vấn `ORDER BY` phải dùng toán tử nào để tận dụng được chỉ mục?',
-        options: [
-          '`ORDER BY embedding <=> $1 LIMIT k`',
-          '`ORDER BY embedding + $1 LIMIT k`',
-          '`ORDER BY id DESC`',
-          '`ORDER BY length(content)`',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'PostgreSQL planner chỉ kích hoạt HNSW index scan khi toán tử trong `ORDER BY` khớp với operator class lúc tạo index (`<=>` cho `vector_cosine_ops`).',
-      },
-    ]
-  );
-
-  const sess3Items = buildSessionQuizItems(
-    quizSess3!.id,
-    3,
-    'Hybrid Search & RRF',
-    skRag!.id,
-    skSqlVec!.id,
-    [
-      {
-        prompt:
-          'Tại sao tìm kiếm thuần Dense Vector thường thất bại khi người dùng tra cứu các mã định danh chính xác như `"ERR_429_QUOTA"` hoặc tên hàm `"resolveCohort"`?',
-        options: [
-          'Vì mô hình Embedding nén văn bản thành biểu diễn ngữ nghĩa liên tục nên các chuỗi ký tự định danh hiếm gặp dễ bị tách thành nhiều sub-token rời rạc, mất khả năng khớp chính xác từng ký tự',
-          'Vì cơ sở dữ liệu PostgreSQL không lưu được chữ hoa',
-          'Vì toán tử Cosine chỉ hoạt động vào ban đêm',
-          'Vì Dense Vector chỉ tìm được các từ tiếng Anh',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Đó chính là lý do phải kết hợp thêm nhánh tìm kiếm từ khóa BM25 / Full-Text Search để bắt chính xác các chuỗi định danh kỹ thuật.',
-      },
-      {
-        prompt:
-          'Trong công thức Reciprocal Rank Fusion $RRF(d) = \\sum \\frac{1}{k + rank_i(d)}$, tại sao người ta dùng thứ hạng ($rank$) thay vì cộng trực tiếp điểm số Cosine Similarity với điểm số BM25?',
-        options: [
-          'Vì điểm Cosine Similarity nằm trong đoạn $[-1, 1]$ còn điểm BM25 không có chặn trên cố định; dùng thứ hạng giúp hợp nhất công bằng mà không cần chuẩn hóa phân phối điểm',
-          'Vì ngôn ngữ SQL không hỗ trợ phép cộng số thực',
-          'Để làm cho câu lệnh truy vấn chạy chậm hơn 10 lần',
-          'Vì hằng số $k$ luôn bằng 0',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'RRF dựa trên thứ hạng tương đối của từng bộ truy xuất, giúp chống lại sự lệch thang đo giữa các thuật toán khác bản chất.',
-      },
-      {
-        prompt:
-          'Trong PostgreSQL, kiểu dữ liệu và loại chỉ mục nào được dùng để tăng tốc độ tìm kiếm toàn văn (Full-Text Search) cho nhánh từ khóa?',
-        options: [
-          'Kiểu `tsvector` kết hợp với chỉ mục `GIN` (Generalized Inverted Index)',
-          'Kiểu `boolean` kết hợp với chỉ mục `HASH`',
-          'Kiểu `timestamp` kết hợp với chỉ mục `BRIN`',
-          'Kiểu `bytea` không có chỉ mục',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Chỉ mục đảo `GIN` trên cột hoặc biểu thức `to_tsvector` cho phép tra cứu danh sách tài liệu chứa từ khóa trong vài mili-giây.',
-      },
-      {
-        prompt:
-          'Để đảm bảo an toàn phân quyền dữ liệu trong hệ thống RAG (ngăn khách vãng lai đọc được nội dung bài giảng nội bộ `ENROLLED_ONLY`), bộ lọc quyền truy cập phải được đặt ở đâu?',
-        options: [
-          'Đặt trực tiếp trong mệnh đề `WHERE` của câu truy vấn SQL (Pre-filtering) trước khi lấy các đoạn văn đưa vào ngữ cảnh của LLM',
-          'Lấy toàn bộ dữ liệu mật đưa vào LLM rồi dặn LLM trong System Prompt là "Đừng tiết lộ cho người dùng"',
-          'Chỉ ẩn bằng CSS `display: none` ở phía trình duyệt Frontend',
-          'Không cần kiểm tra vì người dùng không biết tên bảng',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Tuyệt đối không dựa vào Prompt để phân quyền dữ liệu; phải lọc cứng ở tầng cơ sở dữ liệu.',
-      },
-    ]
-  );
-
-  const sess4Items = buildSessionQuizItems(
-    quizSess4!.id,
-    4,
-    'Function Calling & ReAct Agent',
-    skTool!.id,
-    skLangGraph!.id,
-    [
-      {
-        prompt:
-          'Bản chất của cơ chế Function Calling (Tool Calling) trong các mô hình ngôn ngữ lớn hiện đại là gì?',
-        options: [
-          'Mô hình LLM tự mình mở kết nối trực tiếp vào cơ sở dữ liệu nội bộ để chạy lệnh SQL',
-          'Mô hình LLM phân tích yêu cầu và sinh ra cấu trúc JSON chứa tên hàm cùng các tham số cần gọi; phần thực thi hàm thực tế do mã nguồn Backend kiểm soát và chạy',
-          'Mô hình LLM tự động biên dịch lại hệ điều hành Linux của máy chủ',
-          'Mô hình LLM thay thế hoàn toàn trình duyệt web của người dùng',
-        ],
-        correctIndex: 1,
-        explanationMd:
-          'LLM chỉ đóng vai trò quyết định gọi tool nào với đối số JSON gì; ứng dụng Backend mới là nơi kiểm tra quyền hạn, thực thi hàm và gửi kết quả trả về lại cho LLM.',
-      },
-      {
-        prompt:
-          'Khi LLM sinh ra đối số JSON gọi Tool nhưng bị sai kiểu dữ liệu (bắt được ngoại lệ `pydantic.ValidationError`), cách xử lý tốt nhất trong vòng lặp Agent là gì?',
-        options: [
-          'Đóng gói thông báo lỗi chi tiết của `ValidationError` thành một bản tin `tool` message gửi trả lại cho LLM trong lượt tiếp theo để mô hình tự hiệu chỉnh đối số và gọi lại',
-          'Làm sập ngay lập tức tiến trình máy chủ với mã lỗi HTTP 500',
-          'Xoá tài khoản của người dùng đang đặt câu hỏi',
-          'Bỏ qua lỗi và truyền giá trị `None` vào tất cả các tham số bắt buộc của hàm SQL',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Cơ chế Self-Correction cho phép LLM đọc thông báo lỗi của Pydantic để biết trường nào sai định dạng và tự sinh lại lời gọi hàm đúng ở bước kế tiếp.',
-      },
-      {
-        prompt:
-          'Để ngăn chặn rủi ro một ReAct Agent rơi vào vòng lặp gọi Tool vô tận gây cạn kiệt ngân sách token, biện pháp kỹ thuật nào là bắt buộc?',
-        options: [
-          'Thiết lập giới hạn số bước lặp tối đa (`max_iterations`, ví dụ 4–6 bước) kết hợp ngân sách thời gian (`timeout`) và trả về phản hồi an toàn khi chạm ngưỡng',
-          'Mua thêm 100 máy chủ vật lý mới mỗi ngày',
-          'Cấm người dùng đặt câu hỏi dài quá 3 từ',
-          'Xóa toàn bộ các công cụ khỏi hệ thống',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Luôn phải có điều kiện dừng cứng (`max_iterations`) trong vòng lặp của bộ điều phối Agent.',
-      },
-      {
-        prompt:
-          'Tính năng `Structured Outputs` (với `strict: true` trên JSON Schema) khắc phục triệt để hạn chế nào của việc nhắc LLM trả về JSON thông qua văn bản thông thường?',
-        options: [
-          'Đảm bảo 100% đầu ra tuân thủ đúng cấu trúc schema và kiểu dữ liệu đã khai báo nhờ cơ chế giới hạn token hợp lệ (Constrained Decoding)',
-          'Giúp mô hình chạy không cần điện năng',
-          'Tự động thiết kế giao diện CSS cho trang web',
-          'Thay thế hoàn toàn ngôn ngữ lập trình Python',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Constrained Decoding loại bỏ khả năng mô hình sinh thiếu dấu ngoặc hoặc sai tên trường JSON.',
-      },
-    ]
-  );
-
-  const sess5Items = buildSessionQuizItems(
-    quizSess5!.id,
-    5,
-    'LLMOps, Ragas & Semantic Cache',
-    skEval!.id,
-    skRag!.id,
-    [
-      {
-        prompt:
-          'Trong bộ chỉ số đánh giá Ragas, chỉ số `Faithfulness` (Độ trung thực) đo lường khía cạnh nào của hệ thống RAG?',
-        options: [
-          'Mức độ mà các khẳng định trong câu trả lời của LLM được suy ra hoàn toàn từ các đoạn ngữ cảnh truy xuất được, không bịa đặt thêm thông tin ngoài nguồn (chống Hallucination)',
-          'Tốc độ gõ phím của người dùng cuối',
-          'Dung lượng bộ nhớ RAM của container Redis',
-          'Số lượng ảnh đại diện trong cơ sở dữ liệu',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          '`Faithfulness` tách câu trả lời thành từng mệnh đề nhỏ và kiểm tra xem mỗi mệnh đề có bằng chứng trong `retrieved_contexts` hay không.',
-      },
-      {
-        prompt:
-          'Nếu hệ thống RAG có điểm `Context Recall` rất thấp (dưới 0.45) nhưng `Faithfulness` vẫn cao, nguyên nhân gốc rễ nằm ở tầng nào?',
-        options: [
-          'Tầng Retrieval (bộ truy xuất hoặc chiến lược Chunking) đã bỏ sót các đoạn tài liệu chứa thông tin cần thiết để trả lời câu hỏi',
-          'Do trình duyệt web dùng phông chữ không phù hợp',
-          'Do cổng thanh toán ngân hàng bảo trì',
-          'Do màn hình máy tính có độ phân giải thấp',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          '`Context Recall` phản ánh khả năng tìm ra đầy đủ các thông tin chuẩn (ground truth) ở tầng Retrieval.',
-      },
-      {
-        prompt:
-          'Cơ chế `Semantic Caching` trên Redis khác với bộ nhớ đệm khóa-giá trị (Exact-match Key-Value Cache) truyền thống ở điểm nào?',
-        options: [
-          'So khớp độ tương đồng vector của câu hỏi mới với các câu hỏi đã lưu trước đó (ví dụ Cosine Similarity >= 0.94), giúp trả về ngay câu trả lời dù người dùng diễn đạt khác từ ngữ nhưng cùng ý nghĩa',
-          'Chỉ lưu trữ được các con số nguyên nhỏ hơn 10',
-          'Tự động xóa toàn bộ cơ sở dữ liệu sau mỗi 5 giây',
-          'Bắt buộc người dùng phải gõ đúng từng dấu cách và chữ hoa chữ thường mới trúng cache',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Semantic Cache phát hiện các câu hỏi tương đồng ngữ nghĩa để tái sử dụng kết quả, giảm 35%–50% chi phí gọi LLM.',
-      },
-      {
-        prompt:
-          'Khi thiết kế hàng rào bảo vệ (Guardrails) chống tấn công `Direct Prompt Injection`, giải pháp nào hiệu quả và thực tế nhất?',
-        options: [
-          'Kết hợp phân tách rõ System Instruction với dữ liệu đầu vào bằng thẻ đánh dấu, dùng bộ phân loại phát hiện ý định bẻ khóa ở đầu vào và kiểm tra tính hợp lệ đầu ra',
-          'Tin tưởng tuyệt đối mọi văn bản do người dùng gửi lên',
-          'Gửi kèm khóa bí mật `JWT_ACCESS_SECRET` vào trong mọi câu trả lời của chatbot',
-          'Tắt toàn bộ tường lửa của máy chủ',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Defense-in-Depth (Input Guardrail + Delimiter Isolation + Least-Privilege Tooling + Output Guardrail) là kiến trúc bảo mật chuẩn cho ứng dụng LLM.',
-      },
-    ]
-  );
-
-  const sess6Items = buildSessionQuizItems(
-    quizSess6!.id,
-    6,
-    'Tổng duyệt Kiến trúc Production AI',
-    skFastApi!.id,
-    skEval!.id,
-    [
-      {
-        prompt:
-          'Trong kiến trúc triển khai hệ thống EdTech + AI của 3T Academy, tại sao cổng giao dịch chính (Node.js/TypeScript) và cụm dịch vụ AI (Python FastAPI) được tách thành hai dịch vụ độc lập giao tiếp qua REST/HTTP nội bộ?',
-        options: [
-          'Để cô lập tải tính toán nặng của AI/ML khỏi luồng giao dịch học vụ - thanh toán ACID, đồng thời tận dụng hệ sinh thái thư viện ML mạnh nhất của Python cùng độ an toàn kiểu của TypeScript',
-          'Vì một máy chủ không thể cài đặt cả Node.js và Python cùng lúc',
-          'Để bắt người dùng phải đăng nhập hai lần liên tiếp',
-          'Để làm tăng độ trễ mạng lên tối đa',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Kiến trúc tách biệt Core Transactional API và AI Microservice giúp từng tầng mở rộng quy mô độc lập.',
-      },
-      {
-        prompt:
-          'Khi đóng gói dịch vụ bằng `Multi-stage Dockerfile`, lợi ích quan trọng nhất của việc tách giai đoạn `builder` và giai đoạn `runner` (production image) là gì?',
-        options: [
-          'Loại bỏ trình biên dịch, công cụ build và devDependencies khỏi image chạy thực tế, giúp giảm kích thước image và thu hẹp bề mặt tấn công bảo mật',
-          'Làm cho dung lượng image tăng lên gấp 5 lần',
-          'Để lưu mật khẩu cơ sở dữ liệu trực tiếp vào lịch sử commit Git',
-          'Để bỏ qua bước kiểm tra kiểu dữ liệu TypeScript',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Multi-stage build giữ cho image Production gọn nhẹ, khởi động nhanh và an toàn.',
-      },
-      {
-        prompt:
-          'Quy trình cấp chứng chỉ tốt nghiệp tự động tại 3T Academy yêu cầu những điều kiện tiên quyết nào?',
-        options: [
-          'Hoàn thành 100% số buổi học (xem >= 80% thời lượng video VÀ đạt >= 70% bài kiểm tra mỗi buổi) VÀ vượt qua kỳ thi sát hạch cuối khóa (>= 70%) với trạng thái giám sát hợp lệ',
-          'Chỉ cần đăng ký tài khoản miễn phí là nhận được chứng chỉ ngay',
-          'Chỉ cần xem 1 phút của Buổi 1 mà không cần làm bất kỳ bài kiểm tra nào',
-          'Chỉ cần bình luận 1 câu trong diễn đàn thảo luận',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Chứng chỉ số kèm chữ ký xác thực HMAC-SHA256 chỉ được cấp khi học viên hoàn thành trọn vẹn lộ trình học tập và kỳ thi sát hạch.',
-      },
-      {
-        prompt:
-          'Sau khi học viên vượt qua kỳ thi sát hạch cuối khóa và được cấp chứng chỉ tốt nghiệp, hệ thống tự động cộng thêm quyền lợi gì vào hồ sơ năng lực của học viên?',
-        options: [
-          'Cộng thêm +4 lượt Phỏng vấn thử AI (Mock Interview Credits) để học viên luyện tập bảo vệ CV và phỏng vấn kỹ thuật trực tiếp với Hội đồng AI',
-          'Xóa toàn bộ điểm kỹ năng đã tích lũy trước đó',
-          'Khóa quyền truy cập vào video bài giảng của lớp học',
-          'Đổi vai trò của học viên thành Quản trị viên hệ thống (ADMIN)',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Mỗi chứng chỉ tốt nghiệp mở khóa +4 lượt phỏng vấn thử AI giúp học viên sẵn sàng ứng tuyển thực tế.',
-      },
-    ]
-  );
-
-  const finalExamAiItems = buildSessionQuizItems(
-    finalExamAiK01!.id,
-    6,
-    'Sát hạch Tốt nghiệp Kỹ sư AI',
-    skRag!.id,
-    skTool!.id,
-    [
-      {
-        skillId: skPython!.id,
-        prompt:
-          'Trong Python AsyncIO, vì sao việc sử dụng `asyncio.Semaphore(limit)` lại quan trọng khi chạy tác vụ tạo vector embedding hàng loạt (batch ingestion) cho 10.000 đoạn tài liệu?',
-        options: [
-          'Kiểm soát số lượng request gọi API đồng thời ở mức an toàn, tránh làm tràn hạn mức Rate Limit (HTTP 429) hoặc làm cạn kiệt socket mạng của hệ thống',
-          'Tự động nén 10.000 đoạn tài liệu thành 1 ký tự duy nhất',
-          'Biến mã nguồn Python thành câu lệnh SQL',
-          'Tắt hoàn toàn cơ chế kiểm tra lỗi của trình thông dịch',
-        ],
-        correctIndex: 0,
-        explanationMd: 'Semaphore giới hạn mức độ song song vừa khít với năng lực chịu tải của cổng API đích.',
-      },
-      {
-        skillId: skFastApi!.id,
-        prompt:
-          'Khi thiết kế endpoint truyền phát phản hồi AI theo thời gian thực bằng FastAPI `StreamingResponse`, định dạng gói tin chuẩn của giao thức Server-Sent Events (SSE) yêu cầu mỗi sự kiện kết thúc bằng ký tự gì?',
-        options: [
-          'Bắt đầu bằng tiền tố `data: ` và kết thúc bằng hai ký tự xuống dòng liên tiếp `\\n\\n`',
-          'Kết thúc bằng chuỗi `</html_end>`',
-          'Bắt buộc phải mã hóa nhị phân MP4',
-          'Không được phép chứa bất kỳ ký tự chữ cái nào',
-        ],
-        correctIndex: 0,
-        explanationMd: 'Chuẩn SSE quy định mỗi khung sự kiện văn bản có dạng `data: <json_payload>\\n\\n`.',
-      },
-      {
-        skillId: skSqlVec!.id,
-        prompt:
-          'Trong PostgreSQL `pgvector`, biểu thức nào tính điểm tương đồng Cosine (Cosine Similarity trong khoảng `[-1, 1]`, càng lớn càng giống nhau) từ toán tử khoảng cách Cosine `<=>`?',
-        options: [
-          '`1 - (embedding <=> query_vector)`',
-          '`(embedding <=> query_vector) * 1000`',
-          '`embedding <+> query_vector`',
-          '`ABS(embedding)`',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Vì `pgvector` định nghĩa `cosine_distance = 1 - cosine_similarity`, nên `cosine_similarity = 1 - (a <=> b)`.',
-      },
-      {
-        skillId: skRag!.id,
-        prompt:
-          'Tại sao kiến trúc Two-Stage Retrieval (Bi-Encoder + BM25 RRF ở bước 1, Cross-Encoder Reranker ở bước 2) lại đạt được cả tốc độ lẫn độ chính xác cao?',
-        options: [
-          'Bước 1 dùng chỉ mục HNSW và GIN lọc nhanh hàng triệu bản ghi xuống Top 30 trong vài mili-giây; Bước 2 dùng Cross-Encoder chú ý chéo sâu trên Top 30 đó để chọn ra Top 5 chuẩn xác nhất',
-          'Vì bước 1 xóa hết dữ liệu của bước 2',
-          'Vì Cross-Encoder không cần sử dụng CPU hay GPU',
-          'Vì hai bước chạy trên hai trình duyệt khác nhau',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Sự kết hợp này tận dụng tốc độ $O(\\log N)$ của ANN/Inverted Index và độ chính xác Full Cross-Attention trên tập ứng viên nhỏ.',
-      },
-      {
-        skillId: skTool!.id,
-        prompt:
-          'Khi định nghĩa công cụ (Tool) cho LLM bằng Pydantic v2, làm thế nào để giới hạn một tham số chỉ được nhận một trong các giá trị cố định như `"OPENING"`, `"ONGOING"`, `"COMPLETED"`?',
-        options: [
-          'Sử dụng kiểu `Literal["OPENING", "ONGOING", "COMPLETED"]` hoặc `Enum` để JSON Schema sinh ra trường `enum` chặt chẽ',
-          'Dùng kiểu `Any` và hy vọng LLM tự đoán đúng',
-          'Dùng kiểu `float`',
-          'Không khai báo tham số đó trong model',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          '`Literal` hoặc `Enum` tạo ràng buộc `enum` trong JSON Schema, buộc bộ giải mã chỉ chọn trong tập giá trị hợp lệ.',
-      },
-      {
-        skillId: skLangGraph!.id,
-        prompt:
-          'Trong kiến trúc Multi-Agent kiểu Supervisor (Điều phối viên trung tâm), tác tử Supervisor có nhiệm vụ chính là gì?',
-        options: [
-          'Phân tích yêu cầu tổng thể, phân rã bài toán, quyết định giao việc cho tác tử chuyên trách phù hợp và tổng hợp kết quả cuối cùng',
-          'Thay thế cơ sở dữ liệu PostgreSQL để lưu trữ file video MP4',
-          'Tự động tắt máy tính của người dùng',
-          'Chỉ làm nhiệm vụ đổi màu nền giao diện web',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          'Supervisor đóng vai trò bộ định tuyến thông minh và kiểm soát luồng công việc giữa các Worker Agents.',
-      },
-      {
-        skillId: skEval!.id,
-        prompt:
-          'Trong bộ khung đánh giá Ragas, sự khác biệt cốt lõi giữa `Context Precision` và `Answer Relevancy` là gì?',
-        options: [
-          '`Context Precision` đánh giá xem các đoạn tài liệu liên quan có được xếp ở những vị trí đầu tiên trong danh sách truy xuất hay không, còn `Answer Relevancy` đánh giá mức độ câu trả lời cuối cùng bám sát trọng tâm câu hỏi',
-          'Hai chỉ số này có công thức giống hệt nhau 100%',
-          '`Context Precision` đo tốc độ quạt tản nhiệt, còn `Answer Relevancy` đo dung lượng ổ cứng',
-          'Cả hai chỉ dùng để chấm điểm giao diện đồ họa',
-        ],
-        correctIndex: 0,
-        explanationMd:
-          '`Context Precision` đo chất lượng xếp hạng của tầng Retrieval, trong khi `Answer Relevancy` đo chất lượng phản hồi của tầng Generation.',
-      },
-    ]
-  );
-
-  // --- PY-SQL-2026-K01 Session Quizzes (4 items each) ---
-  const py1Items = buildSessionQuizItems(quizPy1!.id, 1, 'Python Data Structures & Type Hints', skPython!.id, skFastApi!.id, [
-    {
-      prompt: 'Sự khác biệt chính giữa `list` comprehension `[x*2 for x in range(1000000)]` và `generator` expression `(x*2 for x in range(1000000))` là gì?',
-      options: ['Generator tính toán lười (lazy evaluation) từng phần tử khi lặp qua nên tiết kiệm bộ nhớ RAM vượt trội', 'List comprehension không thể chứa số nguyên', 'Generator tự động lưu dữ liệu vào ổ cứng', 'Hai biểu thức hoàn toàn giống hệt nhau về bộ nhớ'],
-      correctIndex: 0,
-      explanationMd: 'Generator sinh từng giá trị theo yêu cầu (`yield`) thay vì cấp phát toàn bộ mảng trong RAM.',
-    },
-    {
-      prompt: 'Khai báo Type Hints `def fetch_user(user_id: int) -> dict[str, Any] | None:` trong Python 3.11+ mang lại lợi ích gì?',
-      options: ['Giúp công cụ kiểm tra kiểu tĩnh (mypy/pyright), IDE và Pydantic hiểu rõ hợp đồng dữ liệu đầu vào/đầu ra', 'Làm cho hàm chạy nhanh gấp 100 lần trên GPU', 'Tự động tạo bảng trong PostgreSQL', 'Mã hóa biến `user_id`'],
-      correctIndex: 0,
-      explanationMd: 'Type Hints là nền tảng để phát hiện lỗi sớm và tích hợp với FastAPI/Pydantic.',
-    },
-    {
-      prompt: 'Cấu trúc dữ liệu nào trong Python cho thời gian tra cứu phần tử `x in collection` trung bình đạt $O(1)$?',
-      options: ['`set` và `dict` (dựa trên bảng băm Hash Table)', '`list` chưa sắp xếp', '`tuple`', '`str`'],
-      correctIndex: 0,
-      explanationMd: 'Bảng băm của `set` và `dict` giúp kiểm tra sự tồn tại của khóa trong thời gian hằng số $O(1)$.',
-    },
-    {
-      prompt: 'Tại sao không nên dùng một danh sách khả biến làm giá trị mặc định trong định nghĩa hàm như `def add_item(item, bucket=[])`?',
-      options: ['Vì đối tượng `bucket=[]` chỉ được khởi tạo 1 lần duy nhất lúc định nghĩa hàm và bị dùng chung xuyên suốt các lần gọi hàm sau đó', 'Vì Python báo lỗi cú pháp ngay lập tức', 'Vì danh sách không thể chứa chuỗi ký tự', 'Vì làm giảm độ sáng màn hình'],
-      correctIndex: 0,
-      explanationMd: 'Luôn dùng `bucket: list | None = None` rồi khởi tạo `if bucket is None: bucket = []` bên trong thân hàm.',
-    },
-  ]);
-
-  const py2Items = buildSessionQuizItems(quizPy2!.id, 2, 'OOP, Pydantic & Pytest', skPython!.id, skFastApi!.id, [
-    {
-      prompt: 'Khi viết kiểm thử đơn vị với `pytest`, decorator nào giúp chạy cùng một hàm test với nhiều bộ dữ liệu đầu vào và kết quả kỳ vọng khác nhau?',
-      options: ['`@pytest.mark.parametrize("input,expected", [...])`', '`@pytest.delete_all()`', '`@staticmethod`', '`@property`'],
-      correctIndex: 0,
-      explanationMd: '`@pytest.mark.parametrize` giúp kiểm thử bao phủ nhiều trường hợp biên mà không phải lặp lại mã nguồn.',
-    },
-    {
-      prompt: 'Trong Pydantic `BaseModel`, điều gì xảy ra khi khởi tạo đối tượng với dữ liệu không thể ép kiểu hợp lệ?',
-      options: ['Pydantic ném ra ngoại lệ `ValidationError` kèm danh sách chi tiết từng trường bị lỗi', 'Chương trình âm thầm bỏ qua và gán giá trị 0', 'Máy tính tự động khởi động lại', 'Pydantic xóa file mã nguồn'],
-      correctIndex: 0,
-      explanationMd: 'Kiểm tra dữ liệu đầu vào nghiêm ngặt ngay tại biên hệ thống giúp ngăn lỗi lan truyền sâu vào logic nghiệp vụ.',
-    },
-    {
-      prompt: 'Mục đích của khối lệnh `try ... except ... finally` trong phần `finally` là gì?',
-      options: ['Đảm bảo các tác vụ giải phóng tài nguyên luôn được thực thi bất kể có ngoại lệ xảy ra hay không', 'Chỉ chạy khi không có lỗi nào xảy ra', 'Để bỏ qua mọi lỗi cú pháp trong file', 'Để tăng tốc vòng lặp'],
-      correctIndex: 0,
-      explanationMd: 'Khối `finally` hoặc Context Manager (`with`) đảm bảo tài nguyên luôn được dọn dẹp an toàn.',
-    },
-    {
-      prompt: 'Tại sao nên ưu tiên sử dụng Context Manager (`with open(...) as f:`) thay vì gọi `f.close()` thủ công?',
-      options: ['Tự động đóng tài nguyên ngay khi thoát khỏi khối lệnh kể cả khi bên trong khối xảy ra ngoại lệ', 'Giúp file có dung lượng bằng 0 byte', 'Tự động dịch nội dung file sang tiếng Anh', 'Không cần quyền đọc file'],
-      correctIndex: 0,
-      explanationMd: 'Giao thức `__enter__` / `__exit__` bảo vệ hệ thống khỏi rò rỉ file descriptor và kết nối mạng.',
-    },
-  ]);
-
-  const py3Items = buildSessionQuizItems(quizPy3!.id, 3, 'AsyncIO & HTTP API', skPython!.id, skFastApi!.id, [
-    {
-      prompt: 'Từ khóa `await` trong Python chỉ được phép đặt ở đâu?',
-      options: ['Bên trong một hàm bất đồng bộ được khai báo bằng `async def`', 'Ở dòng đầu tiên của file `.env`', 'Bên trong câu lệnh SQL `SELECT`', 'Trong file cấu hình CSS'],
-      correctIndex: 0,
-      explanationMd: '`await` tạm dừng coroutine hiện tại để nhường quyền điều khiển cho Event Loop xử lý tác vụ khác trong lúc chờ I/O.',
-    },
-    {
-      prompt: 'Khi gọi một hàm `async def fetch_data():` mà quên từ khóa `await`, giá trị trả về thực chất là gì?',
-      options: ['Một đối tượng `coroutine` chưa được thực thi (kèm cảnh báo `RuntimeWarning: coroutine was never awaited`)', 'Kết quả JSON đã tải xong từ máy chủ', 'Một số nguyên ngẫu nhiên', 'Một kết nối PostgreSQL'],
-      correctIndex: 0,
-      explanationMd: 'Gọi hàm `async def` chỉ tạo ra đối tượng coroutine; phải `await` hoặc đưa vào `asyncio.gather` thì coroutine mới chạy.',
-    },
-    {
-      prompt: 'Trong thư viện `httpx`, cách chuẩn xác để quản lý vòng đời `AsyncClient` khi tải dữ liệu từ nhiều trang API là gì?',
-      options: ['Sử dụng `async with httpx.AsyncClient() as client:` và truyền `client` vào các tác vụ con chạy qua `asyncio.gather`', 'Tạo mới 1.000 `AsyncClient` không bao giờ đóng', 'Dùng `urllib` đồng bộ trong vòng lặp', 'Tắt card mạng'],
-      correctIndex: 0,
-      explanationMd: '`async with httpx.AsyncClient()` tái sử dụng Connection Pool và đóng toàn bộ socket sạch sẽ khi kết thúc khối.',
-    },
-    {
-      prompt: 'Phương thức `response.raise_for_status()` của `httpx` có tác dụng gì?',
-      options: ['Ném ngoại lệ `HTTPStatusError` ngay lập tức nếu mã trạng thái phản hồi là 4xx hoặc 5xx', 'Đổi mã lỗi 500 thành 200 OK', 'Xóa nội dung JSON trả về', 'Tự động nạp tiền vào tài khoản'],
-      correctIndex: 0,
-      explanationMd: 'Giúp phát hiện sớm các phản hồi lỗi HTTP thay vì cố gắng parse JSON từ trang báo lỗi.',
-    },
-  ]);
-
-  const py4Items = buildSessionQuizItems(quizPy4!.id, 4, 'PostgreSQL Schema & Indexing', skSqlVec!.id, skPython!.id, [
-    {
-      prompt: 'Ràng buộc `FOREIGN KEY ... ON DELETE RESTRICT` trong PostgreSQL bảo vệ toàn vẹn dữ liệu như thế nào?',
-      options: ['Ngăn không cho xóa bản ghi cha (ví dụ `courses`) nếu vẫn còn bản ghi con (ví dụ `cohorts`) đang tham chiếu tới nó', 'Tự động xóa toàn bộ các bảng trong database', 'Cho phép lưu các khóa ngoại trỏ tới ID không tồn tại', 'Tắt tính năng kiểm tra khóa chính'],
-      correctIndex: 0,
-      explanationMd: '`ON DELETE RESTRICT` bảo vệ dữ liệu nghiệp vụ quan trọng khỏi thao tác xóa nhầm.',
-    },
-    {
-      prompt: 'Sự khác biệt giữa `INNER JOIN` và `LEFT JOIN` trong SQL là gì?',
-      options: ['`INNER JOIN` chỉ giữ lại các dòng khớp ở cả hai bảng, còn `LEFT JOIN` giữ lại toàn bộ dòng của bảng bên trái và điền `NULL` cho các cột bảng phải nếu không có dòng khớp', 'Hai phép kết nối trả về kết quả giống hệt nhau trong mọi trường hợp', '`LEFT JOIN` xóa dữ liệu của bảng bên trái', '`INNER JOIN` chỉ dùng được cho kiểu chuỗi'],
-      correctIndex: 0,
-      explanationMd: '`LEFT JOIN` rất quan trọng khi thống kê danh sách học viên kể cả những học viên chưa có bài nộp nào (`COUNT(attempt.id) = 0`).',
-    },
-    {
-      prompt: 'Khi nào PostgreSQL chọn thực hiện `Seq Scan` (quét tuần tự toàn bảng) thay vì dùng chỉ mục `B-Tree`?',
-      options: ['Khi bảng rất nhỏ hoặc điều kiện lọc lấy ra tỷ lệ lớn số dòng trong bảng khiến đọc tuần tự nhanh hơn nhảy ngẫu nhiên qua chỉ mục', 'Vì PostgreSQL không bao giờ hỗ trợ chỉ mục B-Tree', 'Chỉ khi máy chủ bị mất điện', 'Khi câu lệnh có từ khóa `LIMIT 1`'],
-      correctIndex: 0,
-      explanationMd: 'Cost-based Optimizer của PostgreSQL luôn ước lượng chi phí I/O để chọn phương án thực thi tối ưu nhất.',
-    },
-    {
-      prompt: 'Tại sao trong mệnh đề `GROUP BY`, mọi cột xuất hiện ở `SELECT` (ngoài các hàm tổng hợp `COUNT`, `SUM`, `AVG`) đều phải nằm trong `GROUP BY` hoặc phụ thuộc hàm vào khóa chính?',
-      options: ['Để đảm bảo mỗi nhóm trả về một giá trị duy nhất, xác định rõ ràng cho từng cột hiển thị', 'Để làm câu lệnh dài hơn', 'Vì SQL không cho phép dùng hàm `COUNT`', 'Để tự động sắp xếp giảm dần'],
-      correctIndex: 0,
-      explanationMd: 'Nếu một cột không được gom nhóm và cũng không nằm trong hàm tổng hợp, hệ thống sẽ không biết chọn giá trị của dòng nào trong nhóm.',
-    },
-  ]);
-
-  const py5Items = buildSessionQuizItems(quizPy5!.id, 5, 'CTE, Window Functions & JSONB', skSqlVec!.id, skPython!.id, [
-    {
-      prompt: 'Điểm khác biệt cốt lõi giữa hàm cửa sổ (`SUM(...) OVER (PARTITION BY ...)` - Window Function) và mệnh đề `GROUP BY` truyền thống là gì?',
-      options: ['Window Function tính toán giá trị tổng hợp/xếp hạng trên tập dòng liên quan nhưng VẪN GIỮ NGUYÊN từng dòng chi tiết thay vì gộp thu gọn thành 1 dòng như `GROUP BY`', 'Window Function xóa toàn bộ các dòng trùng lặp', 'Window Function không thể dùng với kiểu số', '`GROUP BY` chạy trên trình duyệt còn Window Function chạy trên GPU'],
-      correctIndex: 0,
-      explanationMd: 'Window Functions cho phép vừa hiển thị chi tiết từng giao dịch vừa hiển thị tổng lũy kế hoặc thứ hạng ngay trên cùng một dòng.',
-    },
-    {
-      prompt: 'Sự khác nhau giữa hai hàm xếp hạng `RANK()` và `DENSE_RANK()` khi có 2 học viên đồng hạng 1 là gì?',
-      options: ['`RANK()` nhảy số thứ tự tiếp theo sang hạng 3 (1, 1, 3), trong khi `DENSE_RANK()` xếp hạng liên tục không bị khuyết bậc (1, 1, 2)', '`RANK()` báo lỗi nếu có điểm bằng nhau', '`DENSE_RANK()` luôn trả về số 0', 'Hai hàm hoàn toàn giống nhau'],
-      correctIndex: 0,
-      explanationMd: '`DENSE_RANK()` giữ cho dãy thứ hạng liền mạch không có khoảng trống sau các vị trí đồng hạng.',
-    },
-    {
-      prompt: 'Để truy vấn hiệu năng cao các trường bên trong cột kiểu `JSONB` trên PostgreSQL (ví dụ toán tử chứa `@>`), loại chỉ mục nào phù hợp nhất?',
-      options: ['Chỉ mục `GIN` (Generalized Inverted Index) trên cột `JSONB`', 'Không thể đánh chỉ mục cho cột JSONB', 'Chỉ mục `BRIN` trên cột văn bản', 'Lưu JSON dưới dạng ảnh PNG'],
-      correctIndex: 0,
-      explanationMd: 'Kiểu `JSONB` lưu trữ ở dạng nhị phân đã phân tách khóa-giá trị và hỗ trợ chỉ mục `GIN` giúp tra cứu cực nhanh.',
-    },
-    {
-      prompt: 'Hàm cửa sổ `LAG(score_pct, 1) OVER (PARTITION BY account_id ORDER BY submitted_at)` dùng để giải quyết bài toán nào?',
-      options: ['Lấy điểm số của lần làm bài liền trước đó của cùng một học viên để tính mức độ tiến bộ (`score_pct - prev_score`)', 'Xóa lần làm bài đầu tiên của học viên', 'Cộng điểm cho tất cả học viên trong lớp', 'Đổi tên tài khoản học viên'],
-      correctIndex: 0,
-      explanationMd: '`LAG` và `LEAD` cho phép truy cập trực tiếp dòng đứng trước hoặc đứng sau trong cửa sổ thời gian mà không cần Self-Join tốn kém.',
-    },
-  ]);
-
-  const py6Items = buildSessionQuizItems(quizPy6!.id, 6, 'Python + PostgreSQL Integration', skPython!.id, skSqlVec!.id, [
-    {
-      prompt: 'Tại sao bắt buộc phải truyền tham số truy vấn qua Parameterized Query thay vì nối chuỗi f-string trực tiếp vào câu lệnh SQL?',
-      options: ['Để ngăn chặn triệt để lỗ hổng bảo mật SQL Injection và giúp PostgreSQL tái sử dụng kế hoạch thực thi (Prepared Statement Plan)', 'Vì Python không hỗ trợ nối chuỗi', 'Để làm câu lệnh SQL chạy chậm hơn', 'Để tự động dịch tiếng Việt sang tiếng Anh'],
-      correctIndex: 0,
-      explanationMd: 'Parameterized Query tách biệt hoàn toàn cấu trúc lệnh SQL và dữ liệu đầu vào.',
-    },
-    {
-      prompt: 'Lợi ích của việc sử dụng Connection Pool (như `pg.Pool` hoặc `asyncpg.create_pool`) trong ứng dụng Web là gì?',
-      options: ['Duy trì sẵn một tập kết nối cơ sở dữ liệu để cấp phát tức thì cho các request, tránh chi phí mở/đóng tiến trình backend PostgreSQL mới cho mỗi truy vấn', 'Tự động tăng dung lượng ổ cứng máy chủ', 'Cho phép chạy SQL mà không cần mật khẩu', 'Xóa các bảng không dùng đến'],
-      correctIndex: 0,
-      explanationMd: 'Mỗi kết nối mới tới PostgreSQL cần cấp phát tiến trình riêng và bắt tay xác thực; Connection Pool giữ độ trễ ở mức vài mili-giây.',
-    },
-    {
-      prompt: 'Trong giao dịch cơ sở dữ liệu (Transaction), nếu bước 1 trừ tiền thành công nhưng bước 2 ghi lịch sử gặp lỗi ngoại lệ, hệ thống cần thực hiện lệnh gì?',
-      options: ['Thực hiện `ROLLBACK` để hoàn tác toàn bộ các thay đổi trong giao dịch đó về trạng thái nhất quán ban đầu', 'Thực hiện `COMMIT` một nửa và bỏ qua lỗi', 'Xóa bảng người dùng', 'Tắt máy chủ'],
-      correctIndex: 0,
-      explanationMd: 'Tính nguyên tử (Atomicity) trong ACID đảm bảo giao dịch chỉ thành công trọn vẹn hoặc không có gì thay đổi.',
-    },
-    {
-      prompt: 'Khi phân trang danh sách hàng triệu bản ghi lịch sử giao dịch theo thời gian, tại sao Keyset Pagination (`WHERE id < $last_id ORDER BY id DESC LIMIT 20`) nhanh hơn `OFFSET 500000 LIMIT 20`?',
-      options: ['Vì `OFFSET` lớn buộc cơ sở dữ liệu phải quét và đếm bỏ qua 500.000 dòng đầu tiên, còn Keyset Pagination nhảy thẳng tới vị trí cần lấy qua chỉ mục B-Tree', 'Vì `OFFSET` không phải là từ khóa hợp lệ trong SQL', 'Vì Keyset Pagination không cần chỉ mục', 'Vì `LIMIT` chỉ nhận số nhỏ hơn 5'],
-      correctIndex: 0,
-      explanationMd: 'Keyset (Cursor-based) Pagination giữ thời gian phản hồi ổn định $O(\\log N)$ ở mọi trang sâu.',
-    },
-  ]);
-
-  const finalExamPyItems = buildSessionQuizItems(
-    finalExamPyK01!.id,
-    6,
-    'Sát hạch Python & SQL Thực chiến',
-    skPython!.id,
-    skSqlVec!.id,
-    [
-      {
-        skillId: skPython!.id,
-        prompt: 'Trong Python, biểu thức nào sau đây tạo ra một từ điển (`dict`) ánh xạ mã kỹ năng sang tên kỹ năng từ danh sách `items`?',
-        options: ['`{item.code: item.name for item in items}`', '`[item.code, item.name for item in items]`', '`set(items)`', '`tuple(items)`'],
-        correctIndex: 0,
-        explanationMd: 'Dict comprehension `{k: v for ...}` là cách ngắn gọn và hiệu quả nhất để xây dựng từ điển tra cứu nhanh.',
-      },
-      {
-        skillId: skPython!.id,
-        prompt: 'Khi chạy đồng thời 5 tác vụ mạng với `await asyncio.gather(*tasks, return_exceptions=True)`, tham số `return_exceptions=True` có tác dụng gì?',
-        options: ['Nếu 1 tác vụ gặp ngoại lệ, đối tượng ngoại lệ đó được trả về trong danh sách kết quả thay vì làm hủy bỏ ngay lập tức 4 tác vụ đang chạy bình thường còn lại', 'Bỏ qua mọi kết quả thành công', 'Tự động sửa mọi lỗi mạng', 'Chuyển chương trình sang chạy đồng bộ'],
-        correctIndex: 0,
-        explanationMd: 'Giúp thu thập kết quả từng phần an toàn (Partial Success) khi gọi nhiều nguồn dữ liệu song song.',
-      },
-      {
-        skillId: skSqlVec!.id,
-        prompt: 'Trong PostgreSQL, câu lệnh nào dùng để xem chi tiết kế hoạch thực thi thực tế kèm thời gian chạy và số lượng khối bộ nhớ (buffers) đã đọc của một truy vấn?',
-        options: ['`EXPLAIN (ANALYZE, BUFFERS) SELECT ...`', '`SHOW TABLES`', '`DESCRIBE DATABASE`', '`PRINT QUERY`'],
-        correctIndex: 0,
-        explanationMd: '`EXPLAIN (ANALYZE, BUFFERS)` thực thi câu lệnh và báo cáo chính xác thời gian thực tế tại từng nút.',
-      },
-      {
-        skillId: skSqlVec!.id,
-        prompt: 'Để tìm Top 3 học viên có điểm thi cao nhất trong TỪNG lớp học (`cohort_id`), cấu trúc truy vấn SQL nào chuẩn xác nhất?',
-        options: ['Dùng CTE tính `DENSE_RANK() OVER (PARTITION BY cohort_id ORDER BY score_pct DESC) AS rk` rồi lọc `WHERE rk <= 3` ở truy vấn ngoài', 'Dùng `LIMIT 3` ở cuối câu lệnh không có `PARTITION BY`', 'Dùng `COUNT(*)`', 'Dùng `DELETE FROM enrollments`'],
-        correctIndex: 0,
-        explanationMd: 'Bài toán Top-N per Group kinh điển trong SQL được giải quyết gọn gàng bằng Window Function kết hợp CTE.',
-      },
-      {
-        skillId: skFastApi!.id,
-        prompt: 'Trong FastAPI, cơ chế `Depends(...)` (Dependency Injection) thường được dùng vào việc gì?',
-        options: ['Tái sử dụng logic lấy phiên kết nối DB, xác thực người dùng từ JWT token và kiểm tra quyền hạn trước khi vào hàm xử lý chính', 'Để biên dịch code sang Java', 'Để xóa file log', 'Để thay thế HTML'],
-        correctIndex: 0,
-        explanationMd: 'Dependency Injection trong FastAPI giúp tách biệt logic xác thực/kết nối và dễ dàng override khi viết kiểm thử tự động.',
-      },
-    ]
-  );
-
-  // --- SWE-ARCH-2026-K01 Session Quizzes & Final Exam ---
-  const swe1Items = buildSessionQuizItems(quizSwe1!.id, 1, 'Clean Layered Architecture & Zod', skNode!.id, skSysDesign!.id, [
-    {
-      prompt: 'Trong kiến trúc phân tầng Clean Layered Architecture (`Routes -> Services -> Repositories`), tầng `Service` chịu trách nhiệm chính về việc gì?',
-      options: ['Thực thi quy tắc nghiệp vụ cốt lõi (Business Logic), điều phối giao dịch (Transaction) và gọi các Repository cần thiết mà không phụ thuộc trực tiếp vào đối tượng HTTP `req/res`', 'Chỉ viết mã CSS cho nút bấm', 'Quản lý cáp mạng vật lý', 'Lưu mật khẩu dạng văn bản thuần'],
-      correctIndex: 0,
-      explanationMd: 'Tách biệt Business Logic vào Service giúp dễ dàng kiểm thử độc lập và tái sử dụng ở cả HTTP API lẫn Background Worker.',
-    },
-    {
-      prompt: 'Tại sao cần kiểm tra dữ liệu đầu vào bằng lược đồ `Zod` ngay tại tầng Middleware/Controller trước khi truyền xuống Service?',
-      options: ['Đảm bảo nguyên tắc Fail-Fast: từ chối ngay các payload sai định dạng với thông báo lỗi HTTP 400 rõ ràng và cung cấp kiểu dữ liệu TypeScript an toàn cho các tầng bên dưới', 'Để làm tăng kích thước gói tin mạng', 'Vì TypeScript tự động kiểm tra kiểu dữ liệu lúc chạy (runtime) mà không cần thư viện', 'Để tắt tính năng xác thực'],
-      correctIndex: 0,
-      explanationMd: 'Kiểu của TypeScript bị xóa sau khi biên dịch sang JavaScript; Zod bổ sung lớp kiểm tra kiểu thực tế lúc runtime.',
-    },
-    {
-      prompt: 'Mục đích của Global Error Handling Middleware (hàm 4 tham số `(err, req, res, next)`) trong Express là gì?',
-      options: ['Tập trung toàn bộ việc bắt lỗi, ghi nhật ký kèm `correlationId` và chuẩn hóa cấu trúc phản hồi JSON đồng nhất trên toàn hệ thống', 'Để ẩn mọi lỗi và luôn trả về `200 OK` rỗng', 'Để khởi động lại máy chủ sau mỗi request', 'Để xóa cơ sở dữ liệu khi người dùng nhập sai mật khẩu'],
-      correctIndex: 0,
-      explanationMd: 'Chuẩn hóa phản hồi lỗi giúp Frontend xử lý nhất quán và không làm lộ stack trace nhạy cảm ra môi trường Production.',
-    },
-    {
-      prompt: 'Khi ghi nhật ký hệ thống (Structured Logging với Pino), tại sao định dạng JSON một dòng lại được ưu tiên hơn nối chuỗi văn bản tự do?',
-      options: ['Giúp các hệ thống thu thập log phân tích, đánh chỉ mục và lọc nhanh theo các trường `level`, `correlationId`, `accountId`, `latencyMs`', 'Vì JSON tốn ít ký tự hơn 1 chữ cái', 'Vì con người không đọc được chữ thường', 'Để làm đầy ổ cứng nhanh hơn'],
-      correctIndex: 0,
-      explanationMd: 'Structured JSON logs là tiêu chuẩn bắt buộc để giám sát và cảnh báo tự động trong hệ thống phân tán.',
-    },
-  ]);
-
-  const swe2Items = buildSessionQuizItems(quizSwe2!.id, 2, 'EXPLAIN ANALYZE & PostgreSQL Tuning', skSqlVec!.id, skNode!.id, [
-    {
-      prompt: 'Lỗi hiệu năng `N+1 Query Problem` xảy ra trong tình huống nào?',
-      options: ['Ứng dụng chạy 1 câu truy vấn lấy danh sách $N$ khóa học, sau đó đặt một vòng lặp `for` chạy thêm $N$ câu truy vấn riêng lẻ tới DB để lấy đợt học của từng khóa', 'Khi bảng có đúng 1 dòng dữ liệu', 'Khi sử dụng câu lệnh `JOIN` hoặc `WHERE ... IN (...)`', 'Khi đặt tên biến có chữ N'],
-      correctIndex: 0,
-      explanationMd: 'Khắc phục N+1 Query bằng cách gộp thành 1 truy vấn `JOIN` hoặc `WHERE course_id = ANY($1)` giúp giảm hàng trăm round-trips mạng xuống chỉ còn 1–2 lượt.',
-    },
-    {
-      prompt: 'Chỉ mục một phần (`Partial Index` - ví dụ `CREATE INDEX ON orders (account_id) WHERE status = \'PENDING\'`) mang lại lợi ích gì?',
-      options: ['Chỉ đánh chỉ mục trên tập con các dòng thỏa mãn điều kiện `WHERE`, giúp giảm đáng kể kích thước chỉ mục và tăng tốc độ ghi/cập nhật trên các dòng đã hoàn tất', 'Xóa các dòng có trạng thái `PAID`', 'Làm cho truy vấn chậm hơn', 'Không cho phép cập nhật cột `status`'],
-      correctIndex: 0,
-      explanationMd: 'Khi 95% đơn hàng trong lịch sử đã `PAID`/`EXPIRED` và ứng dụng thường xuyên tìm các đơn `PENDING`, Partial Index cực kỳ nhỏ gọn và nhanh.',
-    },
-    {
-      prompt: 'Trong chỉ mục phức hợp `CREATE INDEX idx_enroll_acc_status ON enrollments (account_id, status)`, truy vấn nào sau đây tận dụng hiệu quả nhất chỉ mục này?',
-      options: ['Truy vấn lọc theo `WHERE account_id = $1 AND status = $2` hoặc lọc theo cột đứng đầu `WHERE account_id = $1` (Leftmost Prefix Rule)', 'Truy vấn chỉ lọc theo `WHERE dropout_risk_score > 0.5`', 'Truy vấn bảng `categories`', 'Truy vấn không có mệnh đề `WHERE` và `ORDER BY`'],
-      correctIndex: 0,
-      explanationMd: 'Chỉ mục B-Tree nhiều cột tuân theo nguyên tắc tiền tố trái (Leftmost Prefix): cột có độ chọn lọc cao và hay tra cứu nhất nên đặt đứng đầu.',
-    },
-    {
-      prompt: 'Thông số `Buffers: shared hit=120 read=0` trong kết quả `EXPLAIN (ANALYZE, BUFFERS)` cho biết điều gì?',
-      options: ['Toàn bộ 120 trang dữ liệu (mỗi trang 8KB) đều được đọc trực tiếp từ bộ nhớ đệm RAM (`shared_buffers`) mà không phải đọc từ ổ cứng vật lý', 'Cơ sở dữ liệu không tìm thấy dòng nào', 'Ổ cứng bị hỏng hoàn toàn', 'Câu lệnh bị lỗi cú pháp'],
-      correctIndex: 0,
-      explanationMd: '`shared hit` cao và `read` (đọc đĩa) thấp chứng tỏ tập dữ liệu nóng (working set) và chỉ mục đã nằm gọn trong RAM.',
-    },
-  ]);
-
-  const swe3Items = buildSessionQuizItems(quizSwe3!.id, 3, 'ACID, Locking & Idempotent Webhook', skSysDesign!.id, skSqlVec!.id, [
-    {
-      prompt: 'Tại sao cổng nhận thông báo thanh toán tự động (`POST /api/v1/webhooks/sepay`) bắt buộc phải thiết kế đảm bảo tính **Idempotency** (bất biến khi gọi lặp lại)?',
-      options: ['Vì cổng thanh toán ngân hàng có cơ chế Retry gửi lại cùng một thông báo giao dịch khi mạng chập chờn; hệ thống phải đảm bảo không kích hoạt ghi danh kép hoặc cộng trùng doanh thu', 'Để cho phép một biên lai chuyển khoản mua được 100 khóa học khác nhau', 'Để bỏ qua bước kiểm tra số tiền chuyển khoản', 'Để xóa đơn hàng ngay khi nhận tiền'],
-      correctIndex: 0,
-      explanationMd: 'Sử dụng khóa duy nhất `gateway_txn_id` kết hợp kiểm tra trạng thái đơn hàng bên trong giao dịch ACID giúp xử lý an toàn mọi bản tin webhook gửi trùng.',
-    },
-    {
-      prompt: 'Câu lệnh `SELECT * FROM orders WHERE id = $1 FOR UPDATE` bên trong một giao dịch SQL có tác dụng gì?',
-      options: ['Đặt khóa bi quan cấp độ dòng (Row-level Exclusive Lock), buộc các giao dịch đồng thời khác muốn sửa dòng đơn hàng này phải chờ tới khi giao dịch hiện tại `COMMIT` hoặc `ROLLBACK`', 'Xóa dòng đơn hàng đó ngay lập tức', 'Cho phép mọi người sửa dòng đó cùng lúc mà không kiểm tra', 'Đổi mật khẩu cơ sở dữ liệu'],
-      correctIndex: 0,
-      explanationMd: '`SELECT ... FOR UPDATE` ngăn chặn triệt để lỗi Race Condition khi hai tiến trình cùng xử lý một đơn hàng tại cùng một mili-giây.',
-    },
-    {
-      prompt: 'Nếu khách hàng chuyển khoản số tiền `6.000.000 đ` cho đơn hàng có học phí `6.800.000 đ`, hệ thống đối soát Webhook của 3T Academy xử lý như thế nào?',
-      options: ['Ghi nhận bản ghi giao dịch vào bảng `payment_transactions` với trạng thái `AMOUNT_MISMATCH` để lưu bằng chứng kiểm toán và giữ nguyên trạng thái đơn hàng `PENDING` chờ xử lý', 'Vẫn tự động kích hoạt khóa học như bình thường', 'Xóa tài khoản của học viên', 'Làm sập máy chủ API'],
-      correctIndex: 0,
-      explanationMd: 'Mọi biến động tiền tệ đều phải được ghi log bất biến vào `payment_transactions` kèm `match_status` rõ ràng để đối soát tài chính.',
-    },
-    {
-      prompt: 'Khi giao dịch thanh toán khớp thành công 100% số tiền và mã đơn, những thao tác nào cần được thực hiện nguyên tử (Atomic) trong cùng một `db.transaction`?',
-      options: ['Lưu `payment_transactions (MATCHED)` -> Cập nhật `orders (PAID)` -> Tạo bản ghi `enrollments (ACTIVE)` -> Tăng `cohorts.enrolled_count + 1` -> Tạo thông báo cho học viên', 'Chỉ gửi email rồi tắt máy', 'Chỉ đổi màu giao diện mà không lưu vào database', 'Xóa lớp học'],
-      correctIndex: 0,
-      explanationMd: 'Gói toàn bộ chuỗi cập nhật trạng thái đơn hàng, ghi danh và sĩ số lớp vào 1 giao dịch ACID đảm bảo dữ liệu không bao giờ bị lệch.',
-    },
-  ]);
-
-  const swe4Items = buildSessionQuizItems(quizSwe4!.id, 4, 'Redis Caching & BullMQ', skSysDesign!.id, skNode!.id, [
-    {
-      prompt: 'Trong mẫu thiết kế `Cache-Aside` với Redis, trình tự xử lý khi có yêu cầu đọc dữ liệu diễn ra như thế nào?',
-      options: ['Kiểm tra Redis trước; nếu trúng (Cache Hit) thì trả về ngay, nếu trượt (Cache Miss) thì đọc từ PostgreSQL rồi lưu bản sao vào Redis kèm TTL trước khi trả kết quả', 'Luôn xóa toàn bộ Redis trước mỗi lần đọc', 'Chỉ ghi vào Redis mà không bao giờ lưu vào PostgreSQL', 'Đọc đồng thời từ 10 cơ sở dữ liệu khác nhau'],
-      correctIndex: 0,
-      explanationMd: 'Cache-Aside là mô hình phổ biến và an toàn nhất để giảm tải đọc cho PostgreSQL.',
-    },
-    {
-      prompt: 'Hiện tượng `Cache Stampede` (Thundering Herd) xảy ra khi nào và cách phòng tránh đơn giản là gì?',
-      options: ['Khi một khóa cache rất nóng vừa hết hạn khiến hàng nghìn request đồng thời cùng bị Cache Miss và ập xuống đánh sập DB; phòng tránh bằng cách cộng thêm độ lệch ngẫu nhiên vào TTL (TTL Jitter) hoặc dùng khóa Singleflight/Mutex', 'Khi ổ cứng còn trống quá nhiều', 'Khi chỉ có 1 người dùng truy cập trang web', 'Khi đặt mật khẩu Redis dài hơn 8 ký tự'],
-      correctIndex: 0,
-      explanationMd: 'TTL Jitter và khóa tái tạo cache giúp bảo vệ cơ sở dữ liệu khi lưu lượng tăng đột biến.',
-    },
-    {
-      prompt: 'Tại sao các tác vụ nặng như trích xuất văn bản PDF, băm nhỏ tài liệu và gọi API tạo vector embedding nên được đẩy vào hàng đợi bất đồng bộ (Background Queue) thay vì chạy trực tiếp trong luồng HTTP upload?',
-      options: ['Để trả phản hồi nhanh cho người dùng, tránh lỗi HTTP Request Timeout và cho phép Worker tự động thử lại (Retry) khi dịch vụ bên ngoài gặp sự cố tạm thời', 'Để làm mất dữ liệu của người dùng', 'Vì giao thức HTTP không truyền được file PDF', 'Để bắt người dùng chờ 2 tiếng trên trình duyệt'],
-      correctIndex: 0,
-      explanationMd: 'Tách các tác vụ I/O hoặc tính toán kéo dài sang Background Worker giữ cho cổng API luôn phản hồi mượt mà.',
-    },
-    {
-      prompt: 'Khi giảng viên hoặc quản trị viên cập nhật thông tin khóa học trong PostgreSQL, bước nào cần thực hiện đối với Redis Cache?',
-      options: ['Chủ động xóa (Invalidate / `DEL`) các khóa cache danh mục liên quan để người dùng không đọc phải dữ liệu cũ (Stale Data)', 'Tắt dịch vụ PostgreSQL', 'Đổi cổng mạng của máy chủ', 'Không làm gì cả và chờ 10 năm sau cache tự hết hạn'],
-      correctIndex: 0,
-      explanationMd: 'Explicit Cache Invalidation ngay sau khi cập nhật DB kết hợp TTL hợp lý giúp cân bằng giữa hiệu năng và tính tươi mới của dữ liệu.',
-    },
-  ]);
-
-  const swe5Items = buildSessionQuizItems(quizSwe5!.id, 5, 'JWT RBAC & Docker Production', skNode!.id, skDocker!.id, [
-    {
-      prompt: 'Tại sao hệ thống xác thực hiện đại thường kết hợp `Access Token` có thời hạn ngắn (15 phút) với `Refresh Token` có thời hạn dài hơn (7 ngày)?',
-      options: ['Giới hạn cửa sổ rủi ro nếu Access Token bị lộ, đồng thời cho phép thu hồi phiên đăng nhập (Revoke) hoặc xoay vòng (Rotation) thông qua kiểm soát Refresh Token', 'Để bắt người dùng gõ lại mật khẩu sau mỗi 30 giây', 'Vì thư viện JWT không tạo được token dài hơn 15 phút', 'Để làm tăng dung lượng bảng khóa học'],
-      correctIndex: 0,
-      explanationMd: 'Kiến trúc Dual-Token cân bằng giữa hiệu năng xác thực Stateless và khả năng thu hồi quyền truy cập kịp thời.',
-    },
-    {
-      prompt: 'Middleware phân quyền `requireRole("INSTRUCTOR", "ADMIN")` phải được đặt ở vị trí nào trong chuỗi xử lý route của Express?',
-      options: ['Đặt ngay sau middleware xác thực JWT (`requireAuth`) và trước hàm Controller xử lý nghiệp vụ', 'Đặt sau khi đã xóa xong dữ liệu trong DB', 'Chỉ đặt ở file HTML tĩnh', 'Không cần gắn vào route nào cả'],
-      correctIndex: 0,
-      explanationMd: '`requireAuth` giải mã danh tính `req.user`, sau đó `requireRole` kiểm tra `req.user.role` trước khi cho phép đi vào Controller.',
-    },
-    {
-      prompt: 'Tại sao trong Dockerfile Production cho ứng dụng Node.js/Python nên chuyển sang chạy bằng tài khoản không có quyền root (`USER node` hoặc `USER appuser`)?',
-      options: ['Tuân thủ nguyên tắc Đặc quyền tối thiểu (Least Privilege), ngăn kẻ tấn công chiếm quyền điều khiển toàn bộ hệ thống tệp của container nếu ứng dụng có lỗ hổng', 'Để ứng dụng chạy tốn nhiều RAM hơn', 'Vì Docker cấm tài khoản root', 'Để xóa mã nguồn'],
-      correctIndex: 0,
-      explanationMd: 'Chạy tiến trình với non-root user là tiêu chuẩn bảo mật bắt buộc trong vận hành container.',
-    },
-    {
-      prompt: 'Cơ chế `Rate Limiting` (giới hạn tốc độ gọi API theo IP hoặc theo User ID) trên các endpoint nhạy cảm như `/auth/login` giúp ngăn chặn cuộc tấn công nào?',
-      options: ['Tấn công dò mật khẩu vét cạn (Brute-force / Credential Stuffing) và tấn công làm cạn kiệt tài nguyên (DoS)', 'Lỗi sai màu sắc nút bấm', 'Lỗi thiếu dấu chấm phẩy trong TypeScript', 'Lỗi tràn ổ cứng của màn hình'],
-      correctIndex: 0,
-      explanationMd: 'Rate Limiting chặn đứng các kịch bản tự động thử hàng nghìn mật khẩu mỗi phút.',
-    },
-  ]);
-
-  const swe6Items = buildSessionQuizItems(quizSwe6!.id, 6, 'Load Testing & Distributed Systems', skSysDesign!.id, skDocker!.id, [
-    {
-      prompt: 'Khi đánh giá kết quả kiểm thử chịu tải (Load Testing với k6), tại sao chỉ số độ trễ phân vị thứ 95 và 99 (`p95`, `p99` latency) lại quan trọng hơn độ trễ trung bình cộng (`average`)?',
-      options: ['Vì giá trị trung bình dễ bị che mờ bởi các request nhanh, trong khi `p95`/`p99` cho biết trải nghiệm thực tế của nhóm 1%–5% yêu cầu chậm nhất đang gặp nghẽn cổ chai', 'Vì phép tính trung bình cộng không tồn tại trong toán học', 'Vì `p95` luôn bằng 0ms', 'Vì k6 không tính được số trung bình'],
-      correctIndex: 0,
-      explanationMd: 'Trong hệ thống lớn, việc kiểm soát Tail Latency (`p95`, `p99`) quyết định sự ổn định của toàn chuỗi dịch vụ.',
-    },
-    {
-      prompt: 'Khi tiến trình máy chủ nhận tín hiệu dừng (`SIGTERM`) từ Docker/Kubernetes trong lúc triển khai phiên bản mới, quy trình **Graceful Shutdown** chuẩn cần làm gì?',
-      options: ['Ngừng nhận kết nối HTTP mới, chờ các request đang xử lý dở hoàn tất (trong khoảng timeout), đóng sạch Connection Pool của PostgreSQL và Redis rồi mới thoát tiến trình', 'Ngắt nguồn điện ngay lập tức làm đứt toàn bộ giao dịch đang chạy', 'Xóa toàn bộ bảng dữ liệu trước khi tắt', 'Tạo thêm 100 tiến trình con'],
-      correctIndex: 0,
-      explanationMd: 'Graceful Shutdown đảm bảo triển khai Zero-Downtime mà không làm rơi bất kỳ giao dịch nào của người dùng.',
-    },
-    {
-      prompt: 'Mẫu thiết kế `Circuit Breaker` (Cầu dao tự ngắt) khi gọi dịch vụ bên thứ ba có tác dụng gì?',
-      options: ['Khi tỷ lệ lỗi từ dịch vụ đích vượt ngưỡng, cầu dao mở ra để trả về phản hồi dự phòng ngay lập tức mà không tiếp tục gửi request chờ timeout gây hiệu ứng sập dây chuyền (Cascading Failure)', 'Tự động sửa phần cứng máy chủ đối tác', 'Tăng gấp đôi hóa đơn tiền điện', 'Xóa khóa API'],
-      correctIndex: 0,
-      explanationMd: 'Circuit Breaker cô lập lỗi cục bộ để bảo vệ tính sẵn sàng chung.',
-    },
-    {
-      prompt: 'Healthcheck endpoint `/health` trả về trạng thái `200 OK` khi kiểm tra kết nối DB thành công dùng để làm gì?',
-      options: ['Cho Load Balancer / Docker / Kubernetes biết container đã sẵn sàng nhận lưu lượng thật', 'Để hiển thị quảng cáo', 'Để reset mật khẩu Admin', 'Để tải video bài giảng'],
-      correctIndex: 0,
-      explanationMd: 'Readiness/Liveness probe đảm bảo traffic chỉ điều hướng tới các instance khỏe mạnh.',
-    },
-  ]);
-
-  const finalExamSweItems = buildSessionQuizItems(
-    finalExamSweK01!.id,
-    6,
-    'Sát hạch Kiến trúc Backend',
-    skSysDesign!.id,
-    skNode!.id,
-    [
-      {
-        skillId: skNode!.id,
-        prompt: 'Trong kiến trúc Clean Layered, tầng Service nên giao tiếp với tầng Repository thông qua điều gì để dễ kiểm thử?',
-        options: ['Hợp đồng kiểu dữ liệu rõ ràng và tiêm phụ thuộc (Dependency Injection)', 'Biến toàn cục `window`', 'Đọc trực tiếp biến môi trường trong React', 'Lệnh `eval()`'],
-        correctIndex: 0,
-        explanationMd: 'Tách biệt giao diện tầng giúp thay thế hoặc mock Repository sạch sẽ khi viết test.',
-      },
-      {
-        skillId: skSqlVec!.id,
-        prompt: 'Kết hợp `SELECT ... FOR UPDATE` cùng `UNIQUE(gateway_txn_id)` giải quyết vấn đề gì khi 2 webhook đến cùng một mili-giây?',
-        options: ['Đảm bảo chỉ có duy nhất 1 giao dịch kích hoạt ghi danh, giao dịch còn lại bị từ chối an toàn (Idempotency)', 'Làm tăng gấp đôi số học viên', 'Gây treo toàn bộ cơ sở dữ liệu vĩnh viễn', 'Bỏ qua bước kiểm tra chữ ký'],
-        correctIndex: 0,
-        explanationMd: 'Phòng chống Race Condition và Double-Spend ở mức ACID tuyệt đối.',
-      },
-      {
-        skillId: skSysDesign!.id,
-        prompt: 'Khi Redis gặp sự cố tạm thời không thể kết nối trong luồng đọc danh mục công khai (Cache-Aside), hệ thống nên hành xử thế nào?',
-        options: ['Ghi log cảnh báo và fallback đọc trực tiếp từ PostgreSQL (Graceful Degradation)', 'Sập toàn bộ trang chủ với HTTP 500', 'Xóa toàn bộ bảng courses', 'Đăng xuất tất cả người dùng'],
-        correctIndex: 0,
-        explanationMd: 'Cache là lớp tăng tốc chứ không phải nguồn chân lý duy nhất của dữ liệu.',
-      },
-      {
-        skillId: skDocker!.id,
-        prompt: 'Tại sao cần tách `healthcheck` cho PostgreSQL và Redis với `condition: service_healthy` trong Docker Compose?',
-        options: ['Ngăn API container khởi chạy và crash khi DB chưa mở cổng hoặc chưa khởi tạo xong', 'Để làm file docker-compose.yml dài hơn', 'Để tắt log JSON', 'Để bỏ qua biến môi trường'],
-        correctIndex: 0,
-        explanationMd: 'Kiểm soát đúng thứ tự sẵn sàng dịch vụ khi khởi động cụm container.',
-      },
-      {
-        skillId: skNode!.id,
-        prompt: 'Tại sao Refresh Token hoặc Access Token không nên lộ trong URL query string ở các API REST thông thường?',
-        options: ['Vì URL dễ bị lưu lại trong lịch sử trình duyệt, log proxy và header Referer', 'Vì URL không chứa được chữ cái Latinh', 'Vì Express cấm đọc `req.query`', 'Vì trình duyệt tự động mã hóa query string thành PDF'],
-        correctIndex: 0,
-        explanationMd: 'Luôn truyền token qua `Authorization: Bearer` header hoặc cookie `HttpOnly`.',
-      },
-    ]
-  );
-
-  const allInsertedItems = await db
-    .insert(assessmentItems)
-    .values([
-      ...sess1Items,
-      ...sess2Items,
-      ...sess3Items,
-      ...sess4Items,
-      ...sess5Items,
-      ...sess6Items,
-      ...finalExamAiItems,
-      ...py1Items,
-      ...py2Items,
-      ...py3Items,
-      ...py4Items,
-      ...py5Items,
-      ...py6Items,
-      ...finalExamPyItems,
-      ...swe1Items,
-      ...swe2Items,
-      ...swe3Items,
-      ...swe4Items,
-      ...swe5Items,
-      ...swe6Items,
-      ...finalExamSweItems,
-    ])
-    .returning();
-
-  // =========================================================================
-  // 11. KNOWLEDGE CHUNKS (Public FAQ + Course-Scoped Enrolled Lecture Chunks)
-  // =========================================================================
-  const rawKnowledgeChunks = [
-    // --- PUBLIC CHUNKS (Used ONLY by Career/Course Advisor — NO deep lecture secrets) ---
-    {
-      visibility: 'PUBLIC' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-ai-overview-01',
-      startSec: null,
-      endSec: null,
-      pageNumber: null,
-      content:
-        'Khóa học "Kỹ sư AI Thực chiến: RAG, Agents & LLMOps" (mã đợt đang mở: AI-ENG-2026-K01) gồm 6 buổi chuyên sâu. Lịch học tối Thứ 3 và Thứ 5 (19:30 - 21:30), do TS. Lê Minh Khoa trực tiếp giảng dạy. Phù hợp cho lập trình viên đã biết Python và SQL cơ bản muốn chuyển sang làm AI Engineer.',
-    },
-    {
-      visibility: 'PUBLIC' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 2,
-      contentHash: 'hash-pub-ai-syllabus-02',
-      startSec: null,
-      endSec: null,
-      pageNumber: null,
-      content:
-        'Lộ trình 6 buổi của khóa Kỹ sư AI Thực chiến (AI-ENG-2026-K01): Buổi 1 (FastAPI & Python AsyncIO), Buổi 2 (Chunking & Vector DB pgvector), Buổi 3 (Hybrid Search & Reranking), Buổi 4 (Function Calling & ReAct Agent), Buổi 5 (Đánh giá Ragas & LLMOps), Buổi 6 (Bảo vệ đồ án & Thi sát hạch).',
-    },
-    {
-      visibility: 'PUBLIC' as const,
-      courseId: courseSwe!.id,
-      cohortId: cohortSweK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-swe-overview-01',
-      startSec: null,
-      endSec: null,
-      pageNumber: null,
-      content:
-        'Khóa học "Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems" (mã đợt đang mở: SWE-ARCH-2026-K01) do ThS. Nguyễn Thu Hà giảng dạy vào tối Thứ 4 và Chủ Nhật (19:30 - 21:30). Trọng tâm lộ trình: Clean Layered Architecture, tối ưu truy vấn PostgreSQL, giao dịch ACID & Webhook thanh toán, Redis Caching, bảo mật JWT/Docker và kiểm thử chịu tải.',
-    },
-    {
-      visibility: 'PUBLIC' as const,
-      courseId: courseData!.id,
-      cohortId: cohortDataK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-data-overview-01',
-      startSec: null,
-      endSec: null,
-      pageNumber: null,
-      content:
-        'Khóa học "Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse" (mã đợt đang mở: DATA-PIPE-2026-K01) học chiều Thứ 7 và Chủ Nhật (14:00 - 16:30) cùng ThS. Nguyễn Thu Hà. Dành cho học viên muốn làm chủ đường ống dữ liệu lớn với Apache Spark, Kafka, dbt Lakehouse và đồng bộ dữ liệu cho AI.',
-    },
-    {
-      visibility: 'PUBLIC' as const,
-      courseId: coursePython!.id,
-      cohortId: cohortPyK01!.id,
-      sessionId: null,
-      attachmentId: null,
-      sourceType: 'FAQ',
-      chunkIndex: 1,
-      contentHash: 'hash-pub-py-overview-01',
-      startSec: null,
-      endSec: null,
-      pageNumber: null,
-      content:
-        'Khóa học nền tảng "Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI" (mã đợt đang mở: PY-SQL-2026-K01) học tối Thứ 2 và Thứ 5 (19:30 - 21:30) do TS. Lê Minh Khoa phụ trách. Rất phù hợp cho người mới bắt đầu hoặc trái ngành muốn xây nền tảng Python 3.11, OOP, Pytest, AsyncIO và truy vấn SQL phân tích trên PostgreSQL trước khi lên các khóa AI hoặc Data chuyên sâu.',
-    },
-
-    // --- ENROLLED_ONLY CHUNKS: Course 1 (AI-ENG-2026-K01) ---
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess1!.id,
-      attachmentId: attS1Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s1-chunk-01',
-      startSec: 120,
-      endSec: 480,
-      pageNumber: 6,
-      content:
-        'Trong môi trường Production, cổng AI Gateway viết bằng FastAPI bắt buộc phải sử dụng cơ chế bất đồng bộ hoàn toàn với httpx.AsyncClient và asyncio.Semaphore. Nếu gọi hàm đồng bộ như time.sleep hoặc requests.post bên trong async def, toàn bộ Event Loop của tiến trình worker sẽ bị nghẽn. Để truyền phát câu trả lời theo thời gian thực qua Server-Sent Events (SSE), dùng StreamingResponse với media_type="text/event-stream" giúp giảm Time To First Token (TTFT) xuống dưới 400ms.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess2!.id,
-      attachmentId: attS2Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s2-chunk-01',
-      startSec: 300,
-      endSec: 840,
-      pageNumber: 9,
-      content:
-        'Chiến lược băm tài liệu hai tầng kết hợp MarkdownHeaderTextSplitter và RecursiveCharacterTextSplitter với độ chồng lấp chunk_overlap từ 10% đến 15% giúp bảo toàn ngữ cảnh tiêu đề chương mục. Trên PostgreSQL pgvector, chỉ mục HNSW được tạo với vector_cosine_ops (m = 16, ef_construction = 64) và truy vấn bằng toán tử khoảng cách Cosine (<=>).',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess3!.id,
-      attachmentId: attS3Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 1,
-      contentHash: 'hash-s3-chunk-02',
-      startSec: 1420,
-      endSec: 2100,
-      pageNumber: 14,
-      content:
-        'Thuật toán Hybrid Search kết hợp Dense Vector (pgvector) và tìm kiếm từ khóa BM25 (tsvector/GIN) thông qua công thức Reciprocal Rank Fusion: RRF_Score(d) = 1 / (k + rank_dense(d)) + 1 / (k + rank_bm25(d)) với hằng số làm mượt k = 60. Sau khi lấy Top 30 ứng viên từ RRF, mô hình Cross-Encoder Reranker chấm điểm lại cặp (câu hỏi, đoạn văn) để chọn ra Top 5 chính xác nhất. Luôn áp dụng Pre-filtering RBAC ngay trong mệnh đề WHERE của SQL.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess4!.id,
-      attachmentId: attS4Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s4-chunk-01',
-      startSec: 540,
-      endSec: 1260,
-      pageNumber: 11,
-      content:
-        'Trong cơ chế Function Calling và vòng lặp ReAct Agent (Thought -> Action -> Observation), mô hình LLM sinh cấu trúc JSON tuân theo lược đồ Pydantic v2. Nếu bắt được ngoại lệ ValidationError, hãy đóng gói lỗi gửi trả lại vào tool message để mô hình tự sửa tham số (Self-Correction), đồng thời giới hạn cứng max_iterations = 4 bước.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess5!.id,
-      attachmentId: attS5Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-s5-chunk-01',
-      startSec: 480,
-      endSec: 1320,
-      pageNumber: 12,
-      content:
-        'Bộ khung đánh giá Ragas đo lường chất lượng hệ thống RAG qua 4 chỉ số: Context Precision và Context Recall (đánh giá tầng Retrieval), Faithfulness (độ trung thực chống ảo giác) và Answer Relevancy (đánh giá tầng Generation). Kết hợp Semantic Cache trên Redis với ngưỡng tương đồng Cosine >= 0.94 giúp tiết kiệm 35%–50% chi phí token.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseAi!.id,
-      cohortId: cohortAiK01!.id,
-      sessionId: sess6!.id,
-      attachmentId: attS6Slide!.id,
-      sourceType: 'ATTACHMENT_DOC',
-      chunkIndex: 1,
-      contentHash: 'hash-s6-chunk-02',
-      startSec: 1600,
-      endSec: 2300,
-      pageNumber: 16,
-      content:
-        'Tổng duyệt kiến trúc Production AI và quy chế thi sát hạch cuối khóa: tách biệt dịch vụ giao dịch Node.js/TypeScript và AI Microservice FastAPI, đóng gói bằng Multi-stage Dockerfile. Học viên hoàn thành 6/6 buổi học và vượt qua kỳ thi >= 70% sẽ nhận chứng chỉ số ký xác thực HMAC-SHA256 kèm +4 lượt phỏng vấn thử AI.',
-    },
-
-    // --- ENROLLED_ONLY CHUNKS: Course 2 (SWE-ARCH-2026-K01) ---
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseSwe!.id,
-      cohortId: cohortSweK01!.id,
-      sessionId: sessSwe1!.id,
-      attachmentId: attSwe1Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-swe-s1-chunk-01',
-      startSec: 240,
-      endSec: 900,
-      pageNumber: 8,
-      content:
-        'Trong kiến trúc Clean Layered Architecture (Routes -> Services -> Repositories), tầng Controller chỉ điều phối HTTP và kiểm tra dữ liệu đầu vào bằng lược đồ Zod (Fail-Fast), tầng Service chứa toàn bộ quy tắc nghiệp vụ cốt lõi và điều phối Transaction, còn tầng Repository đóng gói truy vấn Drizzle ORM. Mọi request đều gắn X-Correlation-ID và ghi log JSON qua Pino.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseSwe!.id,
-      cohortId: cohortSweK01!.id,
-      sessionId: sessSwe2!.id,
-      attachmentId: attSwe2Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-swe-s2-chunk-01',
-      startSec: 360,
-      endSec: 1080,
-      pageNumber: 12,
-      content:
-        'Khi tối ưu PostgreSQL với EXPLAIN (ANALYZE, BUFFERS), cần chú ý chỉ số shared hit (đọc từ RAM) và read (đọc từ đĩa). Khắc phục triệt để lỗi N+1 Query bằng JOIN hoặc WHERE IN, áp dụng Leftmost Prefix Rule cho Composite B-Tree Index và dùng Partial Index (ví dụ WHERE status = PENDING) để thu nhỏ kích thước chỉ mục.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: courseSwe!.id,
-      cohortId: cohortSweK01!.id,
-      sessionId: sessSwe3!.id,
-      attachmentId: attSwe3Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-swe-s3-chunk-01',
-      startSec: 420,
-      endSec: 1200,
-      pageNumber: 15,
-      content:
-        'Khi tích hợp cổng thanh toán SePay VietQR Webhook, bắt buộc sử dụng giao dịch ACID kết hợp khóa bi quan SELECT ... FOR UPDATE trên dòng đơn hàng và ràng buộc UNIQUE(gateway_txn_id) trên bảng payment_transactions để đảm bảo tính Idempotency tuyệt đối, chống cộng tiền kép hoặc kích hoạt ghi danh trùng lặp khi ngân hàng gửi lại webhook.',
-    },
-
-    // --- ENROLLED_ONLY CHUNKS: Course 4 (PY-SQL-2026-K01) ---
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: coursePython!.id,
-      cohortId: cohortPyK01!.id,
-      sessionId: sessPy1!.id,
-      attachmentId: attPy1Slide!.id,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-py-s1-chunk-01',
-      startSec: 180,
-      endSec: 780,
-      pageNumber: 7,
-      content:
-        'Trong Python 3.11+, Generator expression (x*2 for x in items) sử dụng cơ chế tính toán lười (lazy evaluation qua từ khóa yield) giúp tiết kiệm bộ nhớ RAM vượt trội so với List comprehension khi xử lý tập dữ liệu lớn. Cấu trúc dict và set dựa trên bảng băm (Hash Table) cho tốc độ tra cứu phần tử trung bình đạt O(1).',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: coursePython!.id,
-      cohortId: cohortPyK01!.id,
-      sessionId: sessPy2!.id,
-      attachmentId: null,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-py-s2-chunk-01',
-      startSec: 300,
-      endSec: 920,
-      pageNumber: 10,
-      content:
-        'Khi lập trình hướng đối tượng và kiểm thử với Pytest, sử dụng Context Manager (with open(...) as f) để đảm bảo tài nguyên luôn được giải phóng an toàn, và dùng decorator @pytest.mark.parametrize để chạy kiểm thử tự động qua nhiều bộ dữ liệu biên mà không lặp lại code.',
-    },
-    {
-      visibility: 'ENROLLED_ONLY' as const,
-      courseId: coursePython!.id,
-      cohortId: cohortPyK01!.id,
-      sessionId: sessPy3!.id,
-      attachmentId: null,
-      sourceType: 'VIDEO_TRANSCRIPT',
-      chunkIndex: 1,
-      contentHash: 'hash-py-s3-chunk-01',
-      startSec: 400,
-      endSec: 1100,
-      pageNumber: 14,
-      content:
-        'Trong truy vấn SQL phân tích trên PostgreSQL, các hàm cửa sổ (Window Functions như RANK, DENSE_RANK, LAG, SUM OVER PARTITION BY) tính toán giá trị xếp hạng hoặc tổng lũy kế nhưng vẫn giữ nguyên từng dòng chi tiết thay vì gom gộp như GROUP BY. Kết hợp CTE (WITH ...) và Keyset Pagination (WHERE id < last_id) giúp truy vấn dữ liệu lớn nhanh và rõ ràng.',
+  const pyModules: CourseTopicQuestionSeed[] = [
+    {
+      sessionOrder: 1,
+      topic: 'Python Hiện đại, Type Hints & Generator',
+      primarySkillId: skPython!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'PY_S01_Python_TypeHints_Generators.pdf',
+      chunkContent:
+        'Trong Python 3.12, Generator sử dụng từ khóa yield để sinh từng phần tử theo cơ chế lazy evaluation, giúp đọc tệp log hàng chục GB với mức tiêu thụ RAM cố định O(1) thay vì nạp toàn bộ danh sách vào bộ nhớ như list comprehension.',
+      questions: [
+        {
+          prompt: 'Lợi ích lớn nhất của Generator (`yield`) khi đọc tệp dữ liệu 20GB so với `list` là gì?',
+          options: [
+            'Tự động nén tệp trên ổ cứng trước khi đọc',
+            'Sinh dữ liệu từng phần theo nhu cầu (lazy evaluation) giúp RAM giữ ở mức O(1)',
+            'Tự động chạy song song trên tất cả nhân CPU',
+            'Bỏ qua bước kiểm tra cú pháp của Python interpreter',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Generator chỉ giữ trạng thái phần tử hiện tại trong bộ nhớ thay vì cấp phát toàn bộ danh sách.',
+          reviewJumpSec: 210,
+        },
+        {
+          prompt: 'Khai báo Type Hints nào diễn tả hàm nhận danh sách số nguyên và có thể trả về chuỗi hoặc `None`?',
+          options: [
+            'def parse(items: list[int]) -> str | None:',
+            'def parse(items: int[]) -> Optional[int]:',
+            'def parse(items: dict[int, str]) -> None:',
+            'def parse(items: set[str]) -> list[None]:',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Cú pháp `list[int]` và union `str | None` là chuẩn PEP 604 từ Python 3.10+.',
+          reviewJumpSec: 450,
+        },
+        {
+          prompt: 'Độ phức tạp trung bình khi kiểm tra phần tử tồn tại (`x in collection`) trên `set` hoặc `dict` là bao nhiêu?',
+          options: ['O(n log n)', 'O(n)', 'O(1)', 'O(n^2)'],
+          correctIndex: 2,
+          explanationMd: '`set` và `dict` dùng bảng băm (hash table) nên phép tra cứu trung bình đạt O(1).',
+          reviewJumpSec: 720,
+        },
+        {
+          prompt: 'Vì sao không nên dùng giá trị mặc định khả biến như `def append_item(x, bucket=[])` trong Python?',
+          options: [
+            'Vì Python báo lỗi SyntaxError ngay khi chạy file',
+            'Vì `bucket` bị xóa trắng sau mỗi dòng lệnh trong hàm',
+            'Vì Type Hints không hỗ trợ kiểu danh sách rỗng',
+            'Vì đối tượng `list` mặc định chỉ khởi tạo một lần duy nhất và bị dùng chung giữa mọi lần gọi hàm',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Default argument được đánh giá tại thời điểm định nghĩa hàm (`def`), nên cần dùng `bucket: list | None = None`.',
+          reviewJumpSec: 980,
+        },
+      ],
+    },
+    {
+      sessionOrder: 2,
+      topic: 'OOP, Quản lý Ngoại lệ & Kiểm thử với Pytest',
+      primarySkillId: skPython!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'PY_S02_OOP_Exceptions_Pytest.pdf',
+      chunkContent:
+        'Trong Pytest, cơ chế fixture cho phép khởi tạo tài nguyên dùng chung (như kết nối DB giả lập hoặc dữ liệu mẫu) và tự động dọn dẹp sau khi bài kiểm thử chạy xong thông qua câu lệnh yield trong hàm @pytest.fixture.',
+      questions: [
+        {
+          prompt: 'Trong `pytest`, công dụng chính của `@pytest.fixture` có sử dụng `yield` là gì?',
+          options: [
+            'Biên dịch mã Python sang mã máy C++',
+            'Tự động đẩy code lên GitHub sau khi test xong',
+            'Thiết lập tài nguyên trước khi chạy test (setup) và giải phóng an toàn ngay sau khi test kết thúc (teardown)',
+            'Tắt toàn bộ cảnh báo ngoại lệ trong chương trình chính',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Phần trước `yield` là bước chuẩn bị dữ liệu và phần sau `yield` luôn chạy để dọn dẹp tài nguyên.',
+          reviewJumpSec: 240,
+        },
+        {
+          prompt: 'Decorator `@dataclass(slots=True)` mang lại ưu điểm gì cho lớp dữ liệu trong Python?',
+          options: [
+            'Tự động sinh `__init__`, `__repr__`, `__eq__` và giảm bộ nhớ nhờ cố định thuộc tính qua `__slots__`',
+            'Biến lớp Python thành bảng cơ sở dữ liệu PostgreSQL tự động',
+            'Cho phép thêm thuộc tính động tùy ý vào đối tượng lúc runtime',
+            'Tự động mã hóa toàn bộ trường văn bản bằng SHA-256',
+          ],
+          correctIndex: 0,
+          explanationMd: '`slots=True` loại bỏ `__dict__` trên từng thực thể, tiết kiệm đáng kể RAM và tăng tốc truy cập thuộc tính.',
+          reviewJumpSec: 510,
+        },
+        {
+          prompt: 'Nguyên tắc bắt ngoại lệ (Exception Handling) chuẩn kỹ sư trong tầng dịch vụ là gì?',
+          options: [
+            'Luôn dùng `except:` trần để nuốt mọi lỗi không cho ghi log',
+            'Bắt cụ thể nhóm ngoại lệ dự kiến, giữ nguyên ngữ cảnh gốc bằng `raise ... from err` và ghi log có cấu trúc',
+            'Đặt toàn bộ chương trình trong một khối `try` duy nhất ở hàm `main`',
+            'Dùng `assert` để kiểm tra dữ liệu đầu vào của người dùng trên môi trường production',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Bắt đúng loại ngoại lệ và nối chuỗi `from err` giúp bảo toàn stack trace gốc khi điều tra sự cố.',
+          reviewJumpSec: 790,
+        },
+        {
+          prompt: 'Tính năng `@pytest.mark.parametrize` giải quyết bài toán nào khi viết Unit Test?',
+          options: [
+            'Chạy cùng một hàm kiểm thử qua nhiều bộ dữ liệu đầu vào và kết quả kỳ vọng mà không phải copy-paste hàm test',
+            'Giới hạn dung lượng RAM tối đa của tiến trình Python',
+            'Tự động sinh tài liệu API OpenAPI từ hàm test',
+            'Thay thế hoàn toàn nhu cầu kiểm thử tích hợp cơ sở dữ liệu',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Parametrize giúp bao phủ các ca biên (edge cases) rõ ràng và ngắn gọn.',
+          reviewJumpSec: 1050,
+        },
+      ],
+    },
+    {
+      sessionOrder: 3,
+      topic: 'Lập trình Bất đồng bộ AsyncIO & httpx API',
+      primarySkillId: skPython!.id,
+      secondarySkillId: skFastApi!.id,
+      attachmentFileName: 'PY_S03_AsyncIO_EventLoop_Httpx.pdf',
+      chunkContent:
+        'Trong Python AsyncIO, tuyệt đối không gọi thư viện đồng bộ gây nghẽn như time.sleep() hay requests.get() bên trong hàm async def vì nó khóa cứng toàn bộ Event Loop. Thay vào đó phải dùng await asyncio.sleep(), httpx.AsyncClient và dùng asyncio.Semaphore để giới hạn số kết nối đồng thời.',
+      questions: [
+        {
+          prompt: 'Điều gì xảy ra nếu gọi trực tiếp `requests.get()` hoặc `time.sleep(5)` bên trong một coroutine `async def`?',
+          options: [
+            'Python tự động chuyển lệnh đó sang tiến trình khác mà không ảnh hưởng gì',
+            'Toàn bộ Event Loop trên luồng hiện tại bị chặn cứng (block) suốt thời gian chờ, làm đứng mọi tác vụ đồng thời khác',
+            'Hàm tự động trả về kết quả rỗng ngay lập tức',
+            'Trình thông dịch báo lỗi biên dịch và từ chối khởi động ứng dụng',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Các lời gọi I/O đồng bộ không nhường quyền điều khiển (`await`) về lại cho Event Loop.',
+          reviewJumpSec: 195,
+        },
+        {
+          prompt: 'Khi cần gọi 500 URL qua `httpx.AsyncClient` nhưng máy chủ đích chỉ cho phép tối đa 20 kết nối cùng lúc, công cụ nào trong `asyncio` phù hợp nhất?',
+          options: [
+            'asyncio.Semaphore(20) kết hợp `async with sem:`',
+            'Vòng lặp `while True` không có `await`',
+            'Tạo mới 500 đối tượng `httpx.Client` đồng bộ',
+            'Tăng biến môi trường `PYTHONHASHSEED` lên 20',
+          ],
+          correctIndex: 0,
+          explanationMd: '`asyncio.Semaphore(20)` kiểm soát chính xác tối đa 20 coroutine đi vào vùng gọi mạng tại một thời điểm.',
+          reviewJumpSec: 480,
+        },
+        {
+          prompt: 'Vì sao nên khởi tạo một `httpx.AsyncClient` dùng chung theo vòng đời tác vụ thay vì tạo mới trong từng vòng lặp?',
+          options: [
+            'Vì Python chỉ cho phép tạo tối đa một đối tượng `AsyncClient`',
+            'Vì `AsyncClient` tự động lưu toàn bộ dữ liệu vào PostgreSQL',
+            'Để tái sử dụng Connection Pool và phiên bắt tay TLS/TCP, giảm mạnh độ trễ mạng',
+            'Để bỏ qua bước kiểm tra chứng chỉ bảo mật HTTPS',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Tái sử dụng TCP/TLS connection pool giúp giảm chi phí bắt tay mạng lặp đi lặp lại.',
+          reviewJumpSec: 810,
+        },
+        {
+          prompt: 'Trong `asyncio.gather(*tasks, return_exceptions=True)`, tham số `return_exceptions=True` có tác dụng gì?',
+          options: [
+            'Tự động thử lại các tác vụ lỗi vô hạn lần',
+            'Xóa toàn bộ kết quả của các tác vụ thành công nếu có 1 tác vụ lỗi',
+            'Chuyển các coroutine thành luồng hệ điều hành riêng biệt',
+            'Giúp các tác vụ còn lại tiếp tục hoàn tất và trả đối tượng Exception trong danh sách kết quả thay vì hủy ngang toàn nhóm',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Nhờ `return_exceptions=True`, một URL lỗi không làm mất kết quả của hàng trăm URL thành công khác.',
+          reviewJumpSec: 1090,
+        },
+      ],
+    },
+    {
+      sessionOrder: 4,
+      topic: 'Thiết kế CSDL Quan hệ, Khóa ngoại & JOIN PostgreSQL',
+      primarySkillId: skSqlVec!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'PY_S04_PostgreSQL_Relational_Joins.pdf',
+      chunkContent:
+        'Trên PostgreSQL, mệnh đề WHERE lọc các dòng trước khi gom nhóm GROUP BY, trong khi mệnh đề HAVING lọc các nhóm sau khi hàm tổng hợp COUNT, SUM, AVG đã được tính toán. Khóa ngoại (FOREIGN KEY) đảm bảo toàn vẹn tham chiếu ngay tại tầng lưu trữ.',
+      questions: [
+        {
+          prompt: 'Sự khác biệt cốt lõi giữa `WHERE` và `HAVING` trong câu lệnh SQL có `GROUP BY` là gì?',
+          options: [
+            '`WHERE` lọc từng dòng dữ liệu gốc trước khi gom nhóm, còn `HAVING` lọc kết quả sau khi đã gom nhóm và tính hàm tổng hợp',
+            '`HAVING` chạy nhanh hơn `WHERE` và dùng được mà không cần bảng dữ liệu',
+            '`WHERE` chỉ dùng cho kiểu số còn `HAVING` chỉ dùng cho kiểu chuỗi',
+            'Hai mệnh đề hoàn toàn giống nhau và có thể đổi chỗ tùy ý trong mọi trường hợp',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Đưa điều kiện lọc cột thường vào `WHERE` giúp giảm số dòng phải gom nhóm và tận dụng chỉ mục B-Tree.',
+          reviewJumpSec: 220,
+        },
+        {
+          prompt: 'Khi muốn lấy đầy đủ danh sách tất cả các lớp học (`cohorts`) kể cả những lớp chưa có học viên nào ghi danh (`enrollments`), phép nối nào là chính xác?',
+          options: [
+            'INNER JOIN enrollments ON ...',
+            'CROSS JOIN enrollments',
+            'LEFT JOIN enrollments ON cohorts.id = enrollments.cohort_id',
+            'RIGHT JOIN cohorts ON cohorts.id = enrollments.id',
+          ],
+          correctIndex: 2,
+          explanationMd: '`LEFT JOIN` giữ toàn bộ bản ghi từ bảng bên trái (`cohorts`) và điền `NULL` khi chưa có dòng khớp ở `enrollments`.',
+          reviewJumpSec: 530,
+        },
+        {
+          prompt: 'Ràng buộc `UNIQUE (account_id, cohort_id)` trên bảng `enrollments` bảo vệ quy tắc nghiệp vụ nào?',
+          options: [
+            'Một lớp học chỉ có tối đa một học viên duy nhất',
+            'Một học viên chỉ có thể có tối đa một bản ghi ghi danh trong cùng một đợt học, chống tạo trùng khi xử lý đồng thời',
+            'Một học viên không được phép mua khóa học thứ hai trên hệ thống',
+            'Tự động xóa tài khoản học viên khi khóa học kết thúc',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Composite Unique Constraint ngăn chặn triệt để lỗi ghi danh trùng lặp ở mức cơ sở dữ liệu.',
+          reviewJumpSec: 840,
+        },
+        {
+          prompt: 'Biểu thức `COUNT(column_name)` khác `COUNT(*)` ở điểm nào trong SQL?',
+          options: [
+            '`COUNT(*)` bỏ qua mọi dòng có ít nhất một cột NULL',
+            '`COUNT(column_name)` nhân đôi các giá trị trùng lặp',
+            '`COUNT(*)` chỉ đếm khóa chính kiểu chuỗi',
+            '`COUNT(column_name)` chỉ đếm các dòng mà `column_name IS NOT NULL`, còn `COUNT(*)` đếm tổng số dòng trong nhóm',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Kết hợp `LEFT JOIN` với `COUNT(enrollments.id)` sẽ trả về `0` chuẩn xác cho lớp chưa có học viên.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+    {
+      sessionOrder: 5,
+      topic: 'SQL Phân tích Nâng cao: CTE, Window Functions & JSONB',
+      primarySkillId: skSqlVec!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'PY_S05_Window_Functions_CTE_JSONB.pdf',
+      chunkContent:
+        'Hàm cửa sổ Window Functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, SUM OVER) tính toán thứ hạng và tổng lũy kế trên tập cửa sổ PARTITION BY mà không làm gộp mất chi tiết từng dòng như GROUP BY. Với bảng lớn, Keyset Pagination (WHERE created_at < cursor) tránh quét bỏ dữ liệu như OFFSET lớn.',
+      questions: [
+        {
+          prompt: 'Khác biệt quan trọng nhất giữa Window Function (`OVER (PARTITION BY ...)`) và `GROUP BY` là gì?',
+          options: [
+            'Window Function xóa các dòng trùng lặp khỏi bảng vật lý',
+            'Window Function giữ nguyên từng dòng chi tiết đồng thời gắn thêm giá trị tổng hợp/xếp hạng theo phân vùng cửa sổ',
+            'Window Function không thể sắp xếp theo `ORDER BY`',
+            '`GROUP BY` luôn trả về nhiều dòng hơn Window Function',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Window Function cho phép vừa xem chi tiết từng giao dịch vừa biết thứ hạng hoặc tổng lũy kế trong nhóm.',
+          reviewJumpSec: 260,
+        },
+        {
+          prompt: 'Nếu 2 học viên đồng hạng Nhất (95 điểm), hàm xếp hạng nào cho học viên tiếp theo (90 điểm) đứng hạng Nhì (`2`) thay vì nhảy sang hạng Ba (`3`)?',
+          options: ['ROW_NUMBER()', 'RANK()', 'NTILE(4)', 'DENSE_RANK()'],
+          correctIndex: 3,
+          explanationMd: '`DENSE_RANK()` xếp hạng liên tục không tạo khoảng trống thứ bậc sau các vị trí đồng điểm.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Vì sao phân trang bằng `Keyset Pagination` (`WHERE id < last_seen_id ORDER BY id DESC LIMIT 20`) vượt trội hơn `OFFSET 100000 LIMIT 20`?',
+          options: [
+            'Nhảy thẳng tới vị trí con trỏ trên chỉ mục B-Tree thay vì phải đọc và vứt bỏ 100.000 dòng đầu tiên',
+            'Không cần tạo bất kỳ chỉ mục nào trên bảng',
+            'Tự động nén cột JSONB sang văn bản thuần',
+            'Cho phép bỏ qua mệnh đề `ORDER BY` mà thứ tự vẫn cố định',
+          ],
+          correctIndex: 0,
+          explanationMd: '`OFFSET` lớn buộc PostgreSQL quét qua toàn bộ các dòng bị bỏ qua, gây suy giảm hiệu năng tuyến tính.',
+          reviewJumpSec: 860,
+        },
+        {
+          prompt: 'Để tăng tốc truy vấn kiểm tra sự tồn tại khóa/cặp giá trị bên trong cột `JSONB` (toán tử `@>`) trên PostgreSQL, loại chỉ mục nào phù hợp nhất?',
+          options: ['Chỉ mục Hash đơn cột', 'Chỉ mục BRIN theo ngày tạo', 'Chỉ mục GIN trên cột JSONB', 'Không có chỉ mục nào hỗ trợ JSONB'],
+          correctIndex: 2,
+          explanationMd: 'GIN (Generalized Inverted Index) lập chỉ mục từng khóa/phần tử bên trong cấu trúc `JSONB`.',
+          reviewJumpSec: 1150,
+        },
+      ],
+    },
+    {
+      sessionOrder: 6,
+      topic: 'Ứng dụng Tổng hợp Python + PostgreSQL Pool & Bảo mật SQL',
+      primarySkillId: skSqlVec!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'PY_S06_ConnectionPool_Parameterized_SQL.pdf',
+      chunkContent:
+        'Khi kết nối Python với PostgreSQL trong ứng dụng thực tế, bắt buộc truyền tham số tách rời (parameterized query) thay vì nối chuỗi f-string để triệt tiêu hoàn toàn lỗi SQL Injection, đồng thời sử dụng Connection Pool và khối giao dịch transaction nguyên tử.',
+      questions: [
+        {
+          prompt: 'Cách truyền dữ liệu người dùng nào vào câu lệnh SQL trong Python chống được tấn công SQL Injection?',
+          options: [
+            'Dùng f-string nối trực tiếp biến vào chuỗi SQL: `f"SELECT * FROM accounts WHERE email = \'{email}\'"`',
+            'Dùng phép cộng chuỗi `+` kết hợp hàm `.strip()`',
+            'Sử dụng Parameterized Query truyền tham số tách biệt khỏi câu lệnh SQL (ví dụ placeholder `$1` hoặc `%s` của driver)',
+            'Mã hóa câu lệnh SQL bằng Base64 trước khi nối chuỗi',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Parameterized Query tách bạch hoàn toàn cấu trúc lệnh SQL và giá trị dữ liệu tại tầng giao thức PostgreSQL.',
+          reviewJumpSec: 200,
+        },
+        {
+          prompt: 'Vai trò chính của Connection Pool khi dịch vụ Python giao tiếp với PostgreSQL dưới tải cao là gì?',
+          options: [
+            'Tái sử dụng tập kết nối sẵn có và giới hạn trần kết nối mở đồng thời, tránh làm cạn kiệt tiến trình backend của PostgreSQL',
+            'Tự động sao lưu dữ liệu sang đám mây mỗi giây',
+            'Thay thế hoàn toàn nhu cầu dùng giao dịch ACID',
+            'Biến PostgreSQL thành cơ sở dữ liệu lưu trên RAM thuần túy',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Mỗi kết nối vật lý tới PostgreSQL tốn tiến trình và bộ nhớ riêng; Connection Pool giữ số kết nối ổn định.',
+          reviewJumpSec: 520,
+        },
+        {
+          prompt: 'Khi thực hiện chuỗi thao tác trừ tiền và kích hoạt khóa học trong một khối `transaction`, nếu bước thứ hai phát sinh lỗi thì PostgreSQL đảm bảo điều gì?',
+          options: [
+            'Giữ nguyên bước trừ tiền và bỏ qua bước kích hoạt',
+            'Tự động `ROLLBACK` toàn bộ thay đổi trong giao dịch về trạng thái nhất quán ban đầu (Atomicity)',
+            'Xóa toàn bộ bảng `orders` để bảo vệ dữ liệu',
+            'Tự động commit một nửa dữ liệu đã ghi',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Tính nguyên tử (Atomicity) trong ACID đảm bảo giao dịch hoặc thành công trọn vẹn hoặc hoàn tác toàn bộ.',
+          reviewJumpSec: 830,
+        },
+        {
+          prompt: 'Khi đọc 1 triệu dòng kết quả từ PostgreSQL để xuất báo cáo mà không muốn tràn RAM ứng dụng Python, kỹ thuật nào nên áp dụng?',
+          options: [
+            'Gọi `fetchall()` nạp toàn bộ 1 triệu dòng vào một biến toàn cục',
+            'Nhân bản bảng dữ liệu ra 10 bảng tạm trước khi đọc',
+            'Tắt kiểm tra kiểu dữ liệu của trình điều khiển cơ sở dữ liệu',
+            'Sử dụng Server-side Cursor / streaming theo từng lô (`fetchmany` / async iterator)',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Đọc theo lô qua cursor giúp xử lý tuần tự từng phần nhỏ với bộ nhớ ổn định.',
+          reviewJumpSec: 1140,
+        },
+      ],
     },
   ];
 
-  const insertedKnowledgeChunks = await db
-    .insert(knowledgeChunks)
-    .values(
-      rawKnowledgeChunks.map((ch) => ({
-        ...ch,
-        embedding: computeSemanticEmbedding1024(ch.content),
-      }))
-    )
+  const aiModules: CourseTopicQuestionSeed[] = [
+    {
+      sessionOrder: 1,
+      topic: 'Kiến trúc AI Production, FastAPI Gateway & SSE Streaming',
+      primarySkillId: skFastApi!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'AI_S01_FastAPI_LLM_Gateway_SSE.pdf',
+      chunkContent:
+        'Cổng LLM Gateway trong môi trường Production sử dụng FastAPI bất đồng bộ kết hợp Server-Sent Events (SSE) để trả từng token ngay khi mô hình sinh ra, giảm Time-To-First-Token (TTFT) xuống dưới 500ms, đồng thời áp dụng timeout và Exponential Backoff có Jitter khi gặp lỗi quá tải 429.',
+      questions: [
+        {
+          prompt: 'Sử dụng Server-Sent Events (SSE) trong cổng LLM Gateway giúp cải thiện trực tiếp chỉ số trải nghiệm nào của người dùng?',
+          options: [
+            'Giảm dung lượng ổ cứng lưu trữ trọng số mô hình',
+            'Giảm Time-To-First-Token (TTFT), hiển thị phản hồi tức thì ngay khi những token đầu tiên được sinh ra',
+            'Loại bỏ hoàn toàn chi phí token đầu vào của nhà cung cấp LLM',
+            'Thay thế hoàn toàn bước xác thực JWT ở tầng API',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Streaming SSE giúp người dùng đọc câu trả lời ngay lập tức thay vì nhìn màn hình chờ hàng chục giây.',
+          reviewJumpSec: 210,
+        },
+        {
+          prompt: 'Vì sao chiến lược thử lại khi gặp lỗi `429 Rate Limit` từ LLM API cần kết hợp **Exponential Backoff + Random Jitter**?',
+          options: [
+            'Để tránh hiện tượng hàng trăm yêu cầu bị lỗi đồng loạt đập lại vào máy chủ cùng một mili-giây (Thundering Herd)',
+            'Để tự động rút ngắn độ dài câu hỏi của người dùng xuống một nửa',
+            'Để bỏ qua kiểm tra khóa API của nhà cung cấp',
+            'Để ép mô hình luôn trả về cùng một câu trả lời cố định',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Jitter phân tán ngẫu nhiên thời điểm thử lại, giúp hệ thống đích phục hồi mượt mà.',
+          reviewJumpSec: 490,
+        },
+        {
+          prompt: 'Trong FastAPI, nếu endpoint khai báo `async def` nhưng bên trong lại gọi SDK đồng bộ chặn luồng mạng thì hậu quả là gì?',
+          options: [
+            'FastAPI tự động nâng cấp SDK đó thành bất đồng bộ',
+            'Chỉ riêng request đó chạy chậm còn các request khác vẫn bình thường',
+            'Event Loop chính bị nghẽn, làm tăng vọt độ trễ của toàn bộ request đồng thời khác trên cùng worker',
+            'Ứng dụng tự động nhân đôi số lượng container Docker',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Trong `async def`, mọi tác vụ I/O phải dùng client bất đồng bộ (`await`) hoặc đẩy sang threadpool.',
+          reviewJumpSec: 780,
+        },
+        {
+          prompt: 'Lớp kiểm tra dữ liệu nào của **Pydantic v2** đảm bảo cấu hình và request đầu vào của dịch vụ AI được xác thực chặt chẽ với hiệu năng cao?',
+          options: ['unittest.mock', 'pickle.loads', 'eval()', 'BaseModel viết lõi bằng Rust (`pydantic-core`)'],
+          correctIndex: 3,
+          explanationMd: 'Pydantic v2 dùng `pydantic-core` thực thi bằng Rust giúp kiểm tra schema JSON cực nhanh và an toàn.',
+          reviewJumpSec: 1060,
+        },
+      ],
+    },
+    {
+      sessionOrder: 2,
+      topic: 'Chiến lược Chunking Đa tầng & Chỉ mục HNSW trên pgvector',
+      primarySkillId: skRag!.id,
+      secondarySkillId: skSqlVec!.id,
+      attachmentFileName: 'AI_S02_Chunking_Pgvector_HNSW.pdf',
+      chunkContent:
+        'Khi băm tài liệu cho hệ thống RAG, sử dụng Recursive Markdown Chunking có phần gối nhau (chunk overlap 10%–15%) giúp không làm đứt gãy ngữ nghĩa giữa hai đoạn liên tiếp. Trên PostgreSQL pgvector, chỉ mục HNSW với toán tử khoảng cách cosine (<=>) giúp tìm kiếm láng giềng gần đúng tốc độ mili-giây kèm bộ lọc phân quyền visibility/course_id.',
+      questions: [
+        {
+          prompt: 'Mục đích chính của tham số `chunk_overlap` (ví dụ gối nhau 15% số token giữa hai chunk liên tiếp) là gì?',
+          options: [
+            'Tăng gấp đôi kích thước cơ sở dữ liệu để kiểm thử ổ cứng',
+            'Giữ liền mạch ngữ cảnh cho các câu hoặc ý nằm ngay tại ranh giới cắt đoạn',
+            'Mã hóa nội dung tài liệu không cho quản trị viên đọc được',
+            'Thay thế hoàn toàn bước sinh vector embedding',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Overlap ngăn việc chủ ngữ nằm ở cuối chunk trước còn vị ngữ/công thức nằm ở đầu chunk sau bị mất liên kết.',
+          reviewJumpSec: 230,
+        },
+        {
+          prompt: 'Trên `pgvector`, toán tử nào tính **khoảng cách Cosine** khớp với lớp chỉ mục `vector_cosine_ops` của HNSW?',
+          options: ['<->', '<#>', '<=>', '@@'],
+          correctIndex: 2,
+          explanationMd: 'Trong `pgvector`, `<=>` là khoảng cách Cosine (`1 - cosine_similarity`), `<->` là L2 và `<#>` là tích vô hướng âm.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Lỗi truy vấn SQL nào khiến PostgreSQL **không thể sử dụng chỉ mục HNSW** mà phải quét tuần tự toàn bảng?',
+          options: [
+            'Sắp xếp trực tiếp `ORDER BY embedding <=> $1 LIMIT 10`',
+            'Bọc biểu thức khoảng cách trong `CASE WHEN` hoặc sắp xếp giảm dần `DESC` thay vì `ORDER BY embedding <=> $1 ASC LIMIT k`',
+            'Kết hợp mệnh đề `LIMIT` nhỏ',
+            'Lưu vector đã chuẩn hóa độ dài đơn vị L2',
+          ],
+          correctIndex: 1,
+          explanationMd: 'PostgreSQL planner chỉ kích hoạt HNSW index scan khi `ORDER BY column <=> vector ASC LIMIT k` ở dạng trực tiếp.',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Vì sao bảng `knowledge_chunks` cần lưu đồng thời `visibility`, `course_id`, `cohort_id` ngay trên từng chunk?',
+          options: [
+            'Để lọc quyền truy cập (Pre-filtering RBAC) ngay trong câu truy vấn SQL, đảm bảo Trợ giảng khóa A không bao giờ rò rỉ học liệu trả phí của khóa B',
+            'Vì PostgreSQL bắt buộc mọi bảng phải có ít nhất 10 cột',
+            'Để thay thế hoàn toàn bảng `courses` và `cohorts`',
+            'Để tắt tính năng tìm kiếm toàn văn `tsvector`',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Kiểm soát quyền truy cập ở tầng truy xuất RAG ngăn chặn rò rỉ dữ liệu chéo khóa học.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+    {
+      sessionOrder: 3,
+      topic: 'Hybrid Search (Dense + BM25) & Reciprocal Rank Fusion (RRF)',
+      primarySkillId: skRag!.id,
+      secondarySkillId: skSqlVec!.id,
+      attachmentFileName: 'AI_S03_Hybrid_Search_RRF_Reranking.pdf',
+      chunkContent:
+        'Dense Vector Search nắm bắt tốt ngữ nghĩa tương đồng nhưng thường bỏ sót mã lỗi chính xác, tên hàm hoặc mã đơn hàng (như ET20260001). Kiến trúc Hybrid RAG kết hợp tìm kiếm vector pgvector với Full-Text Search tsvector và hợp nhất thứ hạng bằng công thức Reciprocal Rank Fusion RRF_Score(d) = 1/(k + rank_dense) + 1/(k + rank_fts) với hằng số làm mượt k = 60, sau đó tinh lọc Top-5 qua Cross-Encoder Reranker.',
+      questions: [
+        {
+          prompt: 'Trong trường hợp nào tìm kiếm từ khóa (`tsvector` / BM25) phát huy thế mạnh vượt trội so với chỉ dùng Dense Vector?',
+          options: [
+            'Khi người dùng tìm chính xác mã lỗi, tên hàm cụ thể, mã học phần hoặc thuật ngữ viết tắt hiếm gặp',
+            'Khi câu hỏi hoàn toàn không chứa từ khóa nào chung nhưng đồng nghĩa trừu tượng',
+            'Khi cơ sở dữ liệu không lưu văn bản mà chỉ lưu ảnh nhị phân',
+            'Khi muốn sinh văn bản ngẫu nhiên không cần tài liệu gốc',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Lexical search khớp chính xác token đặc thù mà mô hình nhúng ngữ nghĩa dễ làm mờ.',
+          reviewJumpSec: 205,
+        },
+        {
+          prompt: 'Ưu điểm lớn nhất của thuật toán **Reciprocal Rank Fusion (RRF)** khi gộp kết quả từ Vector Search và Full-Text Search là gì?',
+          options: [
+            'Yêu cầu phải huấn luyện lại mô hình ngôn ngữ lớn mỗi ngày',
+            'Xóa bỏ hoàn toàn các tài liệu xuất hiện ở cả hai nhánh tìm kiếm',
+            'Dựa trên thứ hạng (`rank`) thay vì điểm thô nên không bị lệch thang đo giữa Cosine Similarity (0..1) và điểm tần suất từ khóa không giới hạn',
+            'Chỉ giữ lại kết quả có độ dài văn bản ngắn nhất',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Công thức `1 / (k + rank)` chuẩn hóa tự nhiên hai hệ thống chấm điểm khác bản chất về chung một thang hợp nhất.',
+          reviewJumpSec: 530,
+        },
+        {
+          prompt: 'Vì sao mô hình **Cross-Encoder Reranker** chỉ được đặt ở bước tinh lọc Top-20 xuống Top-5 thay vì quét trực tiếp 1 triệu chunk trong DB?',
+          options: [
+            'Vì Cross-Encoder cho độ chính xác thấp hơn BM25',
+            'Vì Cross-Encoder chỉ đọc được tối đa 5 ký tự',
+            'Vì PostgreSQL tự động chạy Cross-Encoder trong chỉ mục B-Tree',
+            'Vì Cross-Encoder phải chấm cặp `(query, document)` trực tiếp qua mạng nơ-ron nên chi phí tính toán cao, không thể lập chỉ mục vector sẵn',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Kiến trúc hai tầng Bi-Encoder + FTS thu hồi nhanh ứng viên rồi dùng Cross-Encoder xếp hạng sâu đạt cân bằng tối ưu giữa tốc độ và độ chính xác.',
+          reviewJumpSec: 860,
+        },
+        {
+          prompt: 'Để giảm thiểu hiện tượng bịa đặt thông tin (Hallucination) ở bước sinh câu trả lời của Trợ giảng AI, thiết kế prompt nào hiệu quả nhất?',
+          options: [
+            'Tăng `temperature` lên mức cao nhất `2.0`',
+            'Buộc mô hình chỉ dựa trên các đoạn ngữ cảnh truy xuất được, trích dẫn rõ mốc thời gian/trang slide và từ chối lịch sự khi ngữ cảnh không đủ dữ kiện',
+            'Ẩn toàn bộ tài liệu bài giảng không truyền vào prompt',
+            'Yêu cầu mô hình tự suy đoán mọi thông tin ngoài phạm vi khóa học',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Grounding chặt kèm trích dẫn nguồn (`citations`) giúp câu trả lời kiểm chứng được ngay trên video bài giảng.',
+          reviewJumpSec: 1150,
+        },
+      ],
+    },
+    {
+      sessionOrder: 4,
+      topic: 'Function Calling, Structured Outputs & ReAct Agent',
+      primarySkillId: skTool!.id,
+      secondarySkillId: skLangGraph!.id,
+      attachmentFileName: 'AI_S04_Function_Calling_ReAct_Agents.pdf',
+      chunkContent:
+        'Trong kiến trúc Function Calling, LLM không trực tiếp thực thi câu lệnh hệ thống hay truy vấn DB mà chỉ sinh ra cấu trúc JSON chỉ định tên công cụ và tham số theo JSON Schema. Tầng ứng dụng Backend chịu trách nhiệm kiểm tra quyền, xác thực tham số bằng Pydantic/Zod, thực thi công cụ an toàn và áp đặt max_iterations để chống vòng lặp vô hạn.',
+      questions: [
+        {
+          prompt: 'Trong cơ chế **Function Calling**, ai là bên thực sự chạy hàm nghiệp vụ (ví dụ tra cứu đơn hàng trong DB)?',
+          options: [
+            'Máy chủ mô hình LLM tự mở kết nối thẳng vào cơ sở dữ liệu nội bộ của bạn',
+            'Trình duyệt của người dùng tự sửa bảng dữ liệu',
+            'Mô hình LLM chỉ đề xuất tên hàm + đối số JSON, còn tầng Backend ứng dụng kiểm tra phân quyền, xác thực đối số rồi mới thực thi hàm',
+            'Hệ điều hành tự động chạy mọi chuỗi văn bản do LLM sinh ra bằng `sh -c`',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Giữ quyền thực thi và kiểm tra RBAC tại ứng dụng giúp đảm bảo an toàn tuyệt đối cho dữ liệu nội bộ.',
+          reviewJumpSec: 240,
+        },
+        {
+          prompt: 'Rủi ro nghiêm trọng nào xảy ra nếu vòng lặp suy luận **ReAct Agent** không cấu hình `max_iterations` và ngân sách token?',
+          options: [
+            'Agent có thể rơi vào vòng lặp gọi công cụ lỗi liên tục không điểm dừng, gây treo yêu cầu và tiêu tốn chi phí API đột biến',
+            'Mô hình tự động giảm kích thước vector từ 1024 xuống 128 chiều',
+            'Cơ sở dữ liệu tự động chuyển sang chế độ chỉ đọc',
+            'Các câu trả lời luôn bị cắt còn 1 từ duy nhất',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Giới hạn số bước lặp (`max_iterations`) và timeout là chốt chặn bắt buộc khi vận hành Agent trên Production.',
+          reviewJumpSec: 560,
+        },
+        {
+          prompt: 'Kỹ thuật **Structured Outputs** với JSON Schema / Pydantic giải quyết triệt để lỗi nào khi tích hợp LLM vào giao diện phần mềm?',
+          options: [
+            'Lỗi mất kết nối cáp quang biển',
+            'Lỗi tràn dung lượng ổ đĩa chứa video',
+            'Lỗi người dùng quên mật khẩu đăng nhập',
+            'Lỗi mô hình trả về văn bản tự do sai định dạng hoặc thiếu trường bắt buộc làm gãy bước `JSON.parse` ở Backend/Frontend',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Ràng buộc lược đồ đầu ra đảm bảo phản hồi của mô hình luôn tuân thủ đúng hợp đồng kiểu dữ liệu.',
+          reviewJumpSec: 870,
+        },
+        {
+          prompt: 'Với các công cụ có tác động thay đổi dữ liệu quan trọng (như hoàn tiền hay thu hồi chứng chỉ), mẫu thiết kế Agent nào an toàn nhất?',
+          options: [
+            'Cho phép Agent tự thực thi hàng loạt ngay khi nhận bất kỳ tin nhắn chat nào',
+            'Áp dụng Human-in-the-Loop yêu cầu người có thẩm quyền xác nhận trước khi thực thi hành động ghi dữ liệu nhạy cảm',
+            'Bỏ qua bước kiểm tra vai trò người dùng đang đăng nhập',
+            'Lưu mật khẩu quản trị trực tiếp vào system prompt của Agent',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Human-in-the-Loop ngăn chặn thiệt hại do hiểu nhầm ngữ cảnh hoặc tấn công Prompt Injection.',
+          reviewJumpSec: 1130,
+        },
+      ],
+    },
+    {
+      sessionOrder: 5,
+      topic: 'LLMOps: Ragas Evaluation, Guardrails & Semantic Cache',
+      primarySkillId: skEval!.id,
+      secondarySkillId: skRag!.id,
+      attachmentFileName: 'AI_S05_Ragas_Guardrails_SemanticCache.pdf',
+      chunkContent:
+        'Bộ chỉ số Ragas đánh giá tách biệt chất lượng truy xuất (Context Precision, Context Recall) và chất lượng sinh câu trả lời (Faithfulness, Answer Relevancy). Hàng rào Guardrails chặn Prompt Injection và câu hỏi lạc đề ngoài phạm vi khóa học trước khi tốn chi phí gọi LLM.',
+      questions: [
+        {
+          prompt: 'Trong bộ khung đánh giá **Ragas**, chỉ số **Faithfulness** đo lường yếu tố nào?',
+          options: [
+            'Tốc độ mạng giữa trình duyệt và máy chủ',
+            'Mức độ trung thực của câu trả lời: các khẳng định đưa ra có được suy dẫn trực tiếp từ đoạn ngữ cảnh truy xuất hay bị mô hình tự bịa thêm',
+            'Số lượng câu hỏi mà người dùng gửi trong một ngày',
+            'Dung lượng RAM của container PostgreSQL',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Faithfulness thấp cảnh báo mô hình đang suy diễn vượt quá dữ kiện trong tài liệu gốc.',
+          reviewJumpSec: 220,
+        },
+        {
+          prompt: 'Đặt tầng **Input Guardrails / Intent Classifier** trước khi gọi mô hình LLM lớn mang lại lợi ích kép nào?',
+          options: [
+            'Vừa chặn sớm Prompt Injection / câu hỏi ngoài phạm vi học thuật, vừa tiết kiệm chi phí token và độ trễ cho hệ thống',
+            'Tự động tăng gấp đôi số chiều vector trong cơ sở dữ liệu',
+            'Thay thế hoàn toàn nhu cầu ghi log hệ thống',
+            'Cho phép người chưa ghi danh đọc toàn bộ học liệu nội bộ',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Phân loại ý định nhẹ ngay đầu phễu giúp bảo vệ ranh giới kiến thức khóa học và tối ưu chi phí suy luận.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Khi triển khai **Semantic Cache** trên Redis cho Trợ giảng AI, khóa phân vùng (namespace) của cache bắt buộc phải gắn kèm thông tin nào?',
+          options: [
+            'Màu giao diện sáng/tối của trình duyệt',
+            'Độ phân giải màn hình của học viên',
+            '`course_id` / `cohort_id` và phạm vi quyền truy cập để không bao giờ trả nhầm câu trả lời nội bộ của khóa này cho người ngoài',
+            'Địa chỉ MAC của card mạng máy khách',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Cache không gắn phạm vi khóa học/quyền truy cập sẽ gây rò rỉ nội dung giữa người dùng khác quyền.',
+          reviewJumpSec: 840,
+        },
+        {
+          prompt: 'Nếu điểm **Context Recall** thấp nhưng **Faithfulness** lại cao, nguyên nhân gốc nằm ở tầng nào của pipeline RAG?',
+          options: [
+            'Giao diện CSS hiển thị phông chữ chưa đẹp',
+            'Cổng thanh toán VietQR phản hồi chậm',
+            'Trình phát video thiếu phụ đề tiếng Anh',
+            'Tầng truy xuất (Chunking / Embedding / Hybrid Search) chưa tìm đủ đoạn tài liệu chứa đáp án để đưa vào prompt',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Mô hình trả lời trung thực trên ngữ cảnh được cấp, nhưng bộ truy xuất đã bỏ sót đoạn kiến thức cần thiết.',
+          reviewJumpSec: 1100,
+        },
+      ],
+    },
+    {
+      sessionOrder: 6,
+      topic: 'Bảo vệ Đồ án Hệ thống AI & Tổng ôn Kiến trúc Cuối khóa',
+      primarySkillId: skEval!.id,
+      secondarySkillId: skLangGraph!.id,
+      attachmentFileName: 'AI_S06_Production_Readiness_Checklist.pdf',
+      chunkContent:
+        'Một hệ thống AI sẵn sàng cho Production cần kết hợp đầy đủ: kiểm soát truy cập theo khóa học trên kho vector, Hybrid Search + Reranking, Structured Outputs, giám sát độ trễ/token/trace (Langfuse) và cơ chế Fallback duyên dáng khi dịch vụ LLM bên ngoài gián đoạn.',
+      questions: [
+        {
+          prompt: 'Khi dịch vụ suy luận AI bên ngoài gặp sự cố timeout tạm thời, cơ chế thiết kế chịu lỗi (Graceful Degradation) nào phù hợp nhất cho nền tảng học tập?',
+          options: [
+            'Làm sập toàn bộ tiến trình API chính với mã lỗi 500 không thông báo',
+            'Xóa phiên đăng nhập của học viên bắt đăng nhập lại',
+            'Áp dụng timeout ngắn kết hợp trả về kết quả truy xuất học liệu xác định (deterministic citations) hoặc hướng dẫn rõ ràng thay vì treo ứng dụng',
+            'Hiển thị dữ liệu ngẫu nhiên của học viên khác',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Timeout rõ ràng và fallback an toàn giữ cho luồng học tập chính luôn phản hồi ổn định.',
+          reviewJumpSec: 250,
+        },
+        {
+          prompt: 'Lưu trữ `prompt_tokens`, `completion_tokens`, `latency_ms` và `citations` trên bảng `chat_messages` phục vụ mục tiêu vận hành nào?',
+          options: [
+            'Theo dõi chi phí suy luận thực tế, kiểm toán độ trễ p95 và đối chiếu chất lượng nguồn trích dẫn của Trợ giảng AI',
+            'Tăng kích thước tệp ảnh đại diện của người dùng',
+            'Thay thế bảng điểm bài thi cuối khóa',
+            'Tắt chỉ mục tìm kiếm của PostgreSQL',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Observability đầy đủ ở mức từng tin nhắn là nền tảng của vận hành LLMOps chuyên nghiệp.',
+          reviewJumpSec: 570,
+        },
+        {
+          prompt: 'Điều kiện chuẩn trên hệ thống 3T Academy để mở khóa **Kỳ thi sát hạch cuối khóa** của một đợt học là gì?',
+          options: [
+            'Chỉ cần tạo tài khoản miễn phí không cần ghi danh',
+            'Hoàn thành đầy đủ 6/6 buổi học của đợt học (đạt bài Quiz kiểm tra năng lực từng buổi từ 70% trở lên)',
+            'Chỉ cần bình luận một câu bất kỳ trong mục thảo luận',
+            'Đợi qua ngày kết thúc dự kiến mà không cần làm bài kiểm tra nào',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Hoàn thành trọn vẹn 6/6 buổi học đảm bảo học viên nắm vững toàn bộ lộ trình trước khi thi lấy chứng chỉ.',
+          reviewJumpSec: 880,
+        },
+        {
+          prompt: 'Chứng chỉ tốt nghiệp do 3T Academy cấp sử dụng cơ chế kỹ thuật nào để chống làm giả mã văn bằng?',
+          options: [
+            'Chỉ kiểm tra độ dài chuỗi tên học viên trên trình duyệt',
+            'Lưu mật khẩu người dùng vào trong tên file ảnh chứng chỉ',
+            'Cho phép sửa trực tiếp điểm thi qua tham số URL công khai',
+            'Ký xác thực HMAC-SHA256 trên máy chủ kết hợp mã QR dẫn tới trang đối chiếu trực tuyến trên cơ sở dữ liệu gốc',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Chữ ký HMAC-SHA256 và đối chiếu trạng thái thu hồi trực tiếp trên DB đảm bảo tính toàn vẹn của văn bằng.',
+          reviewJumpSec: 1140,
+        },
+      ],
+    },
+  ];
+
+  const sweModules: CourseTopicQuestionSeed[] = [
+    {
+      sessionOrder: 1,
+      topic: 'Clean Layered Architecture & Kiểm soát Hợp đồng với TypeScript / Zod',
+      primarySkillId: skNode!.id,
+      secondarySkillId: skSysDesign!.id,
+      attachmentFileName: 'SWE_S01_Clean_Architecture_Zod.pdf',
+      chunkContent:
+        'Trong kiến trúc Backend phân tầng với TypeScript và Zod, kiểu tĩnh của TypeScript bị xóa lúc runtime nên mọi dữ liệu biên từ HTTP body, query, params và webhook bên ngoài bắt buộc phải đi qua schema Zod để xác thực thực thi trước khi chạm tới tầng nghiệp vụ.',
+      questions: [
+        {
+          prompt: 'Vì sao dùng TypeScript vẫn bắt buộc phải kiểm tra dữ liệu đầu vào HTTP bằng **Zod** lúc runtime?',
+          options: [
+            'Vì kiểu tĩnh TypeScript bị xóa sạch sau khi biên dịch sang JavaScript nên không tự chặn được JSON sai cấu trúc gửi qua mạng lúc chạy thật',
+            'Vì TypeScript không hỗ trợ khai báo `interface`',
+            'Vì Zod tự động thay thế cơ sở dữ liệu PostgreSQL',
+            'Vì trình duyệt không thể gửi định dạng JSON chuẩn',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Runtime validation tại biên hệ thống bảo vệ tầng nghiệp vụ khỏi payload độc hại hoặc sai kiểu.',
+          reviewJumpSec: 210,
+        },
+        {
+          prompt: 'Nguyên tắc tách tầng **Route/Controller -> Service -> Repository/DB** giúp ích lớn nhất ở điểm nào?',
+          options: [
+            'Làm mọi tệp mã nguồn dài gấp ba lần mà không đổi hành vi',
+            'Cô lập quy tắc nghiệp vụ khỏi chi tiết HTTP Express, giúp tái sử dụng logic giữa API, Webhook, CLI Seed và kiểm thử đơn vị dễ dàng',
+            'Cho phép truy vấn thẳng SQL từ giao diện React',
+            'Bỏ qua hoàn toàn nhu cầu xử lý lỗi tập trung',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Khi logic nghiệp vụ nằm ở hàm dịch vụ thuần khiết, cả REST API lẫn Webhook đều dùng chung một chuẩn duy nhất.',
+          reviewJumpSec: 520,
+        },
+        {
+          prompt: 'Mục đích của việc gắn **Correlation ID / Request ID** xuyên suốt log của một HTTP request là gì?',
+          options: [
+            'Thay thế khóa chính của bảng người dùng',
+            'Mã hóa mật khẩu thay cho thuật toán Argon2',
+            'Truy vết toàn bộ chuỗi sự kiện, truy vấn và lỗi thuộc cùng một giao dịch của người dùng giữa hàng nghìn dòng log đồng thời',
+            'Tự động nén dung lượng phản hồi hình ảnh',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Request ID giúp gom chính xác mọi bước xử lý của một yêu cầu khi chẩn đoán lỗi production.',
+          reviewJumpSec: 810,
+        },
+        {
+          prompt: 'Khi API trả lỗi nghiệp vụ cho Frontend, cấu trúc phản hồi nào giúp phía giao diện xử lý tin cậy nhất?',
+          options: [
+            'Trả trang HTML mặc định của máy chủ kèm stack trace nội bộ',
+            'Luôn trả mã HTTP 200 cho cả trường hợp lỗi xác thực và lỗi máy chủ',
+            'Trả chuỗi văn bản tự do thay đổi ngẫu nhiên mỗi lần gọi',
+            'Trả mã HTTP chuẩn ngữ nghĩa (400/401/403/404/409) kèm JSON thống nhất `{ error: { code, message } }` và không lộ chi tiết nhạy cảm nội bộ',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Mã lỗi chuẩn định danh (`code`) giúp Frontend hiển thị thông báo chính xác và an toàn bảo mật.',
+          reviewJumpSec: 1080,
+        },
+      ],
+    },
+    {
+      sessionOrder: 2,
+      topic: 'Tối ưu Truy vấn PostgreSQL, EXPLAIN ANALYZE & Partial Index',
+      primarySkillId: skSqlVec!.id,
+      secondarySkillId: skNode!.id,
+      attachmentFileName: 'SWE_S02_Postgres_Explain_Partial_Index.pdf',
+      chunkContent:
+        'Lệnh EXPLAIN (ANALYZE, BUFFERS) cho biết kế hoạch thực thi thực tế và số trang bộ nhớ phải đọc của PostgreSQL. Với bảng thông báo có 95% bản ghi đã đọc, tạo Partial Index có điều kiện WHERE is_read = FALSE giúp kích thước chỉ mục nhỏ gọn và tăng tốc vọt truy vấn chuông thông báo chưa đọc.',
+      questions: [
+        {
+          prompt: 'Khi chạy `EXPLAIN (ANALYZE, BUFFERS)` cho một câu lệnh `UPDATE` hoặc `DELETE` cần kiểm tra kế hoạch thực thi mà không muốn làm thay đổi dữ liệu thật, cần bọc trong cấu trúc nào?',
+          options: [
+            '`BEGIN; EXPLAIN (ANALYZE, BUFFERS) ...; ROLLBACK;`',
+            'Chạy trực tiếp ngoài giao dịch rồi khởi động lại PostgreSQL',
+            'Thêm từ khóa `FAKE_RUN` vào cuối câu lệnh SQL',
+            'Xóa khóa ngoại của bảng trước khi chạy',
+          ],
+          correctIndex: 0,
+          explanationMd: '`EXPLAIN ANALYZE` thực sự thực thi câu lệnh, nên với câu lệnh ghi dữ liệu phải đặt trong `BEGIN ... ROLLBACK`.',
+          reviewJumpSec: 230,
+        },
+        {
+          prompt: 'Lợi thế nổi bật của **Partial Index** `CREATE INDEX ... ON notifications (recipient_id, created_at DESC) WHERE is_read = FALSE` là gì?',
+          options: [
+            'Lưu bản sao toàn bộ văn bản thông báo đã đọc từ năm trước',
+            'Chỉ lập chỉ mục cho tập con thông báo chưa đọc đang cần truy vấn thường xuyên, giảm mạnh dung lượng RAM chỉ mục và chi phí ghi',
+            'Tự động xóa các thông báo cũ sau 24 giờ',
+            'Thay thế hoàn toàn khóa chính của bảng `notifications`',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Partial Index giữ cây B-Tree cực nhỏ khi phần lớn dữ liệu lịch sử mang giá trị `is_read = TRUE`.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Lỗi **N+1 Query** trong tầng API xuất hiện khi nào?',
+          options: [
+            'Khi một bảng có nhiều hơn 1 cột khóa ngoại',
+            'Khi đặt giới hạn `LIMIT 10` trong câu truy vấn danh sách',
+            'Khi tải danh sách N lớp học bằng 1 câu truy vấn rồi chạy vòng lặp `for` gọi thêm N câu truy vấn lẻ tẻ để lấy giảng viên của từng lớp',
+            'Khi gộp dữ liệu bằng `JOIN` hoặc `WHERE id = ANY(...)` trong một lượt truy vấn',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Gom truy vấn theo lô (`inArray` / `JOIN`) biến N+1 chuyến đi mạng về 1–2 truy vấn cố định.',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Trong chỉ mục phức hợp `INDEX (cohort_id, session_order)`, câu truy vấn nào tận dụng hiệu quả nhất thứ tự cột dẫn đầu (Leading Column)?',
+          options: [
+            'Truy vấn chỉ lọc theo `title LIKE \'%RAG%\'`',
+            'Truy vấn chỉ lọc theo `duration_seconds > 1000`',
+            'Truy vấn không có `WHERE` và không có `ORDER BY`',
+            'Truy vấn lọc `WHERE cohort_id = $1 ORDER BY session_order ASC`',
+          ],
+          correctIndex: 3,
+          explanationMd: 'B-Tree sắp xếp theo cột dẫn đầu `cohort_id` trước rồi đến `session_order`, khớp hoàn hảo cả lọc lẫn sắp xếp.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+    {
+      sessionOrder: 3,
+      topic: 'Giao dịch ACID, Khóa SELECT FOR UPDATE & Idempotent Webhook',
+      primarySkillId: skSysDesign!.id,
+      secondarySkillId: skSqlVec!.id,
+      attachmentFileName: 'SWE_S03_ACID_Locking_Idempotent_Webhook.pdf',
+      chunkContent:
+        'Cổng thanh toán SePay có thể gửi lại cùng một thông báo giao dịch nhiều lần khi mạng chập chờn (At-least-once delivery). Do đó xử lý Webhook bắt buộc phải thực thi trong một giao dịch DB sử dụng khóa dòng SELECT ... FOR UPDATE trên đơn hàng, kiểm tra số tiền chuyển thực tế >= học phí yêu cầu (chặn giao dịch 0đ hoặc thiếu tiền) và ràng buộc UNIQUE trên gateway_txn_id + enrollments(account_id, cohort_id).',
+      questions: [
+        {
+          prompt: 'Vì sao endpoint nhận **Payment Webhook** từ cổng thanh toán bắt buộc phải thiết kế đảm bảo tính **Idempotency**?',
+          options: [
+            'Vì nhà cung cấp webhook áp dụng cơ chế gửi lại (retry) khi timeout mạng, nên cùng một biên lai có thể đến máy chủ 2–3 lần đồng thời',
+            'Vì webhook chỉ hoạt động vào giờ hành chính',
+            'Vì giao thức HTTP không hỗ trợ truyền số nguyên',
+            'Để không cần lưu lịch sử giao dịch vào bảng `payment_transactions`',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Idempotency đảm bảo dù nhận lại biên lai bao nhiêu lần, đơn hàng chỉ kích hoạt đúng một lần và sĩ số lớp không bị cộng dồn sai.',
+          reviewJumpSec: 225,
+        },
+        {
+          prompt: 'Lỗ hổng logic nào xảy ra nếu hàm đối soát thanh toán viết `effectiveAmount = transferAmount > 0 ? transferAmount : order.amountVnd`?',
+          options: [
+            'Đơn hàng có học phí cao sẽ được giảm giá 50%',
+            'Kẻ tấn công hoặc gói tin lỗi có `transferAmount = 0` lại được gán bằng đúng `order.amountVnd` và mở khóa học miễn phí!',
+            'PostgreSQL tự động từ chối mọi giao dịch có số chẵn',
+            'Hệ thống gửi thông báo email chậm hơn 5 giây',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Phải kiểm tra trực tiếp `transferAmount > 0 && transferAmount >= order.amountVnd` trên số tiền thực nhận.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Đặt `SELECT ... FROM orders WHERE id = $1 FOR UPDATE` bên trong `db.transaction` giải quyết lỗi đua tranh (Race Condition) nào?',
+          options: [
+            'Tự động tăng tốc độ dựng giao diện CSS',
+            'Cho phép hai giao dịch đồng thời cùng thấy `status = PENDING` và cùng cộng `enrolled_count + 1` hai lần',
+            'Tuần tự hóa các giao dịch chạm vào cùng một đơn hàng để giao dịch thứ hai thấy ngay trạng thái `PAID` đã cập nhật và không cộng trùng sĩ số/lượt phỏng vấn',
+            'Xóa bỏ hoàn toàn nhu cầu dùng khóa chính trên bảng `orders`',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Row-level pessimistic lock (`FOR UPDATE`) ngăn hai tiến trình đọc cùng trạng thái cũ `PENDING` song song.',
+          reviewJumpSec: 860,
+        },
+        {
+          prompt: 'Khi khách hàng chuyển khoản thiếu (ví dụ đơn `10.000đ` nhưng chỉ chuyển `5.000đ`), hệ thống chuẩn phải xử lý ra sao?',
+          options: [
+            'Vẫn mở khóa lớp học bình thường rồi ghi chú nhắc sau',
+            'Vứt bỏ gói tin webhook không lưu lại dấu vết nào',
+            'Tự động khóa vĩnh viễn tài khoản của học viên',
+            'Ghi nhận bản ghi `payment_transactions` với `match_status = AMOUNT_MISMATCH`, giữ đơn ở `PENDING` và không tạo `enrollment` để Admin đối soát',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Lưu biên lai `AMOUNT_MISMATCH` giúp kế toán/Admin có đầy đủ bằng chứng đối soát và hoàn/bù tiền minh bạch.',
+          reviewJumpSec: 1140,
+        },
+      ],
+    },
+    {
+      sessionOrder: 4,
+      topic: 'Chiến lược Caching Đa tầng với Redis & Hàng đợi Bất đồng bộ',
+      primarySkillId: skSysDesign!.id,
+      secondarySkillId: skNode!.id,
+      attachmentFileName: 'SWE_S04_Redis_Caching_Queues.pdf',
+      chunkContent:
+        'Mẫu Cache-Aside đọc dữ liệu từ Redis trước, nếu miss mới đọc PostgreSQL rồi nạp lại vào Redis kèm TTL hợp lý. Các tác vụ nặng như trích xuất phụ đề video hay băm tài liệu PDF cần đẩy vào hàng đợi bất đồng bộ để API phản hồi nhanh.',
+      questions: [
+        {
+          prompt: 'Hiện tượng **Cache Stampede** xảy ra khi nào trên hệ thống có lưu lượng truy cập lớn?',
+          options: [
+            'Khi một khóa cache cực nóng vừa hết hạn TTL khiến hàng nghìn request đồng thời cùng trượt cache và ập thẳng xuống PostgreSQL',
+            'Khi dung lượng Redis sử dụng dưới 1% bộ nhớ',
+            'Khi chỉ có một người dùng duy nhất truy cập trang chủ',
+            'Khi đặt mật khẩu xác thực cho máy chủ Redis',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Có thể khắc phục bằng khóa đơn (single-flight / mutex lock) hoặc làm mới sớm kèm jitter cho TTL.',
+          reviewJumpSec: 240,
+        },
+        {
+          prompt: 'Tác vụ nào sau đây phù hợp nhất để tách sang **Background Worker / Queue** thay vì bắt HTTP request chờ đồng bộ?',
+          options: [
+            'Kiểm tra mật khẩu đăng nhập của người dùng',
+            'Trả thông tin hồ sơ cơ bản `GET /auth/me`',
+            'Xử lý hậu kỳ bản ghi video bài giảng, sinh phụ đề VTT và băm vector tài liệu đưa vào kho RAG',
+            'Kiểm tra quyền truy cập của middleware JWT',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Xử lý media/embedding kéo dài nhiều giây đến nhiều phút nên cần chạy nền và cập nhật trạng thái bất đồng bộ.',
+          reviewJumpSec: 560,
+        },
+        {
+          prompt: 'Khi dữ liệu gốc của khóa học trong PostgreSQL vừa được Admin chỉnh sửa, thao tác nào trên Redis giúp tránh hiển thị dữ liệu cũ (Stale Data)?',
+          options: [
+            'Tăng TTL của khóa cũ lên 30 ngày',
+            'Chủ động xóa (invalidate) hoặc cập nhật khóa cache liên quan ngay sau khi giao dịch DB commit thành công',
+            'Tắt kiểm tra chữ ký JWT của Admin',
+            'Chặn không cho học viên tải lại trang',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Cache invalidation sau khi commit đảm bảo lần đọc kế tiếp lấy đúng dữ liệu mới nhất từ PostgreSQL.',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Trong cấu hình kết nối Redis cho môi trường dev/production, thiết lập nào tránh làm treo cứng API nếu Redis tạm thời chưa bật?',
+          options: [
+            'Đặt vòng lặp chờ vô tận trước khi khởi động HTTP server',
+            'Gửi mật khẩu trống lên cổng PostgreSQL',
+            'Xóa toàn bộ log lỗi của ứng dụng',
+            'Sử dụng `lazyConnect: true` kết hợp giới hạn `maxRetriesPerRequest` và bắt sự kiện `error` an toàn',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Cấu hình kết nối mềm dẻo giúp các luồng cốt lõi trên PostgreSQL vẫn hoạt động khi Redis bảo trì.',
+          reviewJumpSec: 1110,
+        },
+      ],
+    },
+    {
+      sessionOrder: 5,
+      topic: 'Bảo mật API (JWT, RBAC, Ownership Check) & Docker Production',
+      primarySkillId: skDocker!.id,
+      secondarySkillId: skNode!.id,
+      attachmentFileName: 'SWE_S05_API_Security_RBAC_Docker.pdf',
+      chunkContent:
+        'Kiểm tra vai trò RBAC (như role === INSTRUCTOR hoặc STUDENT) là chưa đủ nếu thiếu kiểm tra quyền sở hữu tài nguyên (Object-level Authorization / chống lỗi IDOR): giảng viên chỉ được sửa đợt học do mình phụ trách, học viên chỉ được xem đơn hàng và phiên phỏng vấn của chính mình.',
+      questions: [
+        {
+          prompt: 'Lỗ hổng **IDOR (Broken Object Level Authorization)** xuất hiện khi nào trong API?',
+          options: [
+            'Khi API xác thực người dùng đã đăng nhập nhưng quên kiểm tra `resource.accountId === req.user.id` (hoặc `cohort.instructorId === req.user.id`), cho phép xem/sửa dữ liệu của người khác chỉ bằng cách đổi ID trên URL',
+            'Khi đặt thời hạn sống cho Access Token là 15 phút',
+            'Khi mã hóa mật khẩu bằng thuật toán Argon2id',
+            'Khi bật header bảo mật Helmet trên Express',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Luôn phải kết hợp cả kiểm tra vai trò (RBAC) lẫn kiểm tra quyền sở hữu/ghi danh trên từng đối tượng dữ liệu.',
+          reviewJumpSec: 215,
+        },
+        {
+          prompt: 'Tại sao giải mã Google ID Token chỉ bằng `Buffer.from(token.split(".")[1], "base64url")` mà không xác thực chữ ký là lỗ hổng nghiêm trọng?',
+          options: [
+            'Vì Base64 không đọc được ký tự tiếng Anh',
+            'Vì bất kỳ ai cũng tự tạo được chuỗi JSON giả chứa email Admin rồi mã hóa Base64 để chiếm quyền tài khoản mà không cần mật khẩu',
+            'Vì hàm `split` làm chậm CPU của máy chủ',
+            'Vì Google Token không chứa trường `email`',
+          ],
+          correctIndex: 1,
+          explanationMd: 'JWT bắt buộc phải được xác thực chữ ký mật mã (JWKS / Google token verification) cùng `aud`, `iss` và `exp`.',
+          reviewJumpSec: 530,
+        },
+        {
+          prompt: 'Lợi ích chính của **Multi-stage Dockerfile** khi đóng gói dịch vụ Node.js/TypeScript lên Production là gì?',
+          options: [
+            'Giữ nguyên toàn bộ trình biên dịch và thư mục tạm làm ảnh container nặng gấp 5 lần',
+            'Bỏ qua bước cài đặt thư viện phụ thuộc của ứng dụng',
+            'Tách giai đoạn build TypeScript khỏi ảnh chạy thực tế, chỉ giữ lại mã đã biên dịch và dependencies cần thiết giúp ảnh nhẹ và giảm bề mặt tấn công',
+            'Cho phép ghi cứng khóa bí mật đám mây trực tiếp vào lịch sử Git',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Multi-stage build giúp container gọn nhẹ, khởi động nhanh và an toàn hơn.',
+          reviewJumpSec: 840,
+        },
+        {
+          prompt: 'Khi tải tệp video bản ghi buổi học dung lượng hàng trăm MB lên Cloudflare R2, phương án kiến trúc nào tránh làm nghẽn bộ nhớ Node.js/Nginx?',
+          options: [
+            'Mã hóa cả tệp video sang chuỗi Base64 nhét vào body JSON gửi qua Express',
+            'Lưu tệp video vào cột `VARCHAR` trong bảng `accounts`',
+            'Chia nhỏ video gửi qua tham số query string trên URL',
+            'Backend cấp **Presigned PUT URL** có thời hạn ngắn để trình duyệt tải luồng nhị phân trực tiếp lên R2 rồi xác nhận metadata về API',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Presigned URL giải phóng hoàn toàn băng thông và bộ nhớ đệm của tầng máy chủ ứng dụng.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+    {
+      sessionOrder: 6,
+      topic: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Hệ thống',
+      primarySkillId: skSysDesign!.id,
+      secondarySkillId: skDocker!.id,
+      attachmentFileName: 'SWE_S06_Load_Testing_Observability.pdf',
+      chunkContent:
+        'Khi đánh giá hiệu năng API bằng công cụ kiểm thử chịu tải, độ trễ phân vị p95 và p99 phản ánh trải nghiệm thực của nhóm yêu cầu chậm nhất chính xác hơn nhiều so với số trung bình cộng dễ bị che lấp. Endpoint /health/live và /health/ready tách biệt kiểm tra tiến trình sống với kiểm tra kết nối DB/Redis sẵn sàng nhận tải.',
+      questions: [
+        {
+          prompt: 'Vì sao trong kỹ thuật hệ thống, chỉ số độ trễ **p95 / p99** quan trọng hơn độ trễ trung bình (`average`)?',
+          options: [
+            'Vì số trung bình dễ che giấu việc 5% yêu cầu quan trọng (như thanh toán, nộp bài thi) đang bị treo nhiều giây',
+            'Vì p95 luôn nhỏ hơn độ trễ tối thiểu của mạng',
+            'Vì PostgreSQL chỉ cho phép đo p99 mà không tính được trung bình',
+            'Vì p95 không phụ thuộc vào truy vấn cơ sở dữ liệu',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Theo dõi phân vị đuôi (tail latency) giúp phát hiện sớm hiện tượng tranh chấp khóa và thiếu chỉ mục.',
+          reviewJumpSec: 230,
+        },
+        {
+          prompt: 'Sự khác biệt chuẩn giữa `/health/live` (Liveness) và `/health/ready` (Readiness) trong vận hành container là gì?',
+          options: [
+            'Hai đường dẫn bắt buộc trả kết quả ngẫu nhiên khác nhau',
+            '`/health/live` cho biết tiến trình ứng dụng còn phản hồi, còn `/health/ready` kiểm tra các phụ thuộc cốt lõi (như PostgreSQL) đã sẵn sàng phục vụ lưu lượng thật chưa',
+            '`/health/ready` dùng để xóa toàn bộ dữ liệu mẫu khi được gọi',
+            '`/health/live` chỉ dành cho trình duyệt di động',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Tách biệt Liveness và Readiness tránh việc bộ điều phối khởi động lại container oan khi DB đang bảo trì ngắn.',
+          reviewJumpSec: 550,
+        },
+        {
+          prompt: 'Ràng buộc `EXCLUDE USING gist (instructor_id WITH =, tstzrange(scheduled_start, scheduled_end, \'[)\') WITH &&)` trên bảng `class_sessions` đảm bảo điều gì?',
+          options: [
+            'Một giảng viên chỉ được dạy tối đa 1 buổi trong cả năm',
+            'Hai giảng viên khác nhau không được dạy cùng khung giờ tối',
+            'Chặn tuyệt đối ngay tại tầng PostgreSQL việc xếp trùng hoặc chồng lấn khung giờ dạy của cùng một giảng viên giữa mọi đợt học',
+            'Tự động đổi múi giờ của máy chủ sang giờ London',
+          ],
+          correctIndex: 2,
+          explanationMd: 'GiST Exclusion Constraint bảo vệ tính bất khả xâm phạm của lịch giảng dạy ngay cả khi hai Admin thao tác cùng lúc.',
+          reviewJumpSec: 860,
+        },
+        {
+          prompt: 'Nguyên tắc an toàn nào cần tuân thủ tuyệt đối đối với khóa kết nối Cloud (R2, LiveKit, SePay, JWT, Gemini)?',
+          options: [
+            'Gán cứng khóa thật trực tiếp trong mã nguồn TypeScript và đẩy lên kho mã công khai',
+            'Gửi toàn bộ khóa bí mật máy chủ xuống `localStorage` của trình duyệt',
+            'In toàn bộ khóa bí mật ra giao diện trang chủ để tiện kiểm tra',
+            'Đọc từ biến môi trường `.env` nằm trong `.gitignore`, chỉ giữ giá trị mẫu an toàn trong `.env.example`',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Tách biệt cấu hình bí mật khỏi mã nguồn là nguyên tắc cốt lõi của Twelve-Factor App.',
+          reviewJumpSec: 1130,
+        },
+      ],
+    },
+  ];
+
+  const dataModules: CourseTopicQuestionSeed[] = [
+    {
+      sessionOrder: 1,
+      topic: 'Kiến trúc Data Lakehouse & Mô hình Medallion (Bronze, Silver, Gold)',
+      primarySkillId: skDbt!.id,
+      secondarySkillId: skSparkKafka!.id,
+      attachmentFileName: 'DATA_S01_Medallion_Lakehouse_Architecture.pdf',
+      chunkContent:
+        'Kiến trúc Medallion trong Data Lakehouse chia dữ liệu thành 3 tầng rõ rệt: tầng Bronze lưu nguyên trạng dữ liệu thô bất biến để có thể phát lại (replay), tầng Silver làm sạch, khử trùng lặp và chuẩn hóa kiểu dữ liệu, còn tầng Gold tổng hợp các bảng chiều và sự kiện (Star Schema) phục vụ trực tiếp BI và AI Feature Store.',
+      questions: [
+        {
+          prompt: 'Trong kiến trúc **Medallion Lakehouse**, vai trò cốt lõi của tầng **Bronze** là gì?',
+          options: [
+            'Lưu trữ nguyên bản dữ liệu thô thu thập từ nguồn kèm metadata thời gian nạp để luôn có thể chạy lại (replay/backfill) khi logic biến đổi thay đổi',
+            'Chỉ lưu các biểu đồ tổng hợp doanh thu theo quý cho ban giám đốc',
+            'Xóa sạch mọi trường JSON chưa qua chuẩn hóa ngay khi tiếp nhận',
+            'Thay thế hoàn toàn hệ thống giao dịch OLTP của ứng dụng web',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Giữ nguyên dữ liệu thô ở tầng Bronze giúp không bao giờ mất dữ liệu gốc nếu code làm sạch ở tầng sau có lỗi.',
+          reviewJumpSec: 210,
+        },
+        {
+          prompt: 'Bước khử trùng lặp bản ghi (`deduplication`), chuẩn hóa múi giờ và kiểm tra kiểu dữ liệu diễn ra chủ yếu ở tầng nào?',
+          options: ['Trước khi sự kiện sinh ra trên thiết bị người dùng', 'Tầng Silver (Cleaned & Conformed)', 'Trong trình duyệt CSS', 'Trên máy in văn phòng'],
+          correctIndex: 1,
+          explanationMd: 'Tầng Silver biến dữ liệu thô thành nguồn dữ liệu sạch, đồng nhất và đáng tin cậy cho toàn doanh nghiệp.',
+          reviewJumpSec: 520,
+        },
+        {
+          prompt: 'Định dạng lưu trữ cột (Columnar Storage) như **Apache Parquet** vượt trội hơn tệp **CSV** trong xử lý phân tích dữ liệu lớn nhờ đặc điểm nào?',
+          options: [
+            'Mở chỉnh sửa tay bằng Notepad dễ hơn CSV',
+            'Không lưu kèm thông tin kiểu dữ liệu của từng cột',
+            'Nén dữ liệu cực tốt theo từng cột và hỗ trợ Predicate/Projection Pushdown chỉ đọc đúng các cột và phân vùng cần thiết',
+            'Tự động biến mọi cột số thành chuỗi văn bản không dấu',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Đọc theo cột giúp truy vấn phân tích giảm hàng chục lần lượng I/O đĩa so với quét toàn dòng CSV.',
+          reviewJumpSec: 830,
+        },
+        {
+          prompt: 'Tính chất **Idempotent Pipeline** khi nạp dữ liệu theo ngày (`partition_date`) đảm bảo điều gì khi job chạy lại lần thứ hai cho cùng ngày `2026-12-05`?',
+          options: [
+            'Số dòng báo cáo doanh thu ngày hôm đó tự động tăng gấp đôi',
+            'Xóa sạch dữ liệu của tất cả các tháng trước đó',
+            'Đổi ngẫu nhiên mã khách hàng trong kho dữ liệu',
+            'Kết quả cuối cùng không bị nhân bản dữ liệu nhờ cơ chế ghi đè theo phân vùng hoặc `MERGE / UPSERT` theo khóa nghiệp vụ',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Idempotency là yêu cầu sống còn để vận hành backfill và retry tự động trong Data Engineering.',
+          reviewJumpSec: 1110,
+        },
+      ],
+    },
+    {
+      sessionOrder: 2,
+      topic: 'Xử lý Dữ liệu Phân tán Quy mô lớn với Apache Spark & PySpark',
+      primarySkillId: skSparkKafka!.id,
+      secondarySkillId: skPython!.id,
+      attachmentFileName: 'DATA_S02_PySpark_DAG_DataSkew.pdf',
+      chunkContent:
+        'Trong Apache Spark, các phép biến đổi hẹp (Narrow Transformation như filter, select, withColumn) xử lý ngay trên từng phân vùng cục bộ, trong khi phép biến đổi rộng (Wide Transformation như groupBy, join lớn) phát sinh Shuffle truyền dữ liệu qua mạng giữa các Executor. Khi nối một bảng sự kiện tỷ dòng với một bảng danh mục nhỏ vài chục MB, Broadcast Join giúp loại bỏ hoàn toàn bước Shuffle bảng lớn.',
+      questions: [
+        {
+          prompt: 'Phép toán nào trong **PySpark** là **Wide Transformation** gây phát sinh chi phí truyền dữ liệu qua mạng (**Shuffle**) giữa các node?',
+          options: ['`df.filter(...)`', '`df.select(...)`', '`df.groupBy("course_id").agg(...)`', '`df.withColumn(...)` đơn thuần'],
+          correctIndex: 2,
+          explanationMd: '`groupBy` cần gom các bản ghi cùng khóa từ nhiều phân vùng khác nhau về cùng Executor nên phát sinh Shuffle.',
+          reviewJumpSec: 220,
+        },
+        {
+          prompt: 'Khi nối bảng sự kiện lớn (500GB) với bảng danh mục khóa học nhỏ (5MB) trong PySpark, kỹ thuật tối ưu nào triệt tiêu Shuffle trên bảng 500GB?',
+          options: [
+            'Sử dụng `broadcast(small_df)` để thực hiện **Broadcast Hash Join**',
+            'Chuyển toàn bộ bảng 500GB về máy Driver bằng `.toPandas()`',
+            'Chia bảng 5MB thành 100.000 phân vùng nhỏ',
+            'Dùng vòng lặp `for` của Python quét từng dòng',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Broadcast gửi bản sao bảng nhỏ tới mọi Executor để nối cục bộ ngay tại chỗ.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Hiện tượng **Data Skew** trong Spark biểu hiện rõ nhất qua dấu hiệu vận hành nào?',
+          options: [
+            'Tất cả các task hoàn thành nhanh đồng đều trong 1 giây',
+            '99/100 task đã xong từ lâu nhưng toàn bộ job bị treo chờ 1 task cuối cùng xử lý một khóa có lượng dữ liệu lệch khổng lồ (ví dụ `user_id = NULL`)',
+            'Spark UI không hiển thị tên ứng dụng',
+            'Tệp cấu hình thiếu biến màu sắc giao diện',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Một khóa nóng gom quá nhiều bản ghi vào duy nhất một phân vùng làm nghẽn tiến trình và gây tràn bộ nhớ (OOM).',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Vì sao nên ưu tiên dùng các hàm dựng sẵn trong `pyspark.sql.functions` thay vì viết **Python UDF** thuần túy trên từng dòng?',
+          options: [
+            'Vì Python UDF không thể nhận tham số kiểu chuỗi',
+            'Vì `pyspark.sql.functions` chỉ chạy được trên hệ điều hành Windows',
+            'Vì Python UDF tự động xóa cột khóa chính của DataFrame',
+            'Vì hàm gốc thực thi trực tiếp trên Catalyst Optimizer / JVM tốc độ cao, tránh chi phí tuần tự hóa dữ liệu qua lại giữa JVM và tiến trình Python',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Tránh serialization JVM <-> Python giúp job PySpark nhanh hơn gấp nhiều lần.',
+          reviewJumpSec: 1130,
+        },
+      ],
+    },
+    {
+      sessionOrder: 3,
+      topic: 'Xử lý Luồng Sự kiện Thời gian thực với Apache Kafka',
+      primarySkillId: skSparkKafka!.id,
+      secondarySkillId: skSysDesign!.id,
+      attachmentFileName: 'DATA_S03_Kafka_Streaming_Architecture.pdf',
+      chunkContent:
+        'Apache Kafka đảm bảo thứ tự sự kiện nghiêm ngặt trong phạm vi từng Partition dựa trên khóa thông điệp (message key). Trong một Consumer Group, mỗi Partition tại một thời điểm chỉ được gán cho tối đa một Consumer trong nhóm để mở rộng xử lý song song mà không bị đọc chồng chéo.',
+      questions: [
+        {
+          prompt: 'Để mọi sự kiện hành vi học tập của cùng một `account_id` luôn được đọc đúng thứ tự thời gian trên **Apache Kafka**, cần cấu hình gì khi gửi message?',
+          options: [
+            'Đặt `account_id` làm **Message Key** để mọi sự kiện của học viên đó luôn đi vào cùng một Partition',
+            'Gửi ngẫu nhiên không có key lên 50 topic khác nhau',
+            'Xóa timestamp khỏi payload của sự kiện',
+            'Chỉ cho phép hệ thống gửi 1 sự kiện mỗi giờ',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Kafka cam kết thứ tự bất biến bên trong từng Partition và băm `message key` cố định về đúng Partition đó.',
+          reviewJumpSec: 215,
+        },
+        {
+          prompt: 'Nếu một Kafka Topic có **6 Partitions** và một **Consumer Group** có **8 Consumer instances** cùng đăng ký đọc topic đó thì điều gì xảy ra?',
+          options: [
+            'Cả 8 Consumer cùng đọc trùng toàn bộ 6 Partitions',
+            '6 Consumer được gán mỗi instance 1 Partition, còn 2 Consumer ở trạng thái chờ dự phòng (idle standby)',
+            'Kafka tự động dừng hoạt động và xóa topic',
+            '2 Consumer dư ra sẽ tự động đọc dữ liệu của topic khác',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Đơn vị song song tối đa trong một Consumer Group bằng số lượng Partition của topic.',
+          reviewJumpSec: 530,
+        },
+        {
+          prompt: 'Trong xử lý luồng thời gian thực (**Spark Structured Streaming**), cơ chế **Watermarking** dùng để giải quyết bài toán nào?',
+          options: [
+            'Đóng dấu bản quyền hình ảnh lên video bài giảng',
+            'Nén tệp văn bản sang định dạng ZIP',
+            'Xử lý các sự kiện đến trễ theo `event_time` trong một ngưỡng cho phép mà vẫn dọn dẹp được trạng thái cửa sổ cũ trên bộ nhớ',
+            'Thay đổi cổng mạng mặc định của cụm Kafka',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Watermark cân bằng giữa việc chấp nhận dữ liệu đến muộn và giới hạn kích thước state trên RAM.',
+          reviewJumpSec: 840,
+        },
+        {
+          prompt: 'Sai lầm nào khi commit offset trong Kafka Consumer dễ dẫn đến **mất dữ liệu chưa kịp ghi xuống kho đích**?',
+          options: [
+            'Chỉ commit offset sau khi đã ghi lô dữ liệu xuống đích thành công',
+            'Sử dụng checkpoint bền vững của Structured Streaming',
+            'Thiết kế đích nhận dữ liệu có tính Idempotent',
+            'Commit offset tự động ngay khi vừa nhận bản tin về RAM trước cả khi bước xử lý và ghi xuống cơ sở dữ liệu hoàn tất',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Nếu tiến trình gặp sự cố sau khi đã commit sớm, lần khởi động lại sẽ bỏ qua lô dữ liệu chưa kịp lưu.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+    {
+      sessionOrder: 4,
+      topic: 'Analytics Engineering: Chuẩn hóa Kho Dữ liệu Star Schema với dbt',
+      primarySkillId: skDbt!.id,
+      secondarySkillId: skSqlVec!.id,
+      attachmentFileName: 'DATA_S04_dbt_StarSchema_DataQuality.pdf',
+      chunkContent:
+        'Công cụ dbt (Data Build Tool) đưa quy trình kỹ thuật phần mềm vào kho dữ liệu: quản lý biến đổi SQL theo DAG qua hàm ref(), xây dựng mô hình Star Schema gồm bảng sự kiện Fact và bảng chiều Dimension, chạy Incremental models cho bảng lớn và kiểm định chất lượng dữ liệu tự động (not_null, unique, relationships, accepted_values).',
+      questions: [
+        {
+          prompt: 'Hàm `{{ ref("stg_orders") }}` trong mô hình **dbt** mang lại giá trị cốt lõi nào so với việc viết cứng tên bảng vật lý?',
+          options: [
+            'Tự động xây dựng đồ thị phụ thuộc (Lineage DAG) để dbt chạy đúng thứ tự các bảng và tách biệt môi trường dev/prod linh hoạt',
+            'Tự động gửi email quảng cáo cho khách hàng',
+            'Tắt toàn bộ ràng buộc kiểm tra dữ liệu của kho dữ liệu',
+            'Biến câu lệnh SQL thành mã giao diện HTML',
+          ],
+          correctIndex: 0,
+          explanationMd: '`ref()` là nền tảng để dbt quản lý thứ tự thực thi DAG và sinh tài liệu Data Lineage trực quan.',
+          reviewJumpSec: 230,
+        },
+        {
+          prompt: 'Trong thiết kế **Star Schema** cho nền tảng giáo dục, bảng nào sau đây đóng vai trò là **Fact Table**?',
+          options: [
+            '`dim_categories` mô tả danh mục ngành học',
+            '`fct_assessment_attempts` ghi nhận từng sự kiện nộp bài kiểm tra kèm điểm số, thời gian làm bài và khóa ngoại trỏ tới học viên/khóa học',
+            '`dim_instructors` lưu tiểu sử giảng viên',
+            'Bảng cấu hình giao diện màu sắc hệ thống',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Bảng Fact chứa các sự kiện đo lường định lượng phát sinh liên tục theo thời gian.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Khi bảng sự kiện có hàng trăm triệu dòng mỗi tháng, chế độ materialization nào trong **dbt** tránh phải dựng lại toàn bộ bảng từ đầu mỗi lần chạy?',
+          options: ['`ephemeral` cho mọi bảng đích cuối cùng', '`view` không có chỉ mục', '`incremental` kết hợp điều kiện `is_incremental()`', 'Xóa bảng thủ công bằng tay mỗi giờ'],
+          correctIndex: 2,
+          explanationMd: '`incremental` chỉ biến đổi và hợp nhất các bản ghi mới/thay đổi kể từ mốc chạy gần nhất.',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Bộ 4 bài kiểm thử chất lượng dữ liệu dựng sẵn (generic schema tests) tiêu chuẩn trong tệp `.yml` của **dbt** bao gồm những gì?',
+          options: [
+            '`bold`, `italic`, `underline`, `color`',
+            '`start`, `stop`, `restart`, `pause`',
+            '`get`, `post`, `put`, `delete`',
+            '`unique`, `not_null`, `accepted_values`, `relationships`',
+          ],
+          correctIndex: 3,
+          explanationMd: '4 kiểm thử cốt lõi này phát hiện ngay dữ liệu rỗng, trùng khóa, sai danh mục và đứt khóa ngoại trên đường ống.',
+          reviewJumpSec: 1110,
+        },
+      ],
+    },
+    {
+      sessionOrder: 5,
+      topic: 'Đồng bộ Feature Store & Vector Store từ tầng Gold cho Hệ thống AI',
+      primarySkillId: skSqlVec!.id,
+      secondarySkillId: skDbt!.id,
+      attachmentFileName: 'DATA_S05_Gold_To_Pgvector_Sync.pdf',
+      chunkContent:
+        'Để tránh tính toán lại vector nhúng tốn kém cho hàng vạn tài liệu không thay đổi, đường ống đồng bộ từ kho dữ liệu sang PostgreSQL pgvector lưu mã băm SHA-256 content_hash của văn bản chuẩn hóa: chỉ những đoạn có content_hash mới hoặc thay đổi mới được đưa qua bước sinh embedding và cập nhật.',
+      questions: [
+        {
+          prompt: 'Lưu cột `content_hash` (SHA-256 64 ký tự hex) trên bảng `knowledge_chunks` giúp tối ưu bước đồng bộ đường ống dữ liệu RAG như thế nào?',
+          options: [
+            'Chỉ tính lại vector embedding cho những đoạn nội dung thực sự mới hoặc vừa chỉnh sửa, bỏ qua các đoạn không đổi mã băm',
+            'Thay thế hoàn toàn cột nội dung văn bản `content`',
+            'Làm cho câu lệnh SQL không cần dùng điều kiện `WHERE`',
+            'Tự động dịch tài liệu tiếng Việt sang tiếng Pháp',
+          ],
+          correctIndex: 0,
+          explanationMd: 'Change Detection bằng SHA-256 giúp tiết kiệm hơn 90% chi phí gọi mô hình nhúng khi chạy đồng bộ định kỳ.',
+          reviewJumpSec: 220,
+        },
+        {
+          prompt: 'Hiện tượng **Training-Serving Skew** trong hệ thống AI/ML xuất hiện khi nào?',
+          options: [
+            'Khi mô hình được đóng gói bằng Docker',
+            'Khi công thức tính đặc trưng (feature) lúc huấn luyện offline khác lệch với công thức tính đặc trưng lúc suy luận thời gian thực trên production',
+            'Khi lưu kết quả kiểm định vào bảng PostgreSQL',
+            'Khi đặt lịch chạy pipeline vào ban đêm',
+          ],
+          correctIndex: 1,
+          explanationMd: 'Feature Store thống nhất một định nghĩa biến đổi duy nhất cho cả luồng huấn luyện lẫn phục vụ trực tuyến.',
+          reviewJumpSec: 530,
+        },
+        {
+          prompt: 'Vì sao kiểu cột `VARCHAR(64)` phù hợp hơn `CHAR(64)` khi lưu mã băm linh hoạt hoặc định danh kiểm toàn vẹn trên PostgreSQL?',
+          options: [
+            'Vì `VARCHAR(64)` chiếm gấp 10 lần dung lượng ổ cứng so với `CHAR(64)`',
+            'Vì `CHAR(64)` không cho phép tạo chỉ mục B-Tree',
+            'Vì `CHAR(64)` tự động đệm khoảng trắng cho đủ 64 ký tự gây sai lệch khi so khớp chuỗi nếu dữ liệu ngắn hơn 64 ký tự, trong khi `VARCHAR(64)` giữ nguyên chuỗi gốc',
+            'Vì `VARCHAR(64)` chỉ lưu được chữ số từ 0 đến 9',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Trên PostgreSQL, `CHAR(n)` (`bpchar`) độn dấu cách ở cuối và không mang lại lợi thế hiệu năng nào so với `VARCHAR(n)`.',
+          reviewJumpSec: 840,
+        },
+        {
+          prompt: 'Khi cập nhật hàng loạt bản ghi từ đường ống dữ liệu vào PostgreSQL, câu lệnh nào đảm bảo vừa hiệu năng cao vừa không lỗi trùng khóa?',
+          options: [
+            'Chạy từng lệnh `INSERT` rời rạc không bắt lỗi cho từng dòng qua mạng',
+            'Xóa toàn bộ cơ sở dữ liệu rồi khởi tạo lại từ đầu mỗi phút',
+            'Tắt xác thực mật khẩu của PostgreSQL',
+            'Ghi theo lô (Batch Insert) kết hợp `ON CONFLICT (...) DO UPDATE` nguyên tử',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Batch Upsert giảm số vòng lặp mạng và đảm bảo tính bất biến khi đồng bộ lại.',
+          reviewJumpSec: 1100,
+        },
+      ],
+    },
+    {
+      sessionOrder: 6,
+      topic: 'Vận hành, Giám sát SLA Đường ống Dữ liệu & Tổng ôn Cuối khóa',
+      primarySkillId: skSparkKafka!.id,
+      secondarySkillId: skDbt!.id,
+      attachmentFileName: 'DATA_S06_Data_Observability_SLA.pdf',
+      chunkContent:
+        'Giám sát đường ống dữ liệu Production (Data Observability) theo dõi 5 trụ cột: độ tươi mới dữ liệu (Freshness), lưu lượng bản ghi bất thường (Volume), phân phối giá trị (Distribution), thay đổi lược đồ (Schema Drift) và phả hệ dữ liệu (Lineage) để khoanh vùng sự cố trước khi báo cáo sai lệch.',
+      questions: [
+        {
+          prompt: 'Kỹ thuật **Write-Audit-Publish (WAP)** trong vận hành đường ống dữ liệu giúp ngăn chặn sự cố nào?',
+          options: [
+            'Ngăn dữ liệu lỗi hoặc thiếu phân vùng lọt thẳng ra bảng Gold đang phục vụ người dùng bằng cách kiểm định tự động trên nhánh tạm trước khi công bố',
+            'Ngăn giảng viên tải slide PDF lên buổi học',
+            'Ngăn học viên xem lại video bài giảng quá 2 lần',
+            'Tự động giảm độ phân giải màn hình của người quản trị',
+          ],
+          correctIndex: 0,
+          explanationMd: 'WAP đảm bảo chỉ những lô dữ liệu vượt qua đầy đủ bài kiểm tra chất lượng mới được xuất bản ra tầng Gold.',
+          reviewJumpSec: 230,
+        },
+        {
+          prompt: 'Khi nguồn thượng nguồn bất ngờ đổi tên cột hoặc đổi kiểu dữ liệu làm ảnh hưởng báo cáo hạ nguồn, sự cố này được gọi là gì?',
+          options: ['Cache Hit', 'Schema Drift (Trôi lệch lược đồ)', 'Zero Downtime Deployment', 'Connection Pooling'],
+          correctIndex: 1,
+          explanationMd: 'Hợp đồng dữ liệu (Data Contracts) và kiểm tra lược đồ đầu nguồn giúp chặn sớm Schema Drift.',
+          reviewJumpSec: 540,
+        },
+        {
+          prompt: 'Chỉ số **Data Freshness SLA** phản ánh điều gì trên hệ thống Data Platform?',
+          options: [
+            'Số lượng màu sắc sử dụng trên trang chủ',
+            'Tổng số dòng code CSS của giao diện quản trị',
+            'Độ trễ tối đa cho phép kể từ khi sự kiện phát sinh tới khi dữ liệu sạch sẵn sàng truy vấn tại bảng đích',
+            'Tốc độ quay của quạt tản nhiệt máy trạm cá nhân',
+          ],
+          correctIndex: 2,
+          explanationMd: 'Cảnh báo sớm khi vi phạm Freshness SLA giúp đội ngũ xử lý đường ống bị trễ trước khi ảnh hưởng người dùng cuối.',
+          reviewJumpSec: 850,
+        },
+        {
+          prompt: 'Khi cần chạy **Backfill** tính toán lại dữ liệu lịch sử 6 tháng cho một mô hình mới, nguyên tắc an toàn nào cần đặt lên hàng đầu?',
+          options: [
+            'Chạy dồn toàn bộ 6 tháng trong một giao dịch khổng lồ duy nhất trên máy chủ OLTP chính vào giờ cao điểm',
+            'Ghi đè trực tiếp không sao lưu và tắt toàn bộ bài kiểm tra chất lượng',
+            'Sửa tay từng con số trên giao diện trình duyệt',
+            'Chia nhỏ theo khoảng thời gian (chunking theo ngày/tuần), cô lập tài nguyên tính toán khỏi luồng trực tuyến và xác minh tính Idempotent',
+          ],
+          correctIndex: 3,
+          explanationMd: 'Backfill theo từng phân vùng thời gian có kiểm soát tài nguyên giúp hệ thống trực tuyến không bị ảnh hưởng.',
+          reviewJumpSec: 1120,
+        },
+      ],
+    },
+  ];
+
+  // =========================================================================
+  // 8. HELPER TO SEED SESSIONS, ATTACHMENTS, SUBTITLES, ASSESSMENTS & ITEMS
+  // =========================================================================
+  interface CohortSessionSpec {
+    dateIso: string; // YYYY-MM-DD
+    startUtcTime: string; // HH:MM:SS
+    endUtcTime: string; // HH:MM:SS
+    status: 'REPLAY_READY' | 'SCHEDULED' | 'LIVE';
+  }
+
+  interface SeedLectureVideoAsset {
+    videoPath: string;
+    vttPath: string;
+    durationSeconds: number;
+    cues: Array<{ startSec: number; endSec: number; slidePage: number; text: string }>;
+  }
+
+  const LECTURE_VIDEO_CATALOG: Record<string, SeedLectureVideoAsset> = {
+    'ai-s01': {
+      videoPath: '/videos/lectures/ai-s01-rag-architecture.mp4',
+      vttPath: '/videos/lectures/ai-s01-rag-architecture.vtt',
+      durationSeconds: 89,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 35,
+          slidePage: 1,
+          text: 'Vì sao Mô hình Ngôn ngữ Lớn bị Ảo giác? Kiến trúc Production RAG tách biệt kho tri thức động pgvector khỏi trọng số LLM và ép trích dẫn nguồn [chunk_id, timestamp_sec].',
+        },
+        {
+          startSec: 35,
+          endSec: 62,
+          slidePage: 2,
+          text: 'Phân tách quyền truy cập tài liệu Multi-Tenant Isolation ngay tại tầng SQL: lọc cứng điều kiện visibility và course_id trước khi quét chỉ mục vector HNSW.',
+        },
+        {
+          startSec: 62,
+          endSec: 89,
+          slidePage: 3,
+          text: 'Đo lường định lượng chất lượng hệ thống RAG bằng bộ chỉ số RAGAS: Faithfulness và Context Recall, tự động từ chối lịch sự các truy vấn dưới ngưỡng tin cậy.',
+        },
+      ],
+    },
+    'ai-s02': {
+      videoPath: '/videos/lectures/ai-s02-chunking-hnsw.mp4',
+      vttPath: '/videos/lectures/ai-s02-chunking-hnsw.vtt',
+      durationSeconds: 63,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 31,
+          slidePage: 1,
+          text: 'Băm tài liệu bảo toàn cấu trúc (Structure-Aware Chunking): giữ nguyên bảng Markdown kèm tiêu đề mục cha và độ gối chồng chunk overlap 15% bảo toàn ngữ nghĩa.',
+        },
+        {
+          startSec: 31,
+          endSec: 63,
+          slidePage: 2,
+          text: 'Đồ thị phân tầng HNSW trên PostgreSQL pgvector (m=16, ef_construction=64): dùng trực tiếp toán tử khoảng cách cosine (<=>) không bọc hàm để kích hoạt Index Scan tốc độ mili-giây.',
+        },
+      ],
+    },
+    'ai-s03': {
+      videoPath: '/videos/lectures/ai-s03-hybrid-search-rrf.mp4',
+      vttPath: '/videos/lectures/ai-s03-hybrid-search-rrf.vtt',
+      durationSeconds: 58,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 31,
+          slidePage: 1,
+          text: 'Kết hợp tìm kiếm ngữ nghĩa Dense Vector và từ khóa Full-Text Search (tsvector GIN) qua công thức Reciprocal Rank Fusion RRF_score(d) = 1/(60 + rank_dense) + 1/(60 + rank_bm25).',
+        },
+        {
+          startSec: 31,
+          endSec: 58,
+          slidePage: 2,
+          text: 'Tinh lọc Top-20 ứng viên RRF qua tầng thứ hai là mô hình Cross-Encoder Reranker chấm điểm tương tác chéo (Query, Chunk) để chọn ra Top-4 đoạn chuẩn xác nhất.',
+        },
+      ],
+    },
+    'swe-s01': {
+      videoPath: '/videos/lectures/swe-s01-clean-arch-postgres.mp4',
+      vttPath: '/videos/lectures/swe-s01-clean-arch-postgres.vtt',
+      durationSeconds: 51,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 26,
+          slidePage: 1,
+          text: 'Clean Architecture & Chống Race Condition thanh toán: kết hợp khóa duy nhất gateway_txn_id và khóa dòng bi quan SELECT FOR UPDATE đảm bảo giao dịch ACID nguyên tử.',
+        },
+        {
+          startSec: 26,
+          endSec: 51,
+          slidePage: 2,
+          text: 'Chẩn đoán truy vấn chậm với EXPLAIN (ANALYZE, BUFFERS): kiểm tra shared hit/read và thiết kế chỉ mục tổ hợp (Composite Index) giảm độ trễ p99 xuống dưới 15ms.',
+        },
+      ],
+    },
+    'data-s01': {
+      videoPath: '/videos/lectures/data-s01-streaming-lakehouse.mp4',
+      vttPath: '/videos/lectures/data-s01-streaming-lakehouse.vtt',
+      durationSeconds: 52,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 31,
+          slidePage: 1,
+          text: 'Kiến trúc Medallion Lakehouse 3 tầng Bronze -> Silver -> Gold: lưu bất biến sự kiện thô tại Bronze và khử trùng lặp Idempotent Deduplication tại Silver.',
+        },
+        {
+          startSec: 31,
+          endSec: 52,
+          slidePage: 2,
+          text: 'Kiểm soát chất lượng dữ liệu tự động (Data Quality Gate): chốt chặn miền giá trị, tỷ lệ rỗng và giám sát độ tươi dữ liệu Freshness SLA trước khi xuất bản tầng Gold.',
+        },
+      ],
+    },
+    'py-s01': {
+      videoPath: '/videos/lectures/py-s01-python-sql-analytics.mp4',
+      vttPath: '/videos/lectures/py-s01-python-sql-analytics.vtt',
+      durationSeconds: 53,
+      cues: [
+        {
+          startSec: 0,
+          endSec: 28,
+          slidePage: 1,
+          text: 'Xử lý dữ liệu hiệu năng cao trong Python: kết hợp Generator đọc theo lô (Batching), phép toán vector hóa và kiểm định kiểu dữ liệu Pydantic.',
+        },
+        {
+          startSec: 28,
+          endSec: 53,
+          slidePage: 2,
+          text: 'Phân tích chuyên sâu với CTE & SQL Window Functions: ứng dụng ROW_NUMBER, DENSE_RANK và LAG so sánh chênh lệch giữa các lần thi liên tiếp không cần Self-Join.',
+        },
+      ],
+    },
+  };
+
+  function resolveSeedLectureAsset(r2Prefix: string, sessionOrder: number): SeedLectureVideoAsset {
+    if (r2Prefix.startsWith('ai-')) {
+      if (sessionOrder === 1) return LECTURE_VIDEO_CATALOG['ai-s01']!;
+      if (sessionOrder === 2) return LECTURE_VIDEO_CATALOG['ai-s02']!;
+      if (sessionOrder === 3) return LECTURE_VIDEO_CATALOG['ai-s03']!;
+      return LECTURE_VIDEO_CATALOG[`ai-s0${((sessionOrder - 1) % 3) + 1}`]!;
+    }
+    if (r2Prefix.startsWith('swe-')) return LECTURE_VIDEO_CATALOG['swe-s01']!;
+    if (r2Prefix.startsWith('data-')) return LECTURE_VIDEO_CATALOG['data-s01']!;
+    return LECTURE_VIDEO_CATALOG['py-s01']!;
+  }
+
+  async function populateCohortCurriculum(params: {
+    cohort: typeof cohortPyK01;
+    course: typeof coursePython;
+    r2Prefix: string;
+    modules: CourseTopicQuestionSeed[];
+    sessionSpecs: CohortSessionSpec[];
+    finalExamStatus: 'PUBLISHED' | 'DRAFT';
+  }) {
+    const { cohort, course, r2Prefix, modules, sessionSpecs, finalExamStatus } = params;
+    const syllabusList = (course!.syllabusTemplate ?? []) as Array<{
+      order: number;
+      title: string;
+      description: string;
+      activityTags: string[];
+    }>;
+
+    const insertedSessions = await db
+      .insert(classSessions)
+      .values(
+        modules.map((mod, idx) => {
+          const spec = sessionSpecs[idx]!;
+          const syl = syllabusList[idx];
+          const isReplay = spec.status === 'REPLAY_READY';
+          const ordPad = String(mod.sessionOrder).padStart(2, '0');
+          const videoAsset = resolveSeedLectureAsset(r2Prefix, mod.sessionOrder);
+          return {
+            cohortId: cohort!.id,
+            instructorId: cohort!.instructorId,
+            sessionOrder: mod.sessionOrder,
+            activityTags: syl?.activityTags ?? ['THEORY', 'LIVE_CODING'],
+            title: syl?.title ?? mod.topic,
+            descriptionMd: syl?.description ?? mod.chunkContent,
+            scheduledStart: new Date(`${spec.dateIso}T${spec.startUtcTime}Z`),
+            scheduledEnd: new Date(`${spec.dateIso}T${spec.endUtcTime}Z`),
+            status: spec.status,
+            livekitRoomName: `${cohort!.code.toLowerCase()}-s${ordPad}`,
+            videoProvider: isReplay ? ('R2_MP4' as const) : null,
+            videoR2Key: isReplay ? videoAsset.videoPath : null,
+            durationSeconds: isReplay ? videoAsset.durationSeconds : null,
+            aiSummaryMd: isReplay ? mod.chunkContent : null,
+          };
+        })
+      )
+      .returning();
+
+    // Attachments for ALL sessions (slides/handouts available before & after class)
+    const insertedAttachments = await db
+      .insert(sessionAttachments)
+      .values(
+        insertedSessions.map((sess, idx) => {
+          const mod = modules[idx]!;
+          const ordPad = String(mod.sessionOrder).padStart(2, '0');
+          return {
+            sessionId: sess.id,
+            fileName: mod.attachmentFileName,
+            r2ObjectKey: `materials/${r2Prefix}/s${ordPad}/${mod.attachmentFileName}`,
+            mimeType: 'application/pdf',
+            fileSizeBytes: 1850000 + idx * 120000,
+            uploadedBy: cohort!.instructorId,
+          };
+        })
+      )
+      .returning();
+
+    // Subtitles ONLY for REPLAY_READY sessions (pointing directly to real generated WebVTT files!)
+    const replaySessions = insertedSessions.filter((s) => s.status === 'REPLAY_READY');
+    if (replaySessions.length > 0) {
+      await db.insert(sessionSubtitles).values(
+        replaySessions.map((sess) => {
+          const videoAsset = resolveSeedLectureAsset(r2Prefix, sess.sessionOrder);
+          return {
+            sessionId: sess.id,
+            languageCode: 'vi',
+            vttR2Key: videoAsset.vttPath,
+            isAutoGenerated: true,
+          };
+        })
+      );
+    }
+
+    // Knowledge chunks:
+    // - REPLAY_READY sessions get synchronized VIDEO_TRANSCRIPT chunks matching exact MP4 slide timestamps
+    // - SCHEDULED/LIVE sessions get ATTACHMENT_DOC chunks so enrolled RAG still works cleanly!
+    const chunkRowsToInsert: Array<typeof knowledgeChunks.$inferInsert> = [];
+    insertedSessions.forEach((sess, idx) => {
+      const mod = modules[idx]!;
+      const att = insertedAttachments[idx]!;
+      const isReplay = sess.status === 'REPLAY_READY';
+      if (isReplay) {
+        const videoAsset = resolveSeedLectureAsset(r2Prefix, mod.sessionOrder);
+        videoAsset.cues.forEach((cue, cueIdx) => {
+          const cueText =
+            cueIdx === 0
+              ? `${course!.title} - Buổi ${mod.sessionOrder} (${mod.topic}): ${cue.text} ${mod.chunkContent}`
+              : `${course!.title} - Buổi ${mod.sessionOrder} (Slide ${cue.slidePage}): ${cue.text}`;
+          chunkRowsToInsert.push({
+            visibility: 'ENROLLED_ONLY' as const,
+            courseId: course!.id,
+            cohortId: cohort!.id,
+            sessionId: sess.id,
+            attachmentId: null,
+            sourceType: 'VIDEO_TRANSCRIPT',
+            chunkIndex: cueIdx + 1,
+            content: cueText,
+            contentHash: sha256Hex(`${cohort!.code}:s${mod.sessionOrder}:c${cueIdx + 1}:${cueText}`),
+            startSec: cue.startSec,
+            endSec: cue.endSec,
+            pageNumber: cue.slidePage,
+            embedding: computeSemanticEmbedding1024(cueText),
+          });
+        });
+      } else {
+        const fullText = `${course!.title} - Buổi ${mod.sessionOrder} (${mod.topic}): ${mod.chunkContent}`;
+        chunkRowsToInsert.push({
+          visibility: 'ENROLLED_ONLY' as const,
+          courseId: course!.id,
+          cohortId: cohort!.id,
+          sessionId: sess.id,
+          attachmentId: att.id,
+          sourceType: 'ATTACHMENT_DOC',
+          chunkIndex: 1,
+          content: fullText,
+          contentHash: sha256Hex(`${cohort!.code}:s${mod.sessionOrder}:${fullText}`),
+          startSec: null,
+          endSec: null,
+          pageNumber: 6,
+          embedding: computeSemanticEmbedding1024(fullText),
+        });
+      }
+    });
+    await db.insert(knowledgeChunks).values(chunkRowsToInsert);
+
+    // Assessments: 6 session quizzes + 1 Final Exam
+    const insertedSessionQuizzes = await db
+      .insert(assessments)
+      .values(
+        insertedSessions.map((sess, idx) => {
+          const mod = modules[idx]!;
+          const isReplay = sess.status === 'REPLAY_READY';
+          return {
+            cohortId: cohort!.id,
+            sessionId: sess.id,
+            purpose: 'SESSION_ASSIGNMENT' as const,
+            gradingMode: 'AUTO' as const,
+            title: `Bài kiểm tra Buổi ${mod.sessionOrder}: ${mod.topic}`,
+            instructionsMd:
+              'Hoàn thành 4 câu hỏi trắc nghiệm trọng tâm của buổi học. Đạt tối thiểu 70% để mở khóa tiến độ buổi học.',
+            durationMinutes: 15,
+            passScorePct: 70,
+            maxAttempts: 5,
+            status: isReplay ? ('PUBLISHED' as const) : ('DRAFT' as const),
+          };
+        })
+      )
+      .returning();
+
+    const [insertedFinalExam] = await db
+      .insert(assessments)
+      .values([
+        {
+          cohortId: cohort!.id,
+          sessionId: null,
+          purpose: 'FINAL_EXAM' as const,
+          gradingMode: 'AUTO' as const,
+          title: `Kỳ thi Sát hạch Tốt nghiệp: ${course!.title} (${cohort!.code})`,
+          instructionsMd:
+            'Bài thi sát hạch tổng hợp toàn khóa dưới sự giám sát AI Proctoring. Yêu cầu hoàn thành 6/6 buổi học, đạt từ 70% trở lên và tuân thủ quy chế phòng thi để nhận Chứng chỉ tốt nghiệp.',
+          durationMinutes: 45,
+          passScorePct: 70,
+          maxAttempts: 3,
+          proctoringConfig: {
+            requireWebcam: true,
+            detectTabSwitch: true,
+            detectMultiFace: true,
+            detectPhone: true,
+            maxRiskScoreBeforeFlag: 60,
+          },
+          status: finalExamStatus,
+        },
+      ])
+      .returning();
+
+    // Build items for all 6 session quizzes + 8-item Final Exam (compiled from the 6 modules)
+    const allItemDrafts = [
+      ...insertedSessionQuizzes.flatMap((quiz, idx) => {
+        const mod = modules[idx]!;
+        return buildSessionQuizItems(
+          quiz.id,
+          mod.sessionOrder,
+          mod.topic,
+          mod.primarySkillId,
+          mod.secondarySkillId,
+          mod.questions
+        );
+      }),
+      ...buildSessionQuizItems(
+        insertedFinalExam!.id,
+        0,
+        `Sát hạch Cuối khóa ${cohort!.code}`,
+        modules[0]!.primarySkillId,
+        modules[2]!.primarySkillId,
+        [
+          modules[0]!.questions[0]!,
+          modules[1]!.questions[0]!,
+          modules[2]!.questions[0]!,
+          modules[2]!.questions[3]!,
+          modules[3]!.questions[0]!,
+          modules[4]!.questions[1]!,
+          modules[5]!.questions[0]!,
+          modules[5]!.questions[3]!,
+        ]
+      ),
+    ];
+
+    const insertedItems = await db.insert(assessmentItems).values(allItemDrafts).returning();
+
+    const itemsByAssessmentId = new Map<number, typeof insertedItems>();
+    for (const item of insertedItems) {
+      const arr = itemsByAssessmentId.get(item.assessmentId) ?? [];
+      arr.push(item);
+      itemsByAssessmentId.set(item.assessmentId, arr);
+    }
+
+    return {
+      sessions: insertedSessions,
+      sessionQuizzes: insertedSessionQuizzes,
+      finalExam: insertedFinalExam!,
+      itemsByAssessmentId,
+    };
+  }
+
+  // Populate all 5 cohorts cleanly
+  const pyData = await populateCohortCurriculum({
+    cohort: cohortPyK01,
+    course: coursePython,
+    r2Prefix: 'py-k01',
+    modules: pyModules,
+    sessionSpecs: [
+      { dateIso: '2026-01-05', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-01-08', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-01-12', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-01-15', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-01-19', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-01-22', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+    ],
+    finalExamStatus: 'PUBLISHED',
+  });
+
+  const aiK01Data = await populateCohortCurriculum({
+    cohort: cohortAiK01,
+    course: courseAi,
+    r2Prefix: 'ai-k01',
+    modules: aiModules,
+    sessionSpecs: [
+      { dateIso: '2026-11-03', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-06', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-10', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-13', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-20', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-11-24', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+    ],
+    finalExamStatus: 'PUBLISHED',
+  });
+
+  await populateCohortCurriculum({
+    cohort: cohortAiK02,
+    course: courseAi,
+    r2Prefix: 'ai-k02',
+    modules: aiModules,
+    sessionSpecs: [
+      { dateIso: '2026-12-02', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-05', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-09', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-12', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-16', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-19', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+    ],
+    finalExamStatus: 'DRAFT',
+  });
+
+  const sweK01Data = await populateCohortCurriculum({
+    cohort: cohortSweK01,
+    course: courseSwe,
+    r2Prefix: 'swe-k01',
+    modules: sweModules,
+    sessionSpecs: [
+      { dateIso: '2026-11-04', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-08', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-11', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'REPLAY_READY' },
+      { dateIso: '2026-11-18', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-11-22', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+      { dateIso: '2026-11-25', startUtcTime: '12:30:00', endUtcTime: '14:30:00', status: 'SCHEDULED' },
+    ],
+    finalExamStatus: 'PUBLISHED',
+  });
+
+  await populateCohortCurriculum({
+    cohort: cohortDataK01,
+    course: courseData,
+    r2Prefix: 'data-k01',
+    modules: dataModules,
+    sessionSpecs: [
+      { dateIso: '2026-12-05', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-06', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-12', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-13', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-19', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+      { dateIso: '2026-12-20', startUtcTime: '07:00:00', endUtcTime: '09:00:00', status: 'SCHEDULED' },
+    ],
+    finalExamStatus: 'DRAFT',
+  });
+
+  // Public Advisor RAG Knowledge Chunks (FAQ + Catalog overview)
+  const publicChunks = [
+    'Học viện Công nghệ 3T Academy đào tạo trực tuyến tương tác trực tiếp (Live Cohort) cùng giảng viên thực chiến qua 4 lộ trình chuẩn kỹ sư: Lập trình Python & SQL Thực chiến, Kỹ sư AI Thực chiến (Hybrid RAG, Agents, LLMOps), Kiến trúc Backend Chuyên sâu (TypeScript, PostgreSQL, Redis) và Kỹ sư Dữ liệu Hiện đại (Kafka, PySpark, dbt Lakehouse).',
+    'Học viên mới bắt đầu hoặc trái ngành nên học khóa Lập trình Python & SQL Thực chiến trước để vững nền tảng Python 3.12, AsyncIO, Pytest và SQL phân tích trên PostgreSQL trước khi lên các khóa AI Engineering, Backend hoặc Data Engineering.',
+    'Mỗi đợt học gồm 6 buổi chuyên sâu kèm bài kiểm tra năng lực cuối buổi (cần đạt tối thiểu 70%) và kỳ thi sát hạch cuối khóa có giám sát AI Proctoring. Đăng ký khóa học qua mã VietQR SePay (10.000đ trên môi trường trải nghiệm) sẽ mở khóa ngay phòng học và tặng 4 lượt Luyện phỏng vấn 1-1 cùng AI.',
+  ];
+  await db.insert(knowledgeChunks).values(
+    publicChunks.map((text, idx) => ({
+      visibility: 'PUBLIC' as const,
+      courseId: null,
+      cohortId: null,
+      sessionId: null,
+      attachmentId: null,
+      sourceType: 'FAQ',
+      chunkIndex: idx + 1,
+      content: text,
+      contentHash: sha256Hex(`public-faq-${idx + 1}:${text}`),
+      startSec: null,
+      endSec: null,
+      pageNumber: null,
+      embedding: computeSemanticEmbedding1024(text),
+    }))
+  );
+
+  // =========================================================================
+  // 9. ORDERS, SEPAY TRANSACTIONS, ENROLLMENTS & CERTIFICATES (Tables 14–19/32)
+  // =========================================================================
+  const [ordAnPy, ordAnAi, ordAnSwe, ordMaiAi, ordMaiDataMismatch] = await db
+    .insert(orders)
+    .values([
+      {
+        orderCode: 'ET20260001',
+        accountId: stuAnAcc!.id,
+        cohortId: cohortPyK01!.id,
+        amountVnd: 10000,
+        status: 'PAID',
+        idempotencyKey: 'seed-ord-an-py-k01',
+        paidAt: new Date('2026-01-03T09:15:00Z'),
+        expiresAt: new Date('2026-01-03T09:45:00Z'),
+        createdAt: new Date('2026-01-03T09:10:00Z'),
+      },
+      {
+        orderCode: 'ET20260002',
+        accountId: stuAnAcc!.id,
+        cohortId: cohortAiK01!.id,
+        amountVnd: 10000,
+        status: 'PAID',
+        idempotencyKey: 'seed-ord-an-ai-k01',
+        paidAt: new Date('2026-10-28T10:05:00Z'),
+        expiresAt: new Date('2026-10-28T10:35:00Z'),
+        createdAt: new Date('2026-10-28T10:00:00Z'),
+      },
+      {
+        orderCode: 'ET20260003',
+        accountId: stuAnAcc!.id,
+        cohortId: cohortSweK01!.id,
+        amountVnd: 10000,
+        status: 'PAID',
+        idempotencyKey: 'seed-ord-an-swe-k01',
+        paidAt: new Date('2026-10-29T11:20:00Z'),
+        expiresAt: new Date('2026-10-29T11:50:00Z'),
+        createdAt: new Date('2026-10-29T11:15:00Z'),
+      },
+      {
+        orderCode: 'ET20260004',
+        accountId: stuMaiAcc!.id,
+        cohortId: cohortAiK01!.id,
+        amountVnd: 10000,
+        status: 'PAID',
+        idempotencyKey: 'seed-ord-mai-ai-k01',
+        paidAt: new Date('2026-10-30T14:10:00Z'),
+        expiresAt: new Date('2026-10-30T14:40:00Z'),
+        createdAt: new Date('2026-10-30T14:05:00Z'),
+      },
+      {
+        orderCode: 'ET20260005',
+        accountId: stuMaiAcc!.id,
+        cohortId: cohortDataK01!.id,
+        amountVnd: 10000,
+        status: 'PENDING',
+        idempotencyKey: 'seed-ord-mai-data-mismatch',
+        paidAt: null,
+        expiresAt: new Date('2026-12-01T10:30:00Z'),
+        createdAt: new Date('2026-11-16T10:00:00Z'),
+      },
+    ])
     .returning();
 
-  // =========================================================================
-  // 12. CROSS-TABLE SEED CONSISTENCY SELF-AUDIT
-  // =========================================================================
-  const insertedSubtitles = await db.select().from(sessionSubtitles);
-  const insertedCohorts = await db.select().from(cohorts);
-  const insertedAssessments = await db.select().from(assessments);
+  await db.insert(paymentTransactions).values([
+    {
+      orderId: ordAnPy!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260001',
+      amountVnd: 10000,
+      responseCode: '00',
+      rawPayload: { gateway: 'MBBank', content: 'SEVQR ET20260001', transferAmount: 10000 },
+      matchStatus: 'MATCHED',
+      createdAt: new Date('2026-01-03T09:15:00Z'),
+    },
+    {
+      orderId: ordAnAi!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260002',
+      amountVnd: 10000,
+      responseCode: '00',
+      rawPayload: { gateway: 'MBBank', content: 'SEVQR ET20260002', transferAmount: 10000 },
+      matchStatus: 'MATCHED',
+      createdAt: new Date('2026-10-28T10:05:00Z'),
+    },
+    {
+      orderId: ordAnSwe!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260003',
+      amountVnd: 10000,
+      responseCode: '00',
+      rawPayload: { gateway: 'VCB', content: 'SEVQR ET20260003', transferAmount: 10000 },
+      matchStatus: 'MATCHED',
+      createdAt: new Date('2026-10-29T11:20:00Z'),
+    },
+    {
+      orderId: ordMaiAi!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260004',
+      amountVnd: 10000,
+      responseCode: '00',
+      rawPayload: { gateway: 'Techcombank', content: 'SEVQR ET20260004', transferAmount: 10000 },
+      matchStatus: 'MATCHED',
+      createdAt: new Date('2026-10-30T14:10:00Z'),
+    },
+    {
+      orderId: ordMaiDataMismatch!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260005-SHORT',
+      amountVnd: 5000,
+      responseCode: 'AMOUNT_MISMATCH',
+      rawPayload: { gateway: 'ACB', content: 'SEVQR ET20260005', transferAmount: 5000 },
+      matchStatus: 'AMOUNT_MISMATCH',
+      createdAt: new Date('2026-11-16T10:04:00Z'),
+    },
+    {
+      orderId: null,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260006-UNMATCHED',
+      amountVnd: 10000,
+      responseCode: 'UNMATCHED_ORDER',
+      rawPayload: { gateway: 'MBBank', content: 'CHUYEN KHOAN HOC PHI KHOA HOC', transferAmount: 10000 },
+      matchStatus: 'UNMATCHED_ORDER',
+      createdAt: new Date('2026-11-17T08:30:00Z'),
+    },
+  ]);
 
-  const consistencyViolations = findSeedConsistencyViolations({
-    cohorts: insertedCohorts.map((c) => ({
+  const anPyGraduatedAt = new Date('2026-01-24T13:45:00Z');
+
+  const [enrAnPy, _enrAnAi, _enrAnSwe, _enrMaiAi] = await db
+    .insert(enrollments)
+    .values([
+      {
+        accountId: stuAnAcc!.id,
+        cohortId: cohortPyK01!.id,
+        orderId: ordAnPy!.id,
+        status: 'COMPLETED',
+        finalExamPassed: true,
+        dropoutRiskScore: 0.05,
+        riskLevel: 'LOW',
+        enrolledAt: new Date('2026-01-03T09:15:00Z'),
+        completedAt: anPyGraduatedAt,
+      },
+      {
+        accountId: stuAnAcc!.id,
+        cohortId: cohortAiK01!.id,
+        orderId: ordAnAi!.id,
+        status: 'ACTIVE',
+        finalExamPassed: false,
+        dropoutRiskScore: 0.12,
+        riskLevel: 'LOW',
+        enrolledAt: new Date('2026-10-28T10:05:00Z'),
+        completedAt: null,
+      },
+      {
+        accountId: stuAnAcc!.id,
+        cohortId: cohortSweK01!.id,
+        orderId: ordAnSwe!.id,
+        status: 'ACTIVE',
+        finalExamPassed: false,
+        dropoutRiskScore: 0.18,
+        riskLevel: 'LOW',
+        enrolledAt: new Date('2026-10-29T11:20:00Z'),
+        completedAt: null,
+      },
+      {
+        accountId: stuMaiAcc!.id,
+        cohortId: cohortAiK01!.id,
+        orderId: ordMaiAi!.id,
+        status: 'ACTIVE',
+        finalExamPassed: false,
+        dropoutRiskScore: 0.74,
+        riskLevel: 'HIGH',
+        enrolledAt: new Date('2026-10-30T14:10:00Z'),
+        completedAt: null,
+      },
+    ])
+    .returning();
+
+  const anCertCode = `3T-CERT-2026-${enrAnPy!.id}-${stuAnAcc!.id}`;
+  const anCertHmac = crypto
+    .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
+    .update(`${enrAnPy!.id}:${stuAnAcc!.id}:${anCertCode}`)
+    .digest('hex');
+
+  await db.insert(certificates).values([
+    {
+      enrollmentId: enrAnPy!.id,
+      accountId: stuAnAcc!.id,
+      certificateCode: anCertCode,
+      hmacSignature: anCertHmac,
+      issuedAt: anPyGraduatedAt,
+    },
+  ]);
+
+  await db.insert(courseReviews).values([
+    {
+      courseId: coursePython!.id,
+      cohortId: cohortPyK01!.id,
+      accountId: stuAnAcc!.id,
+      rating: 5,
+      comment:
+        'Lộ trình Python AsyncIO và PostgreSQL Window Functions cực kỳ thực tế, bài tập bám sát tình huống dự án thật và giảng viên giải thích rất cặn kẽ.',
+      isPublic: true,
+      createdAt: new Date('2026-01-25T09:00:00Z'),
+    },
+  ]);
+
+  // =========================================================================
+  // 10. SESSION PROGRESS, QUIZ/EXAM ATTEMPTS, ANSWERS, PROCTORING & SKILL STATES
+  // =========================================================================
+  const progressRows: Array<typeof sessionProgress.$inferInsert> = [];
+  const progressiveSkillTracker = new Map<
+    string,
+    {
+      accountId: number;
+      skillId: number;
+      score: number | null;
+      evidenceCount: number;
+      trend: number;
+      passedFinalExam: boolean;
+    }
+  >();
+
+  function trackProgressiveSkillEvidence(params: {
+    accountId: number;
+    sessionOrder: number;
+    isFinalExam: boolean;
+    attemptPassed: boolean;
+    items: Array<{ skillId: number; points: string | number; itemOrder: number; promptConfig?: unknown }>;
+    answers: Array<{ isCorrect: boolean | null }>;
+  }) {
+    const bySkill = new Map<
+      number,
+      Array<{
+        isCorrect: boolean;
+        points: number;
+        itemOrder: number;
+        totalItems: number;
+        hasScenarioTag: boolean;
+      }>
+    >();
+
+    params.items.forEach((it, idx) => {
+      const pCfg = (it.promptConfig || {}) as { scenarioTag?: string };
+      const list = bySkill.get(it.skillId) ?? [];
+      list.push({
+        isCorrect: Boolean(params.answers[idx]?.isCorrect),
+        points: Number(it.points) || 10,
+        itemOrder: it.itemOrder ?? idx + 1,
+        totalItems: params.items.length,
+        hasScenarioTag: typeof pCfg.scenarioTag === 'string' && pCfg.scenarioTag.includes('thực chiến'),
+      });
+      bySkill.set(it.skillId, list);
+    });
+
+    for (const [skillId, skItems] of bySkill.entries()) {
+      const key = `${params.accountId}:${skillId}`;
+      const cur = progressiveSkillTracker.get(key) ?? {
+        accountId: params.accountId,
+        skillId,
+        score: null,
+        evidenceCount: 0,
+        trend: 0,
+        passedFinalExam: false,
+      };
+      if (params.isFinalExam && params.attemptPassed) {
+        cur.passedFinalExam = true;
+      }
+
+      const upd = computeProgressiveSkillMastery({
+        previousScore: cur.score,
+        previousEvidenceCount: cur.evidenceCount,
+        sessionOrder: params.sessionOrder,
+        totalSessionsInCohort: 6,
+        isFinalExam: params.isFinalExam,
+        attemptPassed: params.attemptPassed,
+        hasPassedCohortFinalExam: cur.passedFinalExam,
+        items: skItems,
+      });
+
+      cur.score = upd.newScore;
+      cur.evidenceCount = upd.updatedEvidenceCount;
+      cur.trend = upd.delta;
+      progressiveSkillTracker.set(key, cur);
+    }
+  }
+
+  async function seedQuizOrExamSubmission(
+    spec: Parameters<typeof buildAttemptDraftAndAnswerBuilders>[0] & {
+      sessionOrder: number;
+      isFinalExam?: boolean;
+    }
+  ) {
+    const built = buildAttemptDraftAndAnswerBuilders({
+      ...spec,
+      skillNamesById,
+    });
+    const [insertedAttempt] = await db
+      .insert(assessmentAttempts)
+      .values([built.attemptRow])
+      .returning();
+    const answerRows = built.buildAnswersForAttemptId(insertedAttempt!.id);
+    await db.insert(submissionAnswers).values(answerRows);
+    trackProgressiveSkillEvidence({
+      accountId: spec.accountId,
+      sessionOrder: spec.sessionOrder,
+      isFinalExam: Boolean(spec.isFinalExam),
+      attemptPassed: Boolean(built.attemptRow.isPassed),
+      items: spec.items,
+      answers: answerRows,
+    });
+    return insertedAttempt!;
+  }
+
+  // 10A. An completes all 6 sessions of PY-SQL-2026-K01 + passes Final Exam (cleared proctoring)
+  for (let i = 0; i < pyData.sessions.length; i++) {
+    const sess = pyData.sessions[i]!;
+    const quiz = pyData.sessionQuizzes[i]!;
+    const qItems = pyData.itemsByAssessmentId.get(quiz.id) ?? [];
+    const baseTime = new Date((sess.scheduledEnd ?? new Date()).getTime() + 15 * 60 * 1000);
+    const doneTime = new Date(baseTime.getTime() + 8 * 60 * 1000);
+    const durSec = sess.durationSeconds ?? 53;
+
+    await seedQuizOrExamSubmission({
+      assessmentId: quiz.id,
+      accountId: stuAnAcc!.id,
+      sessionOrder: sess.sessionOrder,
+      items: qItems,
+      wrongIndices: i % 2 === 1 ? [3] : [], // 100% and 75% alternating -> realistic progressive mastery!
+      startedAt: baseTime,
+      submittedAt: doneTime,
+      gradingCompletedAt: doneTime,
+    });
+
+    progressRows.push({
+      accountId: stuAnAcc!.id,
+      sessionId: sess.id,
+      lastPositionSec: durSec,
+      maxWatchedSec: durSec,
+      attendedLive: true,
+      isCompleted: true,
+      completedAt: doneTime,
+      lastActivityAt: doneTime,
+    });
+  }
+
+  const pyFinalItems = pyData.itemsByAssessmentId.get(pyData.finalExam.id) ?? [];
+  const anFinalAttempt = await seedQuizOrExamSubmission({
+    assessmentId: pyData.finalExam.id,
+    accountId: stuAnAcc!.id,
+    sessionOrder: 6,
+    isFinalExam: true,
+    items: pyFinalItems,
+    wrongIndices: [5], // 7/8 = 87.5% -> PASSED
+    totalRiskScore: '20.00',
+    integrityStatus: 'CLEARED_BY_INSTRUCTOR',
+    verdictNote: 'Học viên chuyển tab 3 giây do thông báo hệ điều hành, camera khuôn mặt khớp 100% suốt bài thi.',
+    verdictBy: instKhoaAcc!.id,
+    verdictAt: anPyGraduatedAt,
+    startedAt: new Date('2026-01-24T13:00:00Z'),
+    submittedAt: anPyGraduatedAt,
+    gradingCompletedAt: anPyGraduatedAt,
+  });
+
+  await db.insert(proctoringEvents).values([
+    {
+      attemptId: anFinalAttempt.id,
+      occurredAt: new Date('2026-01-24T13:18:00Z'),
+      videoOffsetSec: 1080,
+      tier: 'EDGE',
+      eventType: 'TAB_HIDDEN',
+      confidence: 0.95,
+      riskDelta: '20.00',
+      details: { durationMs: 3100, note: 'Blur window focus briefly' },
+    },
+  ]);
+
+  // 10B. An in AI-ENG-2026-K01: completed s1–s3, currently watching s4 mid-way (54% watched)
+  for (let i = 0; i < 3; i++) {
+    const sess = aiK01Data.sessions[i]!;
+    const quiz = aiK01Data.sessionQuizzes[i]!;
+    const qItems = aiK01Data.itemsByAssessmentId.get(quiz.id) ?? [];
+    const startAt = new Date((sess.scheduledEnd ?? new Date()).getTime() + 20 * 60 * 1000);
+    const doneAt = new Date(startAt.getTime() + 10 * 60 * 1000);
+    const durSec = sess.durationSeconds ?? 63;
+
+    await seedQuizOrExamSubmission({
+      assessmentId: quiz.id,
+      accountId: stuAnAcc!.id,
+      sessionOrder: sess.sessionOrder,
+      items: qItems,
+      wrongIndices: i === 2 ? [1] : [],
+      startedAt: startAt,
+      submittedAt: doneAt,
+      gradingCompletedAt: doneAt,
+    });
+
+    progressRows.push({
+      accountId: stuAnAcc!.id,
+      sessionId: sess.id,
+      lastPositionSec: durSec,
+      maxWatchedSec: durSec,
+      attendedLive: true,
+      isCompleted: true,
+      completedAt: doneAt,
+      lastActivityAt: doneAt,
+    });
+  }
+  progressRows.push({
+    accountId: stuAnAcc!.id,
+    sessionId: aiK01Data.sessions[3]!.id,
+    lastPositionSec: 42,
+    maxWatchedSec: 48, // 48 / 89s = 54% watched!
+    attendedLive: false,
+    isCompleted: false,
+    completedAt: null,
+    lastActivityAt: new Date('2026-11-17T15:30:00Z'),
+  });
+
+  // 10C. An in SWE-ARCH-2026-K01: completed s1–s2
+  for (let i = 0; i < 2; i++) {
+    const sess = sweK01Data.sessions[i]!;
+    const quiz = sweK01Data.sessionQuizzes[i]!;
+    const qItems = sweK01Data.itemsByAssessmentId.get(quiz.id) ?? [];
+    const startAt = new Date((sess.scheduledEnd ?? new Date()).getTime() + 30 * 60 * 1000);
+    const doneAt = new Date(startAt.getTime() + 9 * 60 * 1000);
+    const durSec = sess.durationSeconds ?? 51;
+
+    await seedQuizOrExamSubmission({
+      assessmentId: quiz.id,
+      accountId: stuAnAcc!.id,
+      sessionOrder: sess.sessionOrder,
+      items: qItems,
+      wrongIndices: [],
+      startedAt: startAt,
+      submittedAt: doneAt,
+      gradingCompletedAt: doneAt,
+    });
+
+    progressRows.push({
+      accountId: stuAnAcc!.id,
+      sessionId: sess.id,
+      lastPositionSec: durSec,
+      maxWatchedSec: durSec,
+      attendedLive: true,
+      isCompleted: true,
+      completedAt: doneAt,
+      lastActivityAt: doneAt,
+    });
+  }
+
+  // 10D. Mai in AI-ENG-2026-K01: passed s1 (75%), failed s2 (50% -> remedial recommendations!)
+  {
+    const s1 = aiK01Data.sessions[0]!;
+    const q1 = aiK01Data.sessionQuizzes[0]!;
+    const start1 = new Date('2026-11-04T13:00:00Z');
+    const done1 = new Date('2026-11-04T13:11:00Z');
+    const dur1 = s1.durationSeconds ?? 89;
+    await seedQuizOrExamSubmission({
+      assessmentId: q1.id,
+      accountId: stuMaiAcc!.id,
+      sessionOrder: s1.sessionOrder,
+      items: aiK01Data.itemsByAssessmentId.get(q1.id) ?? [],
+      wrongIndices: [2],
+      startedAt: start1,
+      submittedAt: done1,
+      gradingCompletedAt: done1,
+    });
+    progressRows.push({
+      accountId: stuMaiAcc!.id,
+      sessionId: s1.id,
+      lastPositionSec: dur1,
+      maxWatchedSec: dur1,
+      attendedLive: true,
+      isCompleted: true,
+      completedAt: done1,
+      lastActivityAt: done1,
+    });
+
+    const s2 = aiK01Data.sessions[1]!;
+    const q2 = aiK01Data.sessionQuizzes[1]!;
+    const start2 = new Date('2026-11-08T14:00:00Z');
+    const done2 = new Date('2026-11-08T14:12:00Z');
+    await seedQuizOrExamSubmission({
+      assessmentId: q2.id,
+      accountId: stuMaiAcc!.id,
+      sessionOrder: s2.sessionOrder,
+      items: aiK01Data.itemsByAssessmentId.get(q2.id) ?? [],
+      wrongIndices: [1, 2], // 2/4 = 50% < 70% -> FAILED with remedial jumps!
+      startedAt: start2,
+      submittedAt: done2,
+      gradingCompletedAt: done2,
+    });
+    progressRows.push({
+      accountId: stuMaiAcc!.id,
+      sessionId: s2.id,
+      lastPositionSec: 31,
+      maxWatchedSec: 35, // 35 / 63s = 56% watched!
+      attendedLive: false,
+      isCompleted: false,
+      completedAt: null,
+      lastActivityAt: done2,
+    });
+  }
+
+  await db.insert(sessionProgress).values(progressRows);
+
+  // Derive student_skill_states via Progressive Elo-IRT + Stage Weighting (0..100 scale!)
+  const skillStateRows = Array.from(progressiveSkillTracker.values()).map((entry) => ({
+    accountId: entry.accountId,
+    skillId: entry.skillId,
+    masteryScore: entry.score ?? 45,
+    evidenceCount: Math.max(1, entry.evidenceCount),
+    trend: Number(entry.trend.toFixed(2)),
+  }));
+  await db.insert(studentSkillStates).values(skillStateRows);
+
+  // =========================================================================
+  // 11. DISCUSSIONS, NOTIFICATIONS, CHAT SESSIONS & MOCK INTERVIEWS
+  // =========================================================================
+  const [threadAiS1, threadAiS2] = await db
+    .insert(discussionThreads)
+    .values([
+      {
+        sessionId: aiK01Data.sessions[0]!.id,
+        authorId: stuAnAcc!.id,
+        title: 'Cách chọn số lượng worker Uvicorn khi dùng FastAPI SSE Streaming?',
+        videoTimestampSec: 36,
+        isResolved: true,
+        createdAt: new Date('2026-11-04T10:00:00Z'),
+      },
+      {
+        sessionId: aiK01Data.sessions[1]!.id,
+        authorId: stuMaiAcc!.id,
+        title: 'Tại sao câu truy vấn pgvector có CASE WHEN lại không nhận HNSW index?',
+        videoTimestampSec: 34,
+        isResolved: false,
+        createdAt: new Date('2026-11-16T13:20:00Z'),
+      },
+    ])
+    .returning();
+
+  await db.insert(discussionPosts).values([
+    {
+      threadId: threadAiS1!.id,
+      authorId: stuAnAcc!.id,
+      contentMd:
+        'Thầy ơi, khi mở nhiều kết nối SSE dài hạn trên FastAPI thì mình nên cấu hình số worker Uvicorn theo số nhân CPU như thế nào để không bị nghẽn ạ?',
+      isAiGenerated: false,
+      isInstructorVerified: false,
+    },
+    {
+      threadId: threadAiS1!.id,
+      authorId: instKhoaAcc!.id,
+      contentMd:
+        'Với kết nối SSE thuần bất đồng bộ (`async def` + client `httpx.AsyncClient`), mỗi worker Uvicorn xử lý hàng nghìn kết nối mở đồng thời. Em cấu hình `1–2 workers / vCPU` và đảm bảo không gọi hàm đồng bộ chặn Event Loop nhé!',
+      isAiGenerated: false,
+      isInstructorVerified: true,
+      verifiedBy: instKhoaAcc!.id,
+    },
+    {
+      threadId: threadAiS2!.id,
+      authorId: stuMaiAcc!.id,
+      contentMd:
+        'Em thử bọc `CASE WHEN embedding IS NOT NULL THEN embedding <=> $1 END` thì thấy `EXPLAIN ANALYZE` chuyển sang `Seq Scan`. Làm sao để vẫn dùng được `idx_chunks_embedding_hnsw` ạ?',
+      isAiGenerated: false,
+      isInstructorVerified: false,
+    },
+    {
+      threadId: threadAiS2!.id,
+      authorId: null,
+      contentMd:
+        'Gợi ý từ Trợ giảng AI (Slide Buổi 2 - 14:10): Bạn hãy chuyển điều kiện `WHERE embedding IS NOT NULL` xuống mệnh đề `WHERE` và giữ nguyên `ORDER BY embedding <=> $1 ASC LIMIT k` trực tiếp để PostgreSQL kích hoạt chỉ mục HNSW.',
+      isAiGenerated: true,
+      isInstructorVerified: false,
+    },
+  ]);
+
+  await db.insert(notifications).values([
+    {
+      recipientId: stuAnAcc!.id,
+      type: 'CERTIFICATE_ISSUED',
+      title: `Chúc mừng tốt nghiệp khóa ${cohortPyK01!.code}!`,
+      body: `Bạn đã hoàn thành xuất sắc kỳ thi sát hạch cuối khóa và nhận chứng chỉ xác thực số ${anCertCode}.`,
+      metadata: { certificateCode: anCertCode, cohortId: cohortPyK01!.id },
+      isRead: false,
+      createdAt: anPyGraduatedAt,
+    },
+    {
+      recipientId: stuMaiAcc!.id,
+      type: 'AI_STUDY_REMINDER',
+      title: 'Gợi ý ôn tập Buổi 2: Chỉ mục HNSW trên pgvector',
+      body: 'Bạn đạt 50% ở bài kiểm tra Buổi 2 khóa AI-ENG-2026-K01. Hãy xem lại mốc 09:00–14:10 và làm lại Quiz để kịp tiến độ cùng lớp nhé!',
+      metadata: { cohortId: cohortAiK01!.id, sessionId: aiK01Data.sessions[1]!.id },
+      isRead: false,
+      createdAt: new Date('2026-11-17T09:00:00Z'),
+    },
+    {
+      recipientId: stuNamAcc!.id,
+      type: 'WELCOME_GUIDE',
+      title: 'Chào mừng bạn đến với 3T Academy!',
+      body: 'Khám phá lộ trình phù hợp cùng Cố vấn AI và đăng ký đợt học đầu tiên để mở khóa phòng học trực tuyến kèm 4 lượt luyện phỏng vấn 1-1.',
+      metadata: {},
+      isRead: false,
+      createdAt: new Date('2026-11-15T09:05:00Z'),
+    },
+  ]);
+
+  const [chatNamAdvisor, chatAnTutor] = await db
+    .insert(chatSessions)
+    .values([
+      {
+        accountId: stuNamAcc!.id,
+        scope: 'ADVISOR_GLOBAL',
+        cohortId: null,
+        sessionId: null,
+        title: 'Tư vấn chọn lộ trình cho người mới học Python',
+        contextSummary: 'Học viên mới tìm hiểu lộ trình từ nền tảng Python/SQL lên AI Engineering.',
+      },
+      {
+        accountId: stuAnAcc!.id,
+        scope: 'SESSION_TUTOR',
+        cohortId: cohortAiK01!.id,
+        sessionId: aiK01Data.sessions[2]!.id,
+        title: 'Giải thích công thức hợp nhất hạng RRF k=60',
+        contextSummary: 'Ôn tập thuật toán Hybrid Search Dense + BM25 trong Buổi 3.',
+      },
+    ])
+    .returning();
+
+  await db.insert(chatMessages).values([
+    {
+      chatSessionId: chatNamAdvisor!.id,
+      role: 'user',
+      content: 'Mình mới biết chút cơ bản thì nên đăng ký khóa nào trước để theo hướng Kỹ sư AI?',
+      detectedTopic: 'Tư vấn lộ trình AI Engineering',
+      citations: [],
+    },
+    {
+      chatSessionId: chatNamAdvisor!.id,
+      role: 'assistant',
+      content:
+        'Bạn nên bắt đầu với nền tảng Python AsyncIO & PostgreSQL thực chiến, sau đó đăng ký đợt **AI-ENG-2026-K02** (khai giảng tháng 12/2026) để làm chủ trọn vẹn Hybrid RAG, Function Calling và LLMOps.',
+      detectedTopic: 'Tư vấn lộ trình AI Engineering',
+      citations: [],
+      llmProvider: '3t-rag',
+      llmModel: 'gemini-2.5-flash',
+      latencyMs: 320,
+    },
+    {
+      chatSessionId: chatAnTutor!.id,
+      role: 'user',
+      content: 'Vì sao RRF dùng thứ hạng 1/(k + rank) thay vì cộng trực tiếp điểm cosine và điểm tsvector?',
+      detectedTopic: 'Hybrid Search & RRF',
+      citations: [],
+    },
+    {
+      chatSessionId: chatAnTutor!.id,
+      role: 'assistant',
+      content:
+        'Điểm Cosine nằm trong đoạn `[0, 1]` còn điểm tần suất từ khóa không bị chặn trên, nên cộng trực tiếp sẽ bị lệch thang đo. Công thức `1 / (60 + rank)` chuẩn hóa công bằng cả hai danh sách theo vị trí xếp hạng.',
+      detectedTopic: 'Hybrid Search & RRF',
+      citations: [
+        {
+          label: 'Buổi 3 · 00:31',
+          jumpSec: 31,
+          slideLabel: 'Buổi 3 · Slide Trang 2',
+        },
+      ],
+      llmProvider: '3t-rag',
+      llmModel: 'gemini-2.5-flash',
+      latencyMs: 280,
+    },
+  ]);
+
+  // Mock Interviews for An: 1 COMPLETED (-1 credit) + 1 CV_SCREENING (0 credit deducted)
+  await db.insert(mockInterviews).values([
+    {
+      accountId: stuAnAcc!.id,
+      targetLevel: 'FRESHER',
+      targetRole: 'Fresher AI & Backend Engineer',
+      jdRawText:
+        'Tuyển dụng Fresher AI & Backend Engineer: Nắm vững Python AsyncIO, FastAPI, tối ưu truy vấn PostgreSQL/pgvector, xây dựng pipeline Hybrid RAG và kiểm thử với Pytest.',
+      cvScreeningResult: {
+        matchScore: 86,
+        matchedSkills: ['Python AsyncIO', 'PostgreSQL', 'FastAPI', 'Hybrid RAG'],
+        missingSkills: ['Langfuse Production Alerting'],
+        summary: 'Hồ sơ có chứng chỉ tốt nghiệp Python & SQL tại 3T Academy và dự án Hybrid RAG bám sát yêu cầu JD.',
+      },
+      transcriptLog: [
+        {
+          turn: 1,
+          speaker: 'interviewer',
+          question: 'Bạn hãy giải thích cách ngăn chặn nghẽn Event Loop khi gọi LLM API trong FastAPI?',
+          answer:
+            'Em sử dụng httpx.AsyncClient bất đồng bộ kết hợp asyncio.Semaphore giới hạn số kết nối đồng thời, cấu hình timeout rõ ràng và truyền phản hồi qua SSE để giảm TTFT.',
+          score: 88,
+        },
+        {
+          turn: 2,
+          speaker: 'interviewer',
+          question: 'Khi truy vấn kết hợp tìm kiếm ngữ nghĩa và từ khóa trên PostgreSQL, bạn hợp nhất kết quả thế nào?',
+          answer:
+            'Em kết hợp chỉ mục HNSW trên cột vector(1024) với chỉ mục GIN trên cột tsvector và hợp nhất thứ hạng bằng Reciprocal Rank Fusion k=60 trước khi đưa qua bước rerank.',
+          score: 90,
+        },
+      ],
+      evaluationReport: {
+        overallScore: 89,
+        technicalScore: 90,
+        communicationScore: 88,
+        problemSolvingScore: 89,
+        verdict: 'STRONG_FIT',
+        strengths: [
+          'Hiểu rõ bản chất Event Loop bất đồng bộ và tối ưu kết nối HTTP',
+          'Trình bày mạch lạc kiến trúc Hybrid RAG trên PostgreSQL pgvector',
+        ],
+        improvements: ['Bổ sung thêm số liệu đo lường độ trễ p95 và chi phí token trên dự án thực tế'],
+      },
+      status: 'COMPLETED',
+      createdAt: new Date('2026-11-12T13:00:00Z'),
+      completedAt: new Date('2026-11-12T13:18:00Z'),
+    },
+    {
+      accountId: stuAnAcc!.id,
+      targetLevel: 'JUNIOR',
+      targetRole: 'Junior Backend TypeScript Engineer',
+      jdRawText:
+        'Tuyển Junior Backend Engineer: Thành thạo Node.js, TypeScript, Drizzle ORM, giao dịch ACID SELECT FOR UPDATE và thiết kế Idempotent Payment Webhook.',
+      cvScreeningResult: {
+        matchScore: 82,
+        matchedSkills: ['TypeScript', 'PostgreSQL ACID', 'Idempotent Webhook'],
+        missingSkills: ['Load Testing k6 nâng cao'],
+        summary: 'Ứng viên nắm vững nền tảng CSDL quan hệ và đang hoàn thiện khóa Kiến trúc Backend Chuyên sâu.',
+      },
+      transcriptLog: [],
+      evaluationReport: null,
+      status: 'CV_SCREENING',
+      createdAt: new Date('2026-11-17T16:00:00Z'),
+      completedAt: null,
+    },
+  ]);
+
+  // =========================================================================
+  // 12. USER PROFILES (Table 7/32) — Exact Interview Credits & Local Avatars!
+  //     Rule: 0 base + 4 * nonRevokedEnrollments - completedMockInterviews (0 for staff)
+  //     - Admin: 0, Khoa: 0, Ha: 0
+  //     - An: 3 enrollments (PY COMPLETED, AI ACTIVE, SWE ACTIVE) * 4 - 1 COMPLETED mock = 11
+  //     - Mai: 1 enrollment (AI ACTIVE) * 4 - 0 mocks = 4
+  //     - Nam: 0 enrollments = 0 (tests locked Mock Interview gate & fresh onboarding/checkout!)
+  // =========================================================================
+  const anCvUpdatedIso = '2026-11-10T09:00:00.000Z'; // Strictly after PY cert issuedAt (2026-01-24)
+  await db.insert(userProfiles).values([
+    {
+      accountId: adminAcc!.id,
+      fullName: 'Trần Quản Trị (Admin 3T)',
+      phone: '0901000111',
+      githubUrl: 'https://github.com/3t-academy',
+      linkedinUrl: 'https://linkedin.com/company/3t-academy',
+      avatarUrl: '/assets/aistudio/image_a4275f35.png',
+      bio: 'Giám đốc Vận hành & Quản trị Học vụ tại Học viện Công nghệ 3T Academy.',
+      careerGoal: 'Chuẩn hóa chất lượng đào tạo công nghệ thực chiến theo chuẩn doanh nghiệp.',
+      cvParsedData: {
+        fullName: 'Trần Quản Trị (Admin 3T)',
+        headline: 'Head of Academic Operations @ 3T Academy',
+        phone: '0901000111',
+        location: 'Hà Nội, Việt Nam',
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: false },
+      interviewCredits: 0,
+    },
+    {
+      accountId: instKhoaAcc!.id,
+      fullName: 'TS. Lê Minh Khoa',
+      phone: '0902111222',
+      githubUrl: 'https://github.com/leminhkhoa-ai',
+      linkedinUrl: 'https://linkedin.com/in/leminhkhoa-ai',
+      avatarUrl: '/assets/aistudio/image_49d8b1b9.png',
+      bio: 'Principal AI Architect · 11 năm kinh nghiệm xây dựng hệ thống NLP, Hybrid RAG và Multi-Agent tại Singapore & Việt Nam.',
+      careerGoal: 'Đào tạo thế hệ Kỹ sư AI thực chiến làm chủ kiến trúc hệ thống Production.',
+      cvParsedData: {
+        fullName: 'TS. Lê Minh Khoa',
+        headline: 'Principal AI Architect · Giảng viên Trưởng khối AI Engineering',
+        phone: '0902111222',
+        location: 'TP. Hồ Chí Minh & Hà Nội',
+        skills: ['Hybrid RAG', 'Multi-Agent Systems', 'LLMOps', 'Python AsyncIO'],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true },
+      interviewCredits: 0,
+    },
+    {
+      accountId: instHaAcc!.id,
+      fullName: 'ThS. Nguyễn Thu Hà',
+      phone: '0903222333',
+      githubUrl: 'https://github.com/nguyenthuha-arch',
+      linkedinUrl: 'https://linkedin.com/in/nguyenthuha-arch',
+      avatarUrl: '/assets/aistudio/image_aa8c5a52.png',
+      bio: 'Staff Data & Backend Architect · Chuyên gia tối ưu cơ sở dữ liệu phân tán, Data Lakehouse và kiến trúc Microservices.',
+      careerGoal: 'Đồng hành cùng học viên xây dựng tư duy thiết kế hệ thống bền vững.',
+      cvParsedData: {
+        fullName: 'ThS. Nguyễn Thu Hà',
+        headline: 'Staff Data & Backend Architect · Giảng viên Trưởng khối Backend & Data',
+        phone: '0903222333',
+        location: 'Hà Nội, Việt Nam',
+        skills: ['PostgreSQL', 'TypeScript', 'System Design', 'Apache Spark', 'Kafka', 'dbt'],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true },
+      interviewCredits: 0,
+    },
+    {
+      accountId: stuAnAcc!.id,
+      fullName: 'Nguyễn Văn An',
+      phone: '0908234567',
+      githubUrl: 'https://github.com/nguyenvanan-ai',
+      linkedinUrl: 'https://linkedin.com/in/nguyenvanan-ai',
+      avatarUrl: '/assets/aistudio/image_ac1132bf.png',
+      bio: 'Fresher AI & Backend Engineer · Đã tốt nghiệp khóa Python & SQL Thực chiến và đang theo học chuyên sâu Hybrid RAG & Backend TypeScript.',
+      careerGoal: 'Trở thành Kỹ sư AI & Backend phát triển sản phẩm trí tuệ nhân tạo quy mô lớn.',
+      goalEmbedding: computeSemanticEmbedding1024(
+        'Fresher AI Backend Engineer Hybrid RAG FastAPI TypeScript PostgreSQL pgvector'
+      ),
+      faceReferenceR2Key: 'kyc/2026/stu-an-face-ref-v1.jpg',
+      faceEmbedding: makeDeterministicVector(101, 512),
+      cvParsedData: {
+        fileName: 'NguyenVanAn_AI_Backend_CV_2026.pdf',
+        updatedAt: anCvUpdatedIso,
+        extractedAt: anCvUpdatedIso,
+        fullName: 'Nguyễn Văn An',
+        candidateName: 'Nguyễn Văn An',
+        headline: 'Fresher AI & Backend Engineer',
+        targetRole: 'Fresher AI & Backend Engineer',
+        email: 'an.student@3t.edu.vn',
+        phone: '0908234567',
+        location: 'Cầu Giấy, Hà Nội',
+        avatarUrl: '/assets/aistudio/image_ac1132bf.png',
+        githubUrl: 'https://github.com/nguyenvanan-ai',
+        linkedinUrl: 'https://linkedin.com/in/nguyenvanan-ai',
+        careerObjective:
+          'Ứng dụng kiến trúc Hybrid RAG (pgvector + RRF), FastAPI bất đồng bộ và TypeScript Clean Architecture để xây dựng nền tảng phần mềm thông minh.',
+        summaryBio:
+          'Tốt nghiệp loại Giỏi lộ trình Python & SQL Thực chiến tại 3T Academy, có kinh nghiệm xây dựng cổng RAG trích dẫn mốc thời gian video.',
+        skills: ['Python AsyncIO', 'PostgreSQL & pgvector', 'FastAPI', 'TypeScript', 'Hybrid RAG'],
+        externalSkills: ['GitHub Actions', 'Linux Ubuntu', 'TOEIC 845'],
+        projects: [
+          {
+            name: 'Hệ thống Trợ giảng Hybrid RAG trích dẫn Video',
+            role: 'Full-stack AI Developer',
+            techStack: 'FastAPI, PostgreSQL pgvector, TypeScript, React',
+            highlights:
+              'Kết hợp tìm kiếm vector 1024 chiều với tsvector qua RRF k=60, giảm tỷ lệ câu trả lời thiếu nguồn trích dẫn xuống dưới 5%.',
+          },
+        ],
+        workExperience: [],
+        education: [
+          {
+            school: 'Đại học Bách Khoa Hà Nội',
+            degree: 'Kỹ sư Công nghệ Thông tin',
+            period: '2022 - 2026',
+          },
+        ],
+        awardsAndCerts: [
+          {
+            title: 'Chứng chỉ Lập trình Python & SQL Thực chiến — 3T Academy',
+            dateOrCode: `01/2026 · ${anCertCode}`,
+          },
+        ],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: true },
+      interviewCredits: 11,
+    },
+    {
+      accountId: stuMaiAcc!.id,
+      fullName: 'Lê Hoàng Mai',
+      phone: '0912345678',
+      githubUrl: 'https://github.com/lehoangmai-dev',
+      linkedinUrl: 'https://linkedin.com/in/lehoangmai-dev',
+      avatarUrl: '/assets/aistudio/image_db924838.png',
+      bio: 'Lập trình viên chuyển dịch sang AI & Data Engineering · Đang theo học đợt AI-ENG-2026-K01.',
+      careerGoal: 'Làm chủ hạ tầng Vector DB và Data Pipeline thời gian thực cho ứng dụng AI.',
+      goalEmbedding: computeSemanticEmbedding1024(
+        'Junior AI Data Engineer pgvector Apache Spark Kafka dbt Lakehouse'
+      ),
+      faceReferenceR2Key: 'kyc/2026/stu-mai-face-ref-v1.jpg',
+      faceEmbedding: makeDeterministicVector(102, 512),
+      cvParsedData: {
+        fileName: 'LeHoangMai_Data_AI_CV_2026.pdf',
+        updatedAt: '2026-11-01T08:00:00.000Z',
+        extractedAt: '2026-11-01T08:00:00.000Z',
+        fullName: 'Lê Hoàng Mai',
+        candidateName: 'Lê Hoàng Mai',
+        headline: 'Junior Backend & Data Developer',
+        targetRole: 'Junior AI & Data Engineer',
+        email: 'mai.student@3t.edu.vn',
+        phone: '0912345678',
+        location: 'Quận 1, TP. Hồ Chí Minh',
+        avatarUrl: '/assets/aistudio/image_db924838.png',
+        githubUrl: 'https://github.com/lehoangmai-dev',
+        linkedinUrl: 'https://linkedin.com/in/lehoangmai-dev',
+        careerObjective: 'Phát triển đường ống dữ liệu sạch và hệ thống truy xuất kiến thức tốc độ cao.',
+        summaryBio: '1 năm kinh nghiệm phát triển API và cơ sở dữ liệu PostgreSQL.',
+        skills: ['Python', 'PostgreSQL', 'Docker'],
+        externalSkills: ['REST API', 'Redis cơ bản'],
+        projects: [],
+        workExperience: [],
+        education: [
+          {
+            school: 'Đại học Khoa học Tự nhiên — ĐHQG TP.HCM',
+            degree: 'Cử nhân Khoa học Máy tính',
+            period: '2021 - 2025',
+          },
+        ],
+        awardsAndCerts: [],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: true },
+      interviewCredits: 4,
+    },
+    {
+      accountId: stuNamAcc!.id,
+      fullName: 'Phạm Hoàng Nam',
+      phone: '0987654321',
+      githubUrl: 'https://github.com/phamhoangnam-dev',
+      linkedinUrl: '',
+      avatarUrl: '/assets/aistudio/image_a4275f35.png',
+      bio: 'Sinh viên năm cuối ngành Kỹ thuật Phần mềm đang tìm hiểu lộ trình học tại 3T Academy.',
+      careerGoal: 'Xây dựng nền tảng Python, SQL và ứng dụng AI thực tế để ứng tuyển vị trí Fresher.',
+      goalEmbedding: computeSemanticEmbedding1024(
+        'Sinh viên mới bắt đầu học Python SQL thực chiến và Kỹ sư AI Fresher'
+      ),
+      cvParsedData: {
+        fileName: '',
+        updatedAt: '',
+        extractedAt: '',
+        fullName: 'Phạm Hoàng Nam',
+        candidateName: 'Phạm Hoàng Nam',
+        headline: 'Sinh viên Kỹ thuật Phần mềm',
+        targetRole: 'Fresher Software & AI Engineer',
+        email: 'nam.student@3t.edu.vn',
+        phone: '0987654321',
+        location: 'Đà Nẵng, Việt Nam',
+        avatarUrl: '/assets/aistudio/image_a4275f35.png',
+        githubUrl: 'https://github.com/phamhoangnam-dev',
+        linkedinUrl: '',
+        careerObjective: 'Bổ sung dự án thực tế và kỹ năng Python/SQL/AI chuẩn doanh nghiệp.',
+        summaryBio: '',
+        skills: [],
+        externalSkills: ['Git cơ bản', 'HTML/CSS'],
+        projects: [],
+        workExperience: [],
+        education: [],
+        awardsAndCerts: [],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: true },
+      interviewCredits: 0,
+    },
+  ]);
+
+  // =========================================================================
+  // 13. FULL 32-TABLE SELF-AUDIT VERIFICATION (Throws immediately if any drift!)
+  // =========================================================================
+  const [
+    auditAccounts,
+    auditCohorts,
+    auditOrders,
+    auditTxns,
+    auditEnrollments,
+    auditCertificates,
+    auditSessions,
+    auditSubtitles,
+    auditProgress,
+    auditAssessments,
+    auditItems,
+    auditAttempts,
+    auditAnswers,
+    auditProctoring,
+    auditChunks,
+    auditProfiles,
+    auditMocks,
+    auditSkills,
+  ] = await Promise.all([
+    db.select().from(accounts),
+    db.select().from(cohorts),
+    db.select().from(orders),
+    db.select().from(paymentTransactions),
+    db.select().from(enrollments),
+    db.select().from(certificates),
+    db.select().from(classSessions),
+    db.select().from(sessionSubtitles),
+    db.select().from(sessionProgress),
+    db.select().from(assessments),
+    db.select().from(assessmentItems),
+    db.select().from(assessmentAttempts),
+    db.select().from(submissionAnswers),
+    db.select().from(proctoringEvents),
+    db.select().from(knowledgeChunks),
+    db.select().from(userProfiles),
+    db.select().from(mockInterviews),
+    db.select().from(studentSkillStates),
+  ]);
+
+  const violations = findSeedConsistencyViolations({
+    accounts: auditAccounts.map((a) => ({ id: a.id, role: a.role })),
+    cohorts: auditCohorts.map((c) => ({
       id: c.id,
       code: c.code,
+      status: c.status,
+      maxSeats: c.maxSeats,
       enrolledCount: c.enrolledCount,
-      scheduleSlots: c.scheduleSlots as Array<{ dayOfWeek: number; startTime: string; endTime: string }>,
+      scheduleSlots: c.scheduleSlots ?? [],
     })),
-    enrollments: [],
-    certificates: [],
-    sessions: insertedSessions.map((s) => ({
+    orders: auditOrders.map((o) => ({
+      id: o.id,
+      orderCode: o.orderCode,
+      accountId: o.accountId,
+      cohortId: o.cohortId,
+      amountVnd: o.amountVnd,
+      status: o.status,
+      paidAt: o.paidAt,
+    })),
+    paymentTransactions: auditTxns.map((t) => ({
+      id: t.id,
+      orderId: t.orderId,
+      amountVnd: t.amountVnd,
+      matchStatus: t.matchStatus,
+    })),
+    enrollments: auditEnrollments.map((e) => ({
+      id: e.id,
+      accountId: e.accountId,
+      cohortId: e.cohortId,
+      orderId: e.orderId,
+      enrolledByAdmin: e.enrolledByAdmin,
+      status: e.status,
+      finalExamPassed: e.finalExamPassed,
+      enrolledAt: e.enrolledAt,
+      completedAt: e.completedAt,
+    })),
+    certificates: auditCertificates.map((c) => ({
+      enrollmentId: c.enrollmentId,
+      accountId: c.accountId,
+      certificateCode: c.certificateCode,
+      issuedAt: c.issuedAt,
+      revokedAt: c.revokedAt,
+    })),
+    sessions: auditSessions.map((s) => ({
       id: s.id,
       cohortId: s.cohortId,
       sessionOrder: s.sessionOrder,
@@ -2954,57 +3714,105 @@ Khóa học giúp học viên rèn luyện tư duy lập trình sạch, làm ch�
       scheduledEnd: s.scheduledEnd,
       videoR2Key: s.videoR2Key,
     })),
-    subtitles: insertedSubtitles.map((sub) => ({ sessionId: sub.sessionId })),
-    progress: [],
-    assessments: insertedAssessments.map((a) => ({
+    subtitles: auditSubtitles.map((sub) => ({ sessionId: sub.sessionId })),
+    progress: auditProgress.map((p) => ({
+      accountId: p.accountId,
+      sessionId: p.sessionId,
+      isCompleted: p.isCompleted,
+      completedAt: p.completedAt,
+      lastActivityAt: p.lastActivityAt,
+    })),
+    assessments: auditAssessments.map((a) => ({
       id: a.id,
       cohortId: a.cohortId,
       sessionId: a.sessionId,
       purpose: a.purpose,
       passScorePct: a.passScorePct,
     })),
-    assessmentItems: allInsertedItems.map((i) => ({
+    assessmentItems: auditItems.map((i) => ({
       id: i.id,
       assessmentId: i.assessmentId,
       skillId: i.skillId,
       points: i.points,
+      gradingConfig: i.gradingConfig,
     })),
-    attempts: [],
-    answers: [],
-    proctoringEvents: [],
-    knowledgeChunks: insertedKnowledgeChunks.map((ch) => ({
+    attempts: auditAttempts.map((att) => ({
+      id: att.id,
+      assessmentId: att.assessmentId,
+      accountId: att.accountId,
+      totalScore: att.totalScore,
+      scorePct: att.scorePct,
+      isPassed: att.isPassed,
+      integrityStatus: att.integrityStatus,
+      totalRiskScore: att.totalRiskScore,
+      startedAt: att.startedAt,
+      gradingCompletedAt: att.gradingCompletedAt,
+    })),
+    answers: auditAnswers.map((ans) => ({
+      attemptId: ans.attemptId,
+      itemId: ans.itemId,
+      finalScore: ans.finalScore,
+      gradedAt: ans.gradedAt,
+    })),
+    proctoringEvents: auditProctoring.map((ev) => ({
+      attemptId: ev.attemptId,
+      eventType: ev.eventType,
+      riskDelta: ev.riskDelta,
+      occurredAt: ev.occurredAt,
+    })),
+    knowledgeChunks: auditChunks.map((ch) => ({
       sessionId: ch.sessionId,
       sourceType: ch.sourceType,
     })),
-    profiles: insertedProfiles.map((p) => ({
+    profiles: auditProfiles.map((p) => ({
       accountId: p.accountId,
       interviewCredits: p.interviewCredits,
       cvParsedData: (p.cvParsedData ?? {}) as Record<string, unknown>,
     })),
-    mockInterviews: [],
-    skillStates: [], 
+    mockInterviews: auditMocks.map((m) => ({
+      accountId: m.accountId,
+      status: m.status,
+      createdAt: m.createdAt,
+      completedAt: m.completedAt,
+    })),
+    skillStates: auditSkills.map((s) => ({
+      accountId: s.accountId,
+      skillId: s.skillId,
+    })),
   });
 
-  if (consistencyViolations.length > 0) {
-    logger.error({ violations: consistencyViolations }, 'Seed consistency check failed');
-    throw new Error(`Seed consistency check failed:\n- ${consistencyViolations.join('\n- ')}`);
+  if (violations.length > 0) {
+    throw new Error(`Seed consistency violations (${violations.length}):\n- ${violations.join('\n- ')}`);
   }
 
   logger.info(
-    'Minimal 3T Academy database seed completed & verified (5 accounts, 4 courses, 4 cohorts @ 10,000 VND, 24 sessions, 0 enrollments/orders/certificates)!'
+    {
+      accounts: auditAccounts.length,
+      cohorts: auditCohorts.length,
+      sessions: auditSessions.length,
+      orders: auditOrders.length,
+      enrollments: auditEnrollments.length,
+      assessments: auditAssessments.length,
+      attempts: auditAttempts.length,
+      chunks: auditChunks.length,
+    },
+    '32-table flow-consistent seed completed with 0 consistency violations!'
   );
 }
 
-const entryArg = typeof process !== 'undefined' ? process.argv[1] : undefined;
+const __filename = fileURLToPath(import.meta.url);
 const isDirectRun =
-  typeof entryArg === 'string' &&
-  import.meta.url === pathToFileURL(path.resolve(entryArg)).href;
+  process.argv[1] &&
+  path.resolve(process.argv[1]).toLowerCase() === path.resolve(__filename).toLowerCase();
 
 if (isDirectRun) {
-  runSeed(defaultDb)
-    .then(() => pool.end())
-    .catch((err) => {
-      logger.error({ err }, 'Database seed failed');
-      process.exit(1);
+  runMigrations({ closePool: false })
+    .then(() => runSeed(defaultDb))
+    .catch((error) => {
+      logger.error({ err: error }, 'Database seed failed');
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await pool.end();
     });
 }

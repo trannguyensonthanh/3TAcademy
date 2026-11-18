@@ -59,11 +59,7 @@ function normalizeInitialSource(rawSrc: string): string {
   if (!trimmed) {
     return '';
   }
-  if (
-    trimmed.includes('media.yourdomain.com') ||
-    trimmed.includes('cdn.3t.edu.vn') ||
-    /recordings\/(ai|fs|de|do|sec|cloud|data|ml|swe)-/i.test(trimmed)
-  ) {
+  if (trimmed.includes('media.yourdomain.com')) {
     return FALLBACK_MP4_STREAMS[0]!;
   }
   return trimmed;

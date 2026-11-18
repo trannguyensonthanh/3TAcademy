@@ -1,11 +1,8 @@
 import React, { useState } from 'react';
 
-export const AVATAR_MINH_KHOA =
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=240&q=80';
-export const AVATAR_THU_HA =
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&w=240&q=80';
-export const AVATAR_HOANG_NAM =
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=240&q=80';
+export const AVATAR_MINH_KHOA = '/assets/aistudio/image_49d8b1b9.png';
+export const AVATAR_THU_HA = '/assets/aistudio/image_658e8a8d.png';
+export const AVATAR_HOANG_NAM = '/assets/aistudio/image_27b5cd98.png';
 
 /**
  * Resilient Avatar component obeying the Zero-Broken-Image Policy.

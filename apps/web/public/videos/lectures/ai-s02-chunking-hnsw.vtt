@@ -1,0 +1,7 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:30.730
+TS. Lê Minh Khoa: Chào các bạn, trong buổi học thứ hai này chúng ta đi sâu vào kỹ thuật băm tài liệu đa tầng và đánh chỉ mục HNSW trên pgvector. Sai lầm phổ biến nhất khi làm RAG là cắt văn bản thuần túy theo số ký tự cố định khiến bảng biểu nhiều cột bị vỡ vụn. Thay vào đó, ta cần giữ nguyên cấu trúc bảng sang Markdown kèm tiêu đề mục cha và gối chồng mười lăm phần trăm giữa hai đoạn liên tiếp.
+
+00:00:30.730 --> 00:01:03.470
+TS. Lê Minh Khoa: Khi kho học liệu tăng lên hàng trăm nghìn đoạn văn bản, quét tuần tự sẽ gây nghẽn cổ chai. Chỉ mục đồ thị phân tầng HNSW nhảy bước lớn ở tầng thưa phía trên rồi thu hẹp dần xuống tầng dày bên dưới với tốc độ chỉ vài mili giây. Đặc biệt lưu ý khi viết câu truy vấn SQL, tuyệt đối dùng trực tiếp toán tử khoảng cách cosine để bộ tối ưu hóa kích hoạt đúng chỉ mục HNSW.

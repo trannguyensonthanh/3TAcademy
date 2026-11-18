@@ -1,0 +1,147 @@
+{
+  "ai-s01-rag-architecture": {
+    "videoPath": "/videos/lectures/ai-s01-rag-architecture.mp4",
+    "vttPath": "/videos/lectures/ai-s01-rag-architecture.vtt",
+    "durationSeconds": 89,
+    "title": "Kiến trúc Production RAG & Phòng chống Ảo giác",
+    "instructor": "TS. Lê Minh Khoa",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Vì sao Mô hình Ngôn ngữ Lớn bị Ảo giác (Hallucination)?",
+        "startSec": 0.0,
+        "endSec": 34.8,
+        "text": "Chào mừng các bạn đến với buổi một khóa Kỹ sư AI Thực chiến tại Ba Tê Academy. Trong hệ thống doanh nghiệp, mô hình ngôn ngữ lớn rất dễ sinh ảo giác nếu tự suy diễn ngoài dữ liệu. Kiến trúc Production RAG giải quyết triệt để vấn đề này bằng cách truy xuất đúng đoạn tài liệu chuẩn xác từ cơ sở dữ liệu vector, sau đó ép mô hình chỉ được tổng hợp câu trả lời kèm trích dẫn mốc thời gian và trang tài liệu gốc."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Phân tách Quyền Truy cập Tài liệu (Multi-Tenant Isolation)",
+        "startSec": 34.8,
+        "endSec": 61.93,
+        "text": "Điểm cốt lõi thứ hai trong thiết kế hệ thống thực tế là bảo mật phân quyền ngay tại tầng truy vấn SQL. Trước khi quét chỉ mục vector, chúng ta bắt buộc lọc cứng điều kiện khóa học và phạm vi hiển thị ngay trong PostgreSQL. Nhờ vậy, mô hình ngôn ngữ hoàn toàn không thể nhìn thấy bất kỳ tài liệu nào nằm ngoài quyền hạn của học viên."
+      },
+      {
+        "slideNumber": 3,
+        "heading": "3. Đo lường Chất lượng Hệ thống RAG bằng Bộ chỉ số RAGAS",
+        "startSec": 61.93,
+        "endSec": 89.33,
+        "text": "Cuối cùng, để vận hành ổn định trên môi trường thực tế, chúng ta không đánh giá cảm tính mà đo lường định lượng bằng bộ chỉ số Faithfulness và Context Recall. Mọi câu trả lời dưới ngưỡng tin cậy đều phải từ chối lịch sự thay vì đoán mò. Các bạn hãy hoàn thành bài kiểm tra cuối buổi đạt từ bảy mươi phần trăm trở lên để mở khóa kiến thức tiếp theo nhé."
+      }
+    ]
+  },
+  "ai-s02-chunking-hnsw": {
+    "videoPath": "/videos/lectures/ai-s02-chunking-hnsw.mp4",
+    "vttPath": "/videos/lectures/ai-s02-chunking-hnsw.vtt",
+    "durationSeconds": 63,
+    "title": "Chiến lược Chunking Đa tầng & Chỉ mục Vector HNSW",
+    "instructor": "TS. Lê Minh Khoa",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Băm Tài liệu Bảo toàn Cấu trúc (Structure-Aware Chunking)",
+        "startSec": 0.0,
+        "endSec": 30.73,
+        "text": "Chào các bạn, trong buổi học thứ hai này chúng ta đi sâu vào kỹ thuật băm tài liệu đa tầng và đánh chỉ mục HNSW trên pgvector. Sai lầm phổ biến nhất khi làm RAG là cắt văn bản thuần túy theo số ký tự cố định khiến bảng biểu nhiều cột bị vỡ vụn. Thay vào đó, ta cần giữ nguyên cấu trúc bảng sang Markdown kèm tiêu đề mục cha và gối chồng mười lăm phần trăm giữa hai đoạn liên tiếp."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Cấu trúc Đồ thị Phân tầng HNSW trên PostgreSQL pgvector",
+        "startSec": 30.73,
+        "endSec": 63.47,
+        "text": "Khi kho học liệu tăng lên hàng trăm nghìn đoạn văn bản, quét tuần tự sẽ gây nghẽn cổ chai. Chỉ mục đồ thị phân tầng HNSW nhảy bước lớn ở tầng thưa phía trên rồi thu hẹp dần xuống tầng dày bên dưới với tốc độ chỉ vài mili giây. Đặc biệt lưu ý khi viết câu truy vấn SQL, tuyệt đối dùng trực tiếp toán tử khoảng cách cosine để bộ tối ưu hóa kích hoạt đúng chỉ mục HNSW."
+      }
+    ]
+  },
+  "ai-s03-hybrid-search-rrf": {
+    "videoPath": "/videos/lectures/ai-s03-hybrid-search-rrf.mp4",
+    "vttPath": "/videos/lectures/ai-s03-hybrid-search-rrf.vtt",
+    "durationSeconds": 58,
+    "title": "Hybrid Search (Dense + BM25) & Reciprocal Rank Fusion",
+    "instructor": "TS. Lê Minh Khoa",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Kết hợp Tìm kiếm Ngữ nghĩa (Dense) và Từ khóa (BM25 / FTS)",
+        "startSec": 0.0,
+        "endSec": 30.87,
+        "text": "Chào các bạn đến với buổi ba về thuật toán tìm kiếm lai Hybrid Search và hợp nhất thứ hạng Reciprocal Rank Fusion. Tìm kiếm vector rất mạnh khi hiểu ý nghĩa tự nhiên nhưng thường nhầm lẫn khi người dùng gõ mã lỗi hoặc mã đơn hàng cụ thể. Vì điểm cosine và điểm từ khóa có thang đo khác nhau, công thức RRF dùng hằng số làm mượt k bằng sáu mươi để cộng nghịch đảo thứ hạng cực kỳ ổn định."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Tinh lọc Kết quả bằng Mô hình Cross-Encoder Reranker",
+        "startSec": 30.87,
+        "endSec": 58.4,
+        "text": "Sau khi RRF lấy ra hai mươi ứng viên tiềm năng nhất, chúng ta đưa qua tầng thứ hai là mô hình Cross Encoder Reranker. Cross Encoder chấm điểm trực tiếp sự tương tác giữa từng từ trong câu hỏi và văn bản để chọn ra bốn đoạn chuẩn xác nhất, đồng thời loại bỏ ngay các truy vấn lạc đề mà không cần tốn chi phí gọi mô hình sinh ngôn ngữ."
+      }
+    ]
+  },
+  "swe-s01-clean-arch-postgres": {
+    "videoPath": "/videos/lectures/swe-s01-clean-arch-postgres.mp4",
+    "vttPath": "/videos/lectures/swe-s01-clean-arch-postgres.vtt",
+    "durationSeconds": 51,
+    "title": "Clean Architecture, PostgreSQL MVCC & Chống Race Condition",
+    "instructor": "TS. Lê Minh Khoa",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Tách biệt Miền Nghiệp vụ & Khóa Bi quan SELECT FOR UPDATE",
+        "startSec": 0.0,
+        "endSec": 26.47,
+        "text": "Chào các bạn học viên khóa Kiến trúc Backend Chuyên sâu. Khi xử lý giao dịch tài chính và đối soát chuyển khoản tự động, hai tiến trình đồng thời có thể cùng đọc trạng thái đơn hàng đang chờ và cộng trùng quyền lợi. Sử dụng giao dịch ACID kèm khóa dòng SELECT FOR UPDATE và mã giao dịch bất biến giúp hệ thống đạt tính nhất quán tuyệt đối dưới tải cao."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Chẩn đoán Truy vấn Chậm với EXPLAIN (ANALYZE, BUFFERS)",
+        "startSec": 26.47,
+        "endSec": 51.07,
+        "text": "Mỗi khi một API báo cáo trên bảng lớn phản hồi chậm, nguyên tắc đầu tiên của kỹ sư thực chiến là đo lường bằng lệnh EXPLAIN ANALYZE BUFFERS. Từ kế hoạch thực thi thực tế, ta xác định chính xác nút thắt quét tuần tự và thiết kế chỉ mục tổ hợp tối ưu giúp giảm độ trễ xuống dưới mười lăm mili giây."
+      }
+    ]
+  },
+  "data-s01-streaming-lakehouse": {
+    "videoPath": "/videos/lectures/data-s01-streaming-lakehouse.mp4",
+    "vttPath": "/videos/lectures/data-s01-streaming-lakehouse.vtt",
+    "durationSeconds": 52,
+    "title": "Streaming Data Pipeline, Idempotency & Medallion Lakehouse",
+    "instructor": "ThS. Nguyễn Thu Hà",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Kiến trúc Medallion 3 Tầng: Bronze -> Silver -> Gold",
+        "startSec": 0.0,
+        "endSec": 30.87,
+        "text": "Chào các bạn học viên khóa Kỹ thuật Dữ liệu tại Ba Tê Academy, cô là Thu Hà. Trong bài giảng này, chúng ta thiết kế đường ống dữ liệu chuẩn Medallion gồm ba tầng Bronze, Silver và Gold. Nhờ tính chất bất biến ở tầng Bronze và cơ chế khử trùng lặp theo khóa định danh ở tầng Silver, hệ thống luôn đảm bảo số liệu báo cáo chính xác ngay cả khi luồng thu thập thử lại nhiều lần."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Kiểm soát Chất lượng Dữ liệu Tự động (Data Quality Gate)",
+        "startSec": 30.87,
+        "endSec": 52.0,
+        "text": "Một đường ống dữ liệu tốt không bao giờ đẩy dữ liệu bẩn lên bảng điều khiển của ban giám đốc. Bằng cách đặt các chốt kiểm định tự động về miền giá trị, tỷ lệ rỗng và độ tươi dữ liệu trước khi xuất bản sang tầng Gold, chúng ta phát hiện và cô lập sự cố ngay lập tức."
+      }
+    ]
+  },
+  "py-s01-python-sql-analytics": {
+    "videoPath": "/videos/lectures/py-s01-python-sql-analytics.mp4",
+    "vttPath": "/videos/lectures/py-s01-python-sql-analytics.vtt",
+    "durationSeconds": 53,
+    "title": "Tối ưu Python Xử lý Dữ liệu & SQL Window Functions",
+    "instructor": "ThS. Nguyễn Thu Hà",
+    "cues": [
+      {
+        "slideNumber": 1,
+        "heading": "1. Xử lý Dữ liệu Hiệu năng Cao trong Python & Vectorization",
+        "startSec": 0.0,
+        "endSec": 27.67,
+        "text": "Chào mừng các bạn đến với khóa Lập trình Python và SQL Thực chiến. Khi xử lý các tập dữ liệu lớn hàng trăm nghìn dòng, việc nạp toàn bộ file vào bộ nhớ và chạy vòng lặp thủ công sẽ rất chậm. Áp dụng Generator đọc theo lô kết hợp các phép toán vector hóa giúp tốc độ xử lý tăng gấp hàng chục lần mà vẫn giữ dung lượng bộ nhớ ổn định."
+      },
+      {
+        "slideNumber": 2,
+        "heading": "2. Phân tích Chuyên sâu với CTE & SQL Window Functions",
+        "startSec": 27.67,
+        "endSec": 53.07,
+        "text": "Ở phần SQL thực chiến, hàm cửa sổ Window Functions là vũ khí sắc bén nhất của người làm dữ liệu và AI. Thay vì phải nối bảng tự thân nhiều lần gây tốn kém, các hàm ROW NUMBER và LAG cho phép xếp hạng và so sánh chênh lệch điểm số giữa hai lần thi liên tiếp cực kỳ gọn gàng và nhanh chóng."
+      }
+    ]
+  }
+}

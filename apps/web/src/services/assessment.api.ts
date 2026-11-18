@@ -44,6 +44,16 @@ export const assessmentApi = {
       { method: 'GET' }
     ),
 
+  startAssessmentAttempt: (assessmentId: string) =>
+    httpRequest<{
+      attemptId: string;
+      assessmentId: string;
+      attemptNumber: number;
+      startedAt: string;
+    }>(`/assessments/${encodeURIComponent(assessmentId)}/start`, {
+      method: 'POST',
+    }),
+
   submitAssessmentAttempt: (
     assessmentId: string,
     answers: Record<number, number>,
@@ -82,5 +92,30 @@ export const assessmentApi = {
     }>(`/assessments/${encodeURIComponent(assessmentId)}/proctoring-events`, {
       method: 'POST',
       body: JSON.stringify({ eventType, snapshotNote }),
+    }),
+
+  analyzeProctoringSnapshot: (
+    assessmentId: string,
+    imageBase64: string,
+    videoOffsetSec?: number
+  ) =>
+    httpRequest<{
+      assessmentId: string;
+      recorded: boolean;
+      detectorTier1?: string;
+      yoloObjectDetectorActive?: boolean;
+      state: 'NORMAL' | 'WARNING' | 'ALERT';
+      eventType: string;
+      confidence: number;
+      riskDelta: number;
+      message: string;
+      faceCount: number;
+      headPose: { yawDeg: number; pitchDeg: number; rollDeg: number };
+      prohibitedObjects: Array<{ label?: string; confidence?: number }>;
+      latencyMs?: number;
+      timestamp: string;
+    }>(`/assessments/${encodeURIComponent(assessmentId)}/proctoring-snapshot`, {
+      method: 'POST',
+      body: JSON.stringify({ imageBase64, videoOffsetSec, escalateVlm: true }),
     }),
 };

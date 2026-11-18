@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { eq, asc, desc, inArray } from 'drizzle-orm';
+import { eq, and, asc, desc, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { db } from '../../db/index.js';
 import {
@@ -12,14 +13,18 @@ import {
   assessments,
   assessmentItems,
   assessmentAttempts,
+  submissionAnswers,
   proctoringEvents,
   enrollments,
+  certificates,
   discussionThreads,
   discussionPosts,
   notifications,
   userProfiles,
   accounts,
   skills,
+  courseSkills,
+  knowledgeChunks,
   chatSessions,
   chatMessages,
   orders,
@@ -27,6 +32,7 @@ import {
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { aiServiceClient } from '../../integrations/aiService.client.js';
+import { computeSemanticEmbedding1024 } from '../../db/seedHelpers.js';
 import { env } from '../../config/env.js';
 import {
   resolveCohort,
@@ -45,6 +51,8 @@ import {
   updateMutedParticipantsState,
   resolvePlayableVideoSource,
 } from '../learning/liveRoom.helpers.js';
+import { buildAttachmentDownloadUrl } from '../learning/learning.routes.js';
+import { computeWeightedCohortScorePct } from '../assessment/skillMasteryModel.js';
 import {
   kickLiveKitParticipant,
   muteLiveKitParticipantsAudio,
@@ -90,32 +98,31 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
-function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
-  const trimmed = (r2ObjectKey || '').trim();
-  if (
-    trimmed.startsWith('http://') ||
-    trimmed.startsWith('https://') ||
-    trimmed.startsWith('/')
-  ) {
-    return trimmed;
-  }
-  return `https://cdn.3t.edu.vn/${trimmed}`;
+async function assertInstructorOwnsCohort(
+  cohortId: number,
+  user: { id: number; role: string }
+): Promise<boolean> {
+  if (user.role === 'ADMIN') return true;
+  const [cohort] = await db.select().from(cohorts).where(eq(cohorts.id, cohortId)).limit(1);
+  return Boolean(cohort && cohort.instructorId === user.id);
 }
 
 export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
   await reconcileUnmatchedSepayTransactions();
 
-  // Ensure any PAID order has a corresponding ACTIVE enrollment record
+  // Ensure any PAID order has a corresponding ACTIVE enrollment record & synced enrolledCount
   try {
     const [paidOrders, existingEnrs] = await Promise.all([
       db.select().from(orders).where(eq(orders.status, 'PAID')),
       db.select().from(enrollments),
     ]);
     const existingKeys = new Set(existingEnrs.map((e) => `${e.accountId}:${e.cohortId}`));
+    const touchedCohortIds = new Set<number>();
     for (const ord of paidOrders) {
       const key = `${ord.accountId}:${ord.cohortId}`;
       if (!existingKeys.has(key)) {
         existingKeys.add(key);
+        touchedCohortIds.add(ord.cohortId);
         await db
           .insert(enrollments)
           .values({
@@ -129,6 +136,15 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
             set: { status: 'ACTIVE', orderId: ord.id },
           });
       }
+    }
+    for (const cId of touchedCohortIds) {
+      await db
+        .update(cohorts)
+        .set({
+          enrolledCount: sql`(SELECT COUNT(*)::int FROM enrollments WHERE cohort_id = ${cId} AND status <> 'REVOKED')`,
+          updatedAt: new Date(),
+        })
+        .where(eq(cohorts.id, cId));
     }
   } catch {
     // Ignore in mocked test environments
@@ -208,12 +224,20 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
       return ass ? ass.cohortId === enr.cohortId : true;
     });
 
-    const avgScorePct =
-      cohortAttempts.length > 0
-        ? Math.round(
-            cohortAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / cohortAttempts.length
-          )
-        : 0;
+    const avgScorePct = computeWeightedCohortScorePct(
+      cohortAttempts.map((a) => {
+        const ass = assessmentMap.get(a.assessmentId);
+        const sess = ass?.sessionId
+          ? cSessions.find((s) => s.id === ass.sessionId)
+          : undefined;
+        return {
+          scorePct: Number(a.scorePct),
+          sessionOrder: sess?.sessionOrder ?? null,
+          isFinalExam: ass?.purpose === 'FINAL_EXAM',
+        };
+      }),
+      totalSessionsCount
+    );
 
     const enrolledDate = enr.enrolledAt ? new Date(enr.enrolledAt) : new Date();
     const isNewEnrollment = nowMs - enrolledDate.getTime() <= SEVEN_DAYS_MS;
@@ -326,13 +350,18 @@ export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
 
     const studentQuestions = [...studentDiscussionQuestions, ...studentAiQuestions];
 
+    const cvData = (prof?.cvParsedData ?? {}) as Record<string, unknown>;
+    const resolvedPhone =
+      (prof?.phone && prof.phone.trim()) ||
+      (typeof cvData.phone === 'string' && cvData.phone.trim() ? cvData.phone.trim() : '');
+
     return {
       id: String(enr.id),
       userId: String(enr.accountId),
       accountId: String(enr.accountId),
       studentName: prof?.fullName || acc?.email || '',
       studentEmail: acc?.email || '',
-      phone: '',
+      phone: resolvedPhone,
       bio: prof?.bio || '',
       careerGoal: prof?.careerGoal || '',
       avatarUrl: prof?.avatarUrl,
@@ -659,7 +688,13 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
         : [];
     const formattedDiscussions = await buildFormattedDiscussionsForSessions(sessions);
 
-    const formattedMaterials = allAttachments.map((att) => {
+    const instructorSessionIds = new Set(sessions.map((s) => s.id));
+    const instructorCohortIdSet = new Set(instructorCohortIds);
+
+    const scopedAttachments = allAttachments.filter((att) =>
+      instructorSessionIds.has(att.sessionId)
+    );
+    const formattedMaterials = scopedAttachments.map((att) => {
       const sess = sessions.find((s) => s.id === att.sessionId);
       const fileType = inferMaterialFileType(att.fileName, att.mimeType);
       const sizeStr = `${(att.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -681,13 +716,25 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
       };
     });
 
+    const scopedChatMsgs =
+      req.user!.role === 'ADMIN'
+        ? allChatMsgs
+        : allChatMsgs.filter((m) => {
+            const cs = chatSessionMap.get(m.chatSessionId);
+            return Boolean(
+              cs &&
+                ((cs.cohortId && instructorCohortIdSet.has(cs.cohortId)) ||
+                  (cs.sessionId && instructorSessionIds.has(cs.sessionId)))
+            );
+          });
+
     res.json({
       liveSession,
       upcomingSessions,
       allSessions: formattedSessions,
       examReviews,
       enrollments: formattedEnrollments,
-      chatMessages: allChatMsgs.map((m) => {
+      chatMessages: scopedChatMsgs.map((m) => {
         const cs = chatSessionMap.get(m.chatSessionId);
         const stuProf = cs?.accountId ? profileMap.get(cs.accountId) : undefined;
         return {
@@ -1214,13 +1261,10 @@ teachRouter.put(
                 : 'application/pdf');
         const resolvedBytes = fileSizeBytes || (fileType === 'VIDEO' ? 18454937 : 2516582);
         const trimmedUrl = materialUrl?.trim();
-        const defaultVideoUrl = '/videos/2759484-uhd_3840_2160_30fps.mp4';
         const resolvedObjectKey =
           trimmedUrl ||
           r2ObjectKey ||
-          (fileType === 'VIDEO'
-            ? defaultVideoUrl
-            : `sessions/${sessionId}/${Date.now()}-${effectiveName.replace(/\s+/g, '_')}`);
+          `sessions/${sessionId}/${Date.now()}-${effectiveName.replace(/\s+/g, '_')}`;
 
         const [att] = await db
           .insert(sessionAttachments)
@@ -1745,7 +1789,7 @@ teachRouter.post(
   }
 );
 
-// 7.6 POST /teach/sessions/:sessionId/generate-quiz
+// 7.6 POST /teach/sessions/:sessionId/generate-quiz — Real AI / Chunk-Grounded Quiz Draft!
 teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, next) => {
   try {
     const session = await resolveSession(req.params.sessionId);
@@ -1759,6 +1803,15 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
           code: 'SESSION_NOT_FOUND',
           message: 'Không tìm thấy buổi học',
         },
+      });
+      return;
+    }
+
+    const ownsCohort = await assertInstructorOwnsCohort(session.cohortId, req.user!);
+    if (!ownsCohort) {
+      res.status(403).json({
+        code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+        message: 'Bạn không phụ trách đợt học của buổi này.',
       });
       return;
     }
@@ -1777,8 +1830,8 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
           sessionId: session.id,
           purpose: 'SESSION_ASSIGNMENT',
           gradingMode: 'AUTO',
-          title: `Bài kiểm tra trắc nghiệm Buổi ${session.sessionOrder}: ${session.title}`,
-          durationMinutes: 20,
+          title: `Bài kiểm tra Buổi ${session.sessionOrder}: ${session.title}`,
+          durationMinutes: 15,
           passScorePct: 70,
           status: 'DRAFT',
         })
@@ -1793,24 +1846,139 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
       quiz = updated!;
     }
 
-    const [existingItems, allSkills] = await Promise.all([
+    const [existingItems, allSkills, sessChunks, cohortRows] = await Promise.all([
       db
         .select()
         .from(assessmentItems)
         .where(eq(assessmentItems.assessmentId, quiz.id))
         .orderBy(asc(assessmentItems.itemOrder)),
       db.select().from(skills),
+      db
+        .select()
+        .from(knowledgeChunks)
+        .where(eq(knowledgeChunks.sessionId, session.id))
+        .orderBy(asc(knowledgeChunks.chunkIndex)),
+      db.select().from(cohorts).where(eq(cohorts.id, session.cohortId)).limit(1),
     ]);
 
     const skillMap = new Map(allSkills.map((s) => [s.id, s]));
+    const defaultSkillId = allSkills[0]?.id ?? 1;
+    let cSkillIds: number[] = [];
+    if (cohortRows[0]) {
+      const cSkills = await db
+        .select()
+        .from(courseSkills)
+        .where(eq(courseSkills.courseId, cohortRows[0].courseId));
+      cSkillIds = cSkills.map((cs) => cs.skillId);
+    }
+    const primarySkillId = cSkillIds[0] ?? defaultSkillId;
+    const secondarySkillId = cSkillIds[1] ?? primarySkillId;
+
+    const transcriptText =
+      sessChunks.map((c) => c.content).join('\n\n') ||
+      session.aiSummaryMd ||
+      session.descriptionMd ||
+      session.title;
+
+    let finalItems = existingItems;
 
     try {
-      await aiServiceClient.generateQuizDraft(session.id);
+      const aiGenerated = await aiServiceClient.generateQuizDraft(
+        {
+          sessionId: session.id,
+          sessionTitle: session.title,
+          transcriptText,
+          skillIds: [primarySkillId, secondarySkillId],
+          questionCount: 4,
+        },
+        req.correlationId
+      );
+
+      if (
+        Array.isArray(aiGenerated.generated_items) &&
+        aiGenerated.generated_items.length > 0 &&
+        existingItems.length === 0
+      ) {
+        const inserted = await db
+          .insert(assessmentItems)
+          .values(
+            aiGenerated.generated_items.map((gi, idx) => {
+              const jumpSec = 180 + idx * 240;
+              const opts =
+                Array.isArray(gi.options) && gi.options.length >= 4
+                  ? gi.options.slice(0, 4)
+                  : ['Phương án A', 'Phương án B', 'Phương án C', 'Phương án D'];
+              const correctIdx =
+                typeof gi.correctIndex === 'number' && gi.correctIndex >= 0 && gi.correctIndex <= 3
+                  ? gi.correctIndex
+                  : idx % 4;
+              return {
+                assessmentId: quiz!.id,
+                skillId: gi.skillId ?? (idx % 2 === 0 ? primarySkillId : secondarySkillId),
+                itemOrder: idx + 1,
+                itemType: 'SINGLE_CHOICE' as const,
+                points: '10.00',
+                promptConfig: {
+                  number: idx + 1,
+                  prompt: gi.prompt || `Câu ${idx + 1}: Nội dung trọng tâm của ${session.title}?`,
+                  options: opts,
+                  slideLabel: `Buổi ${session.sessionOrder} · Slide Trang ${6 + idx * 3}`,
+                  scenarioTag: idx % 2 === 0 ? 'Tình huống thực chiến' : 'Kiến thức cốt lõi',
+                },
+                gradingConfig: {
+                  correctIndex: correctIdx,
+                  reviewTimestampLabel: `${formatSecondsToMmSs(jumpSec)} — ${formatSecondsToMmSs(jumpSec + 60)}`,
+                  reviewJumpSec: jumpSec,
+                  reviewSegmentRangeSec: [jumpSec, jumpSec + 60] as [number, number],
+                },
+                explanationMd: gi.explanationMd || 'Đối chiếu tài liệu buổi học.',
+                itemEmbedding: computeSemanticEmbedding1024(`${gi.prompt} ${gi.explanationMd}`),
+              };
+            })
+          )
+          .returning();
+        finalItems = inserted;
+      }
     } catch {
-      // Keep items from DB
+      // Keep DB items or create deterministic topic items if assessment had 0 items
     }
 
-    const formattedItems = mapAssessmentItemsToMcq(existingItems, skillMap);
+    if (finalItems.length === 0) {
+      const fallbackSeeds = [0, 1, 2, 3].map((idx) => {
+        const jumpSec = 180 + idx * 240;
+        const correctIdx = idx % 4;
+        const options = [0, 1, 2, 3].map((optIdx) =>
+          optIdx === correctIdx
+            ? `Áp dụng đúng kiến trúc chuẩn được trình bày tại Buổi ${session.sessionOrder}: ${session.title}`
+            : `Cách làm thiếu kiểm soát lỗi hoặc bỏ qua nguyên tắc tối ưu ở phương án ${optIdx + 1}`
+        );
+        return {
+          assessmentId: quiz.id,
+          skillId: idx % 2 === 0 ? primarySkillId : secondarySkillId,
+          itemOrder: idx + 1,
+          itemType: 'SINGLE_CHOICE' as const,
+          points: '10.00',
+          promptConfig: {
+            number: idx + 1,
+            prompt: `Câu ${idx + 1} (Buổi ${session.sessionOrder}): Nguyên tắc kỹ thuật quan trọng nhất trong chủ đề "${session.title}" là gì?`,
+            options,
+            slideLabel: `Buổi ${session.sessionOrder} · Slide Trang ${6 + idx * 3}`,
+            scenarioTag: idx % 2 === 0 ? 'Tình huống thực chiến' : 'Kiến thức cốt lõi',
+          },
+          gradingConfig: {
+            correctIndex: correctIdx,
+            reviewTimestampLabel: `${formatSecondsToMmSs(jumpSec)} — ${formatSecondsToMmSs(jumpSec + 60)}`,
+            reviewJumpSec: jumpSec,
+            reviewSegmentRangeSec: [jumpSec, jumpSec + 60] as [number, number],
+          },
+          explanationMd: transcriptText.slice(0, 260),
+          itemEmbedding: computeSemanticEmbedding1024(`${session.title} ${transcriptText}`),
+        };
+      });
+      finalItems = await db.insert(assessmentItems).values(fallbackSeeds).returning();
+    }
+
+    const formattedItems = mapAssessmentItemsToMcq(finalItems, skillMap);
 
     res.json({
       assessmentId: String(quiz.id),
@@ -1824,7 +1992,7 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
   }
 });
 
-// 7.7 PUT /teach/assessments/:assessmentId/publish
+// 7.7 PUT /teach/assessments/:assessmentId/publish — Full INSERT + UPDATE + DELETE Sync!
 const publishAssessmentSchema = z.object({
   status: z.enum(['DRAFT', 'PUBLISHED']).default('PUBLISHED'),
   passScorePct: z.number().int().min(50).max(100).optional(),
@@ -1871,6 +2039,15 @@ teachRouter.put(
         return;
       }
 
+      const ownsCohort = await assertInstructorOwnsCohort(assessment.cohortId, req.user!);
+      if (!ownsCohort) {
+        res.status(403).json({
+          code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+          message: 'Bạn không phụ trách đợt học của đề kiểm tra này.',
+        });
+        return;
+      }
+
       const { status, passScorePct, durationMinutes, items } = req.body;
 
       const [updated] = await db
@@ -1884,45 +2061,124 @@ teachRouter.put(
         .where(eq(assessments.id, assessment.id))
         .returning();
 
+      let finalCount = 0;
+
       if (Array.isArray(items) && items.length > 0) {
-        const existingDbItems = await db
-          .select()
-          .from(assessmentItems)
-          .where(eq(assessmentItems.assessmentId, assessment.id))
-          .orderBy(asc(assessmentItems.itemOrder));
+        const [existingDbItems, allSkills] = await Promise.all([
+          db
+            .select()
+            .from(assessmentItems)
+            .where(eq(assessmentItems.assessmentId, assessment.id))
+            .orderBy(asc(assessmentItems.itemOrder)),
+          db.select().from(skills),
+        ]);
+
+        const fallbackSkillId = existingDbItems[0]?.skillId ?? allSkills[0]?.id ?? 1;
+        const skillIdByCode = new Map(allSkills.map((s) => [s.code.toLowerCase(), s.id]));
+        const validSkillIds = new Set(allSkills.map((s) => s.id));
+
+        const keptItemIds: number[] = [];
 
         for (let idx = 0; idx < items.length; idx++) {
           const itemPayload = items[idx]!;
-          const targetDbItem = existingDbItems[idx];
-          if (targetDbItem) {
+          const parsedNumericId = Number(itemPayload.id);
+          const matchedExisting =
+            (Number.isInteger(parsedNumericId) && parsedNumericId > 0
+              ? existingDbItems.find((e) => e.id === parsedNumericId)
+              : undefined) || existingDbItems[idx];
+
+          const rawSkillNum = Number(itemPayload.skillId);
+          const resolvedSkillId =
+            (Number.isInteger(rawSkillNum) && validSkillIds.has(rawSkillNum)
+              ? rawSkillNum
+              : undefined) ||
+            (itemPayload.skillCode
+              ? skillIdByCode.get(itemPayload.skillCode.toLowerCase())
+              : undefined) ||
+            matchedExisting?.skillId ||
+            fallbackSkillId;
+
+          const jumpSec = itemPayload.reviewJumpSec ?? 180 + idx * 240;
+          const promptCfg = {
+            number: idx + 1,
+            scenarioTag: itemPayload.scenarioTag || 'Kiến thức cốt lõi',
+            prompt: itemPayload.prompt,
+            options: itemPayload.options,
+            slideLabel: itemPayload.slideLabel || '',
+          };
+          const gradingCfg = {
+            correctIndex: itemPayload.correctIndex,
+            reviewTimestampLabel:
+              itemPayload.reviewTimestampLabel ||
+              `${formatSecondsToMmSs(jumpSec)} — ${formatSecondsToMmSs(jumpSec + 60)}`,
+            reviewJumpSec: jumpSec,
+            reviewSegmentRangeSec:
+              itemPayload.reviewSegmentRangeSec || ([jumpSec, jumpSec + 60] as [number, number]),
+          };
+
+          if (matchedExisting && !keptItemIds.includes(matchedExisting.id)) {
+            keptItemIds.push(matchedExisting.id);
             await db
               .update(assessmentItems)
               .set({
-                promptConfig: {
-                  number: itemPayload.number ?? idx + 1,
-                  scenarioTag: itemPayload.scenarioTag,
-                  prompt: itemPayload.prompt,
-                  options: itemPayload.options,
-                  slideLabel: itemPayload.slideLabel || '',
-                },
-                gradingConfig: {
-                  correctIndex: itemPayload.correctIndex,
-                  reviewTimestampLabel: itemPayload.reviewTimestampLabel || '00:10 — 00:25',
-                  reviewJumpSec: itemPayload.reviewJumpSec ?? 10,
-                  reviewSegmentRangeSec: itemPayload.reviewSegmentRangeSec || [10, 25],
-                },
-                explanationMd: itemPayload.explanation || targetDbItem.explanationMd,
+                skillId: resolvedSkillId,
+                itemOrder: idx + 1,
+                promptConfig: promptCfg,
+                gradingConfig: gradingCfg,
+                explanationMd: itemPayload.explanation ?? matchedExisting.explanationMd,
+                itemEmbedding: computeSemanticEmbedding1024(
+                  `${itemPayload.prompt} ${itemPayload.explanation || ''}`
+                ),
               })
-              .where(eq(assessmentItems.id, targetDbItem.id));
+              .where(eq(assessmentItems.id, matchedExisting.id));
+          } else {
+            const [insertedItem] = await db
+              .insert(assessmentItems)
+              .values({
+                assessmentId: assessment.id,
+                skillId: resolvedSkillId,
+                itemOrder: idx + 1,
+                itemType: 'SINGLE_CHOICE',
+                points: '10.00',
+                promptConfig: promptCfg,
+                gradingConfig: gradingCfg,
+                explanationMd: itemPayload.explanation || '',
+                itemEmbedding: computeSemanticEmbedding1024(
+                  `${itemPayload.prompt} ${itemPayload.explanation || ''}`
+                ),
+              })
+              .returning();
+            if (insertedItem) keptItemIds.push(insertedItem.id);
           }
         }
+
+        // Delete removed items if they have no historical submission_answers referencing them
+        const candidateDeleteIds = existingDbItems
+          .map((e) => e.id)
+          .filter((id) => !keptItemIds.includes(id));
+
+        if (candidateDeleteIds.length > 0) {
+          const referenced = await db
+            .select({ itemId: submissionAnswers.itemId })
+            .from(submissionAnswers)
+            .where(inArray(submissionAnswers.itemId, candidateDeleteIds));
+          const refSet = new Set(referenced.map((r) => r.itemId));
+          const safeDeleteIds = candidateDeleteIds.filter((id) => !refSet.has(id));
+          if (safeDeleteIds.length > 0) {
+            await db
+              .delete(assessmentItems)
+              .where(inArray(assessmentItems.id, safeDeleteIds));
+          }
+        }
+
+        finalCount = items.length;
       }
 
       res.json({
         assessmentId: String(updated!.id),
         status: updated!.status,
-        publishedCount: items?.length ?? 0,
-        itemsCount: items?.length ?? 0,
+        publishedCount: finalCount,
+        itemsCount: finalCount,
         publishedAt: updated!.updatedAt.toISOString(),
         updatedAt: updated!.updatedAt.toISOString(),
       });
@@ -1973,7 +2229,12 @@ teachRouter.post(
         { expiresIn: `${expiresInMinutes}m` }
       );
 
-      const url = `https://3t.edu.vn/live/guest/${session.id}?token=${inviteToken}`;
+      const webOrigin = (
+        process.env.PUBLIC_WEB_URL ||
+        (typeof req.headers.origin === 'string' && req.headers.origin) ||
+        'http://localhost:5173'
+      ).replace(/\/+$/, '');
+      const url = `${webOrigin}/live/guest/${session.id}?token=${inviteToken}`;
       res.json({
         sessionId: String(session.id),
         cohortId: String(session.cohortId),
@@ -2139,7 +2400,219 @@ async function handleSendEnrollmentReminder(req: any, res: any, next: any) {
 teachRouter.post('/teach/enrollments/:enrollmentId/remind', handleSendEnrollmentReminder);
 teachRouter.post('/teach/enrollments/:enrollmentId/ai-reminder', handleSendEnrollmentReminder);
 
+// 7.9B PATCH /teach/discussions/:threadId/verify — Persist AI/Discussion Verification!
+teachRouter.patch('/teach/discussions/:threadId/verify', async (req, res, next) => {
+  try {
+    const threadId = Number(req.params.threadId);
+    const [threadRow] = await db
+      .select()
+      .from(discussionThreads)
+      .where(eq(discussionThreads.id, threadId))
+      .limit(1);
+
+    if (!threadRow) {
+      res.status(404).json({ code: 'THREAD_NOT_FOUND', message: 'Không tìm thấy chủ đề thảo luận' });
+      return;
+    }
+
+    const [sess] = await db
+      .select()
+      .from(classSessions)
+      .where(eq(classSessions.id, threadRow.sessionId))
+      .limit(1);
+
+    if (sess) {
+      const owns = await assertInstructorOwnsCohort(sess.cohortId, req.user!);
+      if (!owns) {
+        res.status(403).json({
+          code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+          message: 'Bạn không phụ trách buổi học của thảo luận này.',
+        });
+        return;
+      }
+    }
+
+    const now = new Date();
+    await db.transaction(async (tx) => {
+      await tx
+        .update(discussionPosts)
+        .set({
+          isInstructorVerified: true,
+          verifiedBy: req.user!.id,
+          updatedAt: now,
+        })
+        .where(eq(discussionPosts.threadId, threadId));
+
+      await tx
+        .update(discussionThreads)
+        .set({ isResolved: true, updatedAt: now })
+        .where(eq(discussionThreads.id, threadId));
+    });
+
+    res.json({
+      threadId: String(threadId),
+      isInstructorVerified: true,
+      isResolved: true,
+      verifiedAt: now.toISOString(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // 7.11 PUT /teach/exam-reviews/:reviewId & POST /teach/proctoring/:attemptId/verdict
+// Reconciles enrollment graduation status + revokes/issues HMAC certificate atomically!
+async function applyInstructorProctoringVerdict(params: {
+  attemptId: number;
+  verdict: 'CLEARED_BY_INSTRUCTOR' | 'CONFIRMED_CHEAT';
+  note: string;
+  instructorId: number;
+  instructorRole: string;
+}) {
+  const { attemptId, verdict, note, instructorId, instructorRole } = params;
+  const [attempt] = await db
+    .select()
+    .from(assessmentAttempts)
+    .where(eq(assessmentAttempts.id, attemptId))
+    .limit(1);
+
+  if (!attempt) {
+    throw Object.assign(new Error('Không tìm thấy lượt thi cần hậu kiểm'), {
+      statusCode: 404,
+      code: 'ATTEMPT_NOT_FOUND',
+    });
+  }
+
+  const [assessment] = await db
+    .select()
+    .from(assessments)
+    .where(eq(assessments.id, attempt.assessmentId))
+    .limit(1);
+
+  if (assessment) {
+    const owns = await assertInstructorOwnsCohort(assessment.cohortId, {
+      id: instructorId,
+      role: instructorRole,
+    });
+    if (!owns) {
+      throw Object.assign(new Error('Bạn không phụ trách đợt học của bài thi này'), {
+        statusCode: 403,
+        code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+      });
+    }
+  }
+
+  const now = new Date();
+  const isFinalExam = assessment?.purpose === 'FINAL_EXAM';
+  const passThreshold = assessment?.passScorePct ?? 70;
+  const rawScorePct = Number(attempt.scorePct ?? 0);
+  const nextIsPassed =
+    verdict === 'CONFIRMED_CHEAT' ? false : rawScorePct >= passThreshold;
+
+  return db.transaction(async (tx) => {
+    const [updatedAttempt] = await tx
+      .update(assessmentAttempts)
+      .set({
+        integrityStatus: verdict,
+        verdictNote: note,
+        verdictBy: instructorId,
+        verdictAt: now,
+        isPassed: nextIsPassed,
+        ...(verdict === 'CONFIRMED_CHEAT' ? { scorePct: '0.00', totalScore: '0.00' } : {}),
+      })
+      .where(eq(assessmentAttempts.id, attemptId))
+      .returning();
+
+    if (isFinalExam && assessment) {
+      const [enr] = await tx
+        .select()
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.accountId, attempt.accountId),
+            eq(enrollments.cohortId, assessment.cohortId)
+          )
+        )
+        .limit(1);
+
+      if (enr) {
+        if (verdict === 'CONFIRMED_CHEAT') {
+          // Unlock retake by resetting finalExamPassed -> false & revoking any certificate!
+          await tx
+            .update(enrollments)
+            .set({
+              finalExamPassed: false,
+              status: enr.status === 'REVOKED' ? 'REVOKED' : 'ACTIVE',
+              completedAt: null,
+            })
+            .where(eq(enrollments.id, enr.id));
+
+          await tx
+            .update(certificates)
+            .set({
+              revokedAt: now,
+              revokeReason: note || 'Vi phạm quy chế giám sát kỳ thi cuối khóa',
+            })
+            .where(eq(certificates.enrollmentId, enr.id));
+
+          await tx.insert(notifications).values({
+            recipientId: attempt.accountId,
+            type: 'EXAM_RETAKE_REQUIRED',
+            title: 'Yêu cầu thi lại Kỳ thi cuối khóa',
+            body: `Kết quả bài thi cuối khóa không được công nhận (${note}). Hệ thống đã mở lại quyền thi để bạn thực hiện lại nghiêm túc.`,
+            metadata: { attemptId, cohortId: assessment.cohortId },
+          });
+        } else if (verdict === 'CLEARED_BY_INSTRUCTOR' && nextIsPassed) {
+          await tx
+            .update(enrollments)
+            .set({
+              finalExamPassed: true,
+              status: 'COMPLETED',
+              completedAt: now,
+            })
+            .where(eq(enrollments.id, enr.id));
+
+          const [existingCert] = await tx
+            .select()
+            .from(certificates)
+            .where(eq(certificates.enrollmentId, enr.id))
+            .limit(1);
+
+          const certCode =
+            existingCert?.certificateCode ||
+            `3T-CERT-${now.getFullYear()}-${enr.id}-${attempt.accountId}`;
+          const hmacSig = crypto
+            .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
+            .update(`${enr.id}:${attempt.accountId}:${certCode}`)
+            .digest('hex');
+
+          if (existingCert) {
+            await tx
+              .update(certificates)
+              .set({
+                hmacSignature: hmacSig,
+                issuedAt: now,
+                revokedAt: null,
+                revokeReason: null,
+              })
+              .where(eq(certificates.id, existingCert.id));
+          } else {
+            await tx.insert(certificates).values({
+              enrollmentId: enr.id,
+              accountId: attempt.accountId,
+              certificateCode: certCode,
+              hmacSignature: hmacSig,
+              issuedAt: now,
+            });
+          }
+        }
+      }
+    }
+
+    return updatedAttempt!;
+  });
+}
+
 const examReviewDecisionSchema = z.object({
   decision: z.enum(['APPROVED', 'RETAKE_REQUIRED']),
   note: z.string().optional(),
@@ -2155,28 +2628,25 @@ teachRouter.put(
       const verdict =
         decision === 'APPROVED' ? 'CLEARED_BY_INSTRUCTOR' : 'CONFIRMED_CHEAT';
 
-      const [updated] = await db
-        .update(assessmentAttempts)
-        .set({
-          integrityStatus: verdict,
-          verdictNote:
-            note ||
-            (decision === 'APPROVED'
-              ? 'Đã xác minh hợp lệ bởi Giảng viên'
-              : 'Yêu cầu thi lại do vi phạm quy chế giám sát Camera'),
-          verdictBy: req.user!.id,
-          verdictAt: new Date(),
-          ...(verdict === 'CONFIRMED_CHEAT' ? { scorePct: '0.00', isPassed: false } : {}),
-        })
-        .where(eq(assessmentAttempts.id, attemptId))
-        .returning();
+      const updated = await applyInstructorProctoringVerdict({
+        attemptId,
+        verdict,
+        note:
+          note ||
+          (decision === 'APPROVED'
+            ? 'Đã xác minh hợp lệ bởi Giảng viên'
+            : 'Yêu cầu thi lại do vi phạm quy chế giám sát Camera'),
+        instructorId: req.user!.id,
+        instructorRole: req.user!.role,
+      });
 
       res.json({
         reviewId: String(attemptId),
         attemptId: String(attemptId),
         decision,
-        integrityStatus: updated?.integrityStatus || verdict,
-        updatedAt: (updated?.verdictAt || new Date()).toISOString(),
+        integrityStatus: updated.integrityStatus,
+        isPassed: updated.isPassed,
+        updatedAt: (updated.verdictAt || new Date()).toISOString(),
       });
     } catch (err) {
       next(err);
@@ -2197,23 +2667,20 @@ teachRouter.post(
       const attemptId = Number(req.params.attemptId);
       const { verdict, note } = req.body;
 
-      const [updated] = await db
-        .update(assessmentAttempts)
-        .set({
-          integrityStatus: verdict,
-          verdictNote: note,
-          verdictBy: req.user!.id,
-          verdictAt: new Date(),
-          ...(verdict === 'CONFIRMED_CHEAT' ? { scorePct: '0.00', isPassed: false } : {}),
-        })
-        .where(eq(assessmentAttempts.id, attemptId))
-        .returning();
+      const updated = await applyInstructorProctoringVerdict({
+        attemptId,
+        verdict,
+        note,
+        instructorId: req.user!.id,
+        instructorRole: req.user!.role,
+      });
 
       res.json({
         attemptId: String(attemptId),
-        integrityStatus: updated?.integrityStatus || verdict,
-        verdictNote: updated?.verdictNote || note,
-        verdictAt: (updated?.verdictAt || new Date()).toISOString(),
+        integrityStatus: updated.integrityStatus,
+        isPassed: updated.isPassed,
+        verdictNote: updated.verdictNote || note,
+        verdictAt: (updated.verdictAt || new Date()).toISOString(),
       });
     } catch (err) {
       next(err);

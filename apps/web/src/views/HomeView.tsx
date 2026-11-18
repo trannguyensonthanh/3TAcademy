@@ -21,9 +21,6 @@ import { CourseCategoryItem } from '../types/domain';
 import { formatVnd, formatScheduleSlots } from '../utils/academyLogic';
 import {
   AvatarWithFallback,
-  AVATAR_MINH_KHOA,
-  AVATAR_THU_HA,
-  AVATAR_HOANG_NAM,
 } from '../components/BotanicalStickers';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { catalogApi } from '../services/catalog.api';
@@ -73,6 +70,7 @@ const WHY_CHOOSE_ACADEMY = [
 
 export const HomeView: React.FC = () => {
   const {
+    catalogSummary: contextSummary,
     courses: contextCourses,
     categories: contextCategories,
     cohorts,
@@ -81,11 +79,14 @@ export const HomeView: React.FC = () => {
     setSearchQueryGlobal,
   } = useAcademy();
 
+  const { data: apiSummary } = useAsyncData(() => catalogApi.getSummary(), []);
   const { data: apiCourses } = useAsyncData(() => catalogApi.getCourses(), []);
   const { data: apiCategories } = useAsyncData(() => catalogApi.getCategories(), []);
+  const summary = apiSummary ?? contextSummary;
   const courses = apiCourses && apiCourses.length > 0 ? apiCourses : contextCourses;
   const categories =
     apiCategories && apiCategories.length > 0 ? apiCategories : contextCategories;
+  const instructors = summary?.instructors ?? [];
 
   const handleHeroSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,27 +182,60 @@ export const HomeView: React.FC = () => {
             )}
           </form>
 
-          {/* Real Academy Stats */}
-          <div className="pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
-            {[
-              { value: '1.420+', label: 'Học viên đã tốt nghiệp & đi làm thực tế' },
-              { value: '94%', label: 'Hoàn thành trọn vẹn đồ án cuối khóa' },
-              { value: '24/7', label: 'Luôn có người hỗ trợ giải đáp khi bạn bí bài' },
-              { value: '12 Buổi', label: 'Học trực tiếp & thực hành sâu mỗi đợt' },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-4 text-center space-y-1"
-              >
-                <div className="text-xl sm:text-2xl font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                  {stat.value}
-                </div>
-                <div className="text-xs text-[#475569] dark:text-[#94A3B8] leading-snug">
-                  {stat.label}
-                </div>
+          {/* Real Academy Stats from PostgreSQL */}
+          {(() => {
+            const publishedCount =
+              summary?.stats?.publishedCoursesCount ??
+              summary?.publishedCoursesCount ??
+              courses.length;
+            const activeCohortsVal =
+              summary?.stats?.openingOrActiveCohortsCount ??
+              summary?.activeCohortsCount ??
+              cohorts.filter((c) => c.status === 'OPENING' || c.status === 'ONGOING').length;
+            const avgRatingVal =
+              summary?.stats?.averageRating ?? summary?.ratingAvg ?? 0;
+            const reviewsCountVal =
+              summary?.stats?.reviewsCount ?? summary?.reviewCount ?? 0;
+            const sessionsCountVal =
+              summary?.stats?.sessionsPerCourse ?? summary?.sessionsPerCourse ?? 6;
+            return (
+              <div className="pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
+                {[
+                  {
+                    value: `${publishedCount} Lộ trình`,
+                    label: 'Chương trình đào tạo chuyên sâu chuẩn Production',
+                  },
+                  {
+                    value: `${activeCohortsVal} Đợt mở`,
+                    label: 'Lớp học trực tuyến đang tuyển sinh & giảng dạy',
+                  },
+                  {
+                    value: avgRatingVal > 0 ? `${avgRatingVal}/5.0` : '24/7',
+                    label:
+                      reviewsCountVal > 0
+                        ? `Đánh giá thực tế từ ${reviewsCountVal} lượt phản hồi học viên`
+                        : 'Trợ giảng AI RAG trích dẫn bài giảng từng giây',
+                  },
+                  {
+                    value: `${String(sessionsCountVal).padStart(2, '0')} Buổi`,
+                    label: 'Học trực tiếp, vượt Quiz >= 70% & thi cuối khóa',
+                  },
+                ].map((stat) => (
+                  <div
+                    key={stat.label}
+                    className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-4 text-center space-y-1"
+                  >
+                    <div className="text-xl sm:text-2xl font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                      {stat.value}
+                    </div>
+                    <div className="text-xs text-[#475569] dark:text-[#94A3B8] leading-snug">
+                      {stat.label}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </div>
       </section>
 
@@ -398,71 +432,55 @@ export const HomeView: React.FC = () => {
         </div>
       </section>
 
-      {/* 4. ĐỘI NGŨ GIẢNG VIÊN & TRỢ GIẢNG */}
+      {/* 4. ĐỘI NGŨ GIẢNG VIÊN CHUYÊN MÔN */}
       <section className="max-w-[1320px] mx-auto px-6 space-y-8">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="space-y-2">
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0F172A] dark:text-[#ECFDF5]">
-              Đội Ngũ Giảng Viên &amp; Trợ Giảng Đồng Hành
+              Đội Ngũ Giảng Viên Phụ Trách Chuyên Môn
             </h2>
             <p className="text-sm text-[#475569] dark:text-[#94A3B8]">
-              Những kỹ sư đang làm việc trực tiếp tại doanh nghiệp, đứng lớp truyền đạt kinh nghiệm thực tế và sửa bài tận tay cho bạn.
+              Những chuyên gia đang xây dựng hệ thống thực tế tại doanh nghiệp, trực tiếp đứng lớp giảng dạy và thẩm định năng lực đầu ra cho bạn.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[
-            {
-              name: 'TS. Trần Minh Khoa',
-              role: 'Giảng viên Trưởng Khối Kỹ Sư AI Thực Chiến',
-              org: 'Hơn 10 năm xây dựng hệ thống AI & Dữ liệu tại doanh nghiệp',
-              avatar: AVATAR_MINH_KHOA,
-              bio: 'Trực tiếp hướng dẫn bạn cách thiết kế bộ nhớ tra cứu tài liệu, tối ưu tốc độ phản hồi và kiểm soát độ chính xác của ứng dụng AI.',
-            },
-            {
-              name: 'ThS. Lê Thu Hà',
-              role: 'Giảng viên Chính Khối Hệ Thống Backend & Dữ Liệu',
-              org: 'Kiến trúc sư trưởng hệ thống Đám mây & Kho dữ liệu',
-              avatar: AVATAR_THU_HA,
-              bio: 'Đồng hành cùng bạn xây dựng các hệ thống thanh toán tự động chịu tải cao và thiết kế kho dữ liệu chuẩn mực cho doanh nghiệp.',
-            },
-            {
-              name: 'KS. Đặng Hoàng Nam',
-              role: 'Trợ Giảng Trưởng · Phụ Trách Chữa Bài 1-1',
-              org: 'Kỹ sư Phần mềm & AI ứng dụng',
-              avatar: AVATAR_HOANG_NAM,
-              bio: 'Theo sát từng buổi học, hỗ trợ gỡ lỗi trực tiếp trong phòng học tối và gửi nhận xét chi tiết cho từng bài tập thực hành của bạn.',
-            },
-          ].map((expert) => (
-            <div
-              key={expert.name}
-              className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4"
-            >
-              <div className="flex items-center gap-3.5">
-                <AvatarWithFallback
-                  src={expert.avatar}
-                  name={expert.name}
-                  className="w-14 h-14 rounded-full"
-                />
-                <div>
-                  <div className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                    {expert.name}
-                  </div>
-                  <div className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
-                    {expert.role}
-                  </div>
-                  <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                    {expert.org}
+        {instructors.length === 0 ? (
+          <div className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 text-xs text-[#475569] dark:text-[#94A3B8]">
+            Đang tải danh sách giảng viên từ hệ thống...
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {instructors.map((expert) => (
+              <div
+                key={expert.id}
+                className="rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4"
+              >
+                <div className="flex items-center gap-3.5">
+                  <AvatarWithFallback
+                    src={expert.avatarUrl}
+                    name={expert.fullName}
+                    className="w-14 h-14 rounded-full"
+                  />
+                  <div>
+                    <div className="text-base font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      {expert.fullName}
+                    </div>
+                    <div className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
+                      {expert.headline}
+                    </div>
+                    <div className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                      {expert.organization} · {expert.yearsOfExperience}+ năm kinh nghiệm
+                    </div>
                   </div>
                 </div>
+                <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+                  {expert.expertiseSummaryMd || expert.bio || ''}
+                </p>
               </div>
-              <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                {expert.bio}
-              </p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Footer */}

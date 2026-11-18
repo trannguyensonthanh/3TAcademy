@@ -143,11 +143,18 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
     'SYLLABUS'
   );
   const [downloadToast, setDownloadToast] = useState<string | null>(null);
+  const [reviewRating, setReviewRating] = useState<number>(5);
+  const [reviewComment, setReviewComment] = useState<string>('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
+  const [reviewFeedbackMsg, setReviewFeedbackMsg] = useState<string | null>(null);
 
   const completedCount = workspaceSessions.filter((s) => s.isCompleted).length;
-  const primaryCert =
-    Object.values(certificates).find((c) => c.cohortCode === cohort.code) ??
-    Object.values(certificates)[0];
+  const primaryCert = Object.values(certificates).find(
+    (c) => c.cohortCode === cohort.code && !c.isRevoked
+  );
+  const canTakeFinalExam =
+    Boolean(workspaceData.eligibleForFinalExam) ||
+    (workspaceSessions.length > 0 && completedCount === workspaceSessions.length);
   const isFinalExamLocked = Boolean(
     workspaceData.finalExamPassed || finalExamResult?.hasPassedFinalExam
   );
@@ -297,7 +304,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
               <strong className="font-mono text-[#10B981]">
                 {completedCount}/{workspaceSessions.length}
               </strong>{' '}
-              buổi học (yêu cầu xem bài giảng &amp; đạt &ge; 7.0/10 bài kiểm tra 10 câu cuối mỗi buổi).
+              buổi học (yêu cầu vượt qua bài kiểm tra năng lực &ge; 70% cuối mỗi buổi).
             </p>
             {cohort.scheduleSlots && cohort.scheduleSlots.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -354,7 +361,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
           {[
             { id: 'SYLLABUS', label: '1. Lộ trình từng buổi học & Phòng học Video' },
             { id: 'MATERIALS', label: '2. Tài liệu & Học liệu của lớp' },
-            { id: 'CERTIFICATE', label: '3. Thi cuối khóa (25 câu) & Chứng chỉ tốt nghiệp' },
+            { id: 'CERTIFICATE', label: '3. Thi cuối khóa, Đánh giá & Chứng chỉ tốt nghiệp' },
           ].map((t) => {
             const active = activeTab === t.id;
             return (
@@ -384,9 +391,9 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
             <div className="flex items-center gap-2.5 text-[#065F46] dark:text-emerald-200 font-medium">
               <ShieldCheck className="w-5 h-5 text-[#10B981] shrink-0" />
               <span>
-                <strong>Quy tắc hoàn thành buổi học:</strong> Để được tính hoàn thành một buổi, bạn cần xem ít nhất{' '}
-                <strong className="font-mono">80%</strong> thời lượng bài giảng VÀ làm đạt từ{' '}
-                <strong className="font-mono">7.0/10</strong> trở lên bài kiểm tra ngắn (10 câu trắc nghiệm A, B, C, D) cuối buổi đó nhé.
+                <strong>Quy tắc hoàn thành buổi học:</strong> Để được tính hoàn thành một buổi học, bạn cần đạt tối thiểu{' '}
+                <strong className="font-mono">70% (7.0/10)</strong> bài kiểm tra trắc nghiệm cuối buổi. Hoàn thành trọn vẹn{' '}
+                <strong className="font-mono">{workspaceSessions.length}/{workspaceSessions.length}</strong> buổi sẽ mở khóa Kỳ thi Tốt nghiệp cuối khóa!
               </span>
             </div>
             <span className="font-mono font-bold text-[#065F46] dark:text-emerald-300 shrink-0">
@@ -401,10 +408,14 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                 sess.status === 'REPLAY_READY' && !hasSavedVideo
                   ? 'SCHEDULED'
                   : sess.status;
-              const watchPct = Math.min(
-                100,
-                Math.round((sess.lastPositionSec / Math.max(1, sess.durationSeconds || 600)) * 100)
+              const furthestWatchedSec = Math.max(
+                sess.maxWatchedSec ?? 0,
+                sess.lastPositionSec ?? 0
               );
+              const rawWatchPct =
+                (furthestWatchedSec / Math.max(1, sess.durationSeconds || 60)) * 100;
+              const watchPct =
+                rawWatchPct >= 95 ? 100 : Math.min(100, Math.round(rawWatchPct));
 
               const cleanSessTitle = (sess.title || '')
                 .replace(/^Buổi\s+\d+\s*(?:\([^)]*\))?\s*:\s*/i, '')
@@ -503,12 +514,12 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
 
                         {sess.isCompleted ? (
                           <span className="font-mono font-bold text-[#10B981]">
-                            ✓ Đã hoàn thành · Bài kiểm tra 10 câu: {sess.quizScore}/100
+                            ✓ Đã hoàn thành · Bài kiểm tra: {sess.quizScore}/100
                           </span>
                         ) : (
                           effectiveStatus === 'REPLAY_READY' && (
                             <span className="font-mono font-semibold text-[#F59E0B]">
-                              • Đang mở bài kiểm tra 10 câu (Cần đạt &ge; 7.0/10 để hoàn thành)
+                              • Đang mở bài kiểm tra cuối buổi (Cần đạt &ge; 70% để hoàn thành)
                             </span>
                           )
                         )}
@@ -577,7 +588,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                             <span>
                               {sess.isCompleted
                                 ? `Làm lại bài kiểm tra (${sess.quizScore}/100)`
-                                : 'Làm bài kiểm tra 10 câu'}
+                                : 'Làm bài kiểm tra cuối buổi'}
                             </span>
                           </button>
                         </>
@@ -654,7 +665,6 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
               {workspaceMaterials.map((mat) => {
                 const matchedSession =
                   workspaceSessions.find((s) => s.sessionOrder === mat.sessionOrder) ??
-                  workspaceSessions[3] ??
                   workspaceSessions[0];
                 return (
                   <div
@@ -719,14 +729,13 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             <div className="lg:col-span-6 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-5">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-mono text-xs font-bold">
-                PHÒNG THI CUỐI KHÓA · 25 CÂU TRẮC NGHIỆM (A, B, C, D)
+                PHÒNG THI CUỐI KHÓA · KIỂM ĐỊNH NĂNG LỰC CÓ GIÁM SÁT AI
               </div>
               <h2 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                Kỳ Thi Tốt Nghiệp Cuối Khóa &amp; Nhận 4 Lượt Luyện Phỏng Vấn AI
+                Kỳ Thi Tốt Nghiệp Cuối Khóa &amp; Cấp Bằng Điện Tử Chữ Ký Số
               </h2>
               <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                Để đảm bảo giá trị thực chất và sự công bằng cho tấm bằng tốt nghiệp của bạn, bài thi cuối khóa gồm{' '}
-                <strong>25 câu trắc nghiệm 4 đáp án (A, B, C, D)</strong> được thực hiện trong chế độ toàn màn hình có Camera đồng hành giám sát.
+                Để đảm bảo giá trị thực chất và sự công bằng cho tấm bằng tốt nghiệp của bạn, bài thi cuối khóa được thực hiện trong chế độ toàn màn hình có Camera đồng hành giám sát.
               </p>
 
               <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2 text-xs">
@@ -734,19 +743,27 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                   Trạng thái điều kiện dự thi của bạn:
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>• Số buổi học đã hoàn thành (xem &ge; 80% + đạt bài tập 10 câu):</span>
+                  <span>• Số buổi học đã hoàn thành (vượt Quiz &ge; 70%):</span>
                   <span className="font-mono font-bold text-[#10B981]">
                     {completedCount}/{workspaceSessions.length} buổi
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>• Kiểm tra Camera &amp; Micrô trước giờ thi:</span>
-                  <span className="font-mono font-bold text-[#10B981]">Đã sẵn sàng</span>
+                  <span>• Trạng thái mở khóa phòng thi tốt nghiệp:</span>
+                  <span
+                    className={`font-mono font-bold ${
+                      canTakeFinalExam || isFinalExamLocked ? 'text-[#10B981]' : 'text-[#F59E0B]'
+                    }`}
+                  >
+                    {canTakeFinalExam || isFinalExamLocked
+                      ? 'Đủ điều kiện dự thi'
+                      : `Cần hoàn thành đủ ${workspaceSessions.length} buổi`}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>• Phần thưởng khi vượt qua kỳ thi tốt nghiệp:</span>
+                  <span>• Quyền lợi khi vượt qua kỳ thi tốt nghiệp:</span>
                   <span className="font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                    Bằng Tốt Nghiệp PDF + 4 Credits Phỏng vấn AI
+                    Bằng Tốt Nghiệp PDF (HMAC-SHA256)
                   </span>
                 </div>
               </div>
@@ -755,7 +772,7 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                 <div className="space-y-3">
                   <div className="p-3.5 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950/90 border border-[#10B981] text-xs text-[#065F46] dark:text-emerald-300 font-semibold flex items-center justify-between gap-2">
                     <span>
-                      ✓ Bạn đã vượt qua kỳ thi tốt nghiệp cuối khóa, nhận Chứng chỉ và +4 Credits phỏng vấn (Đã khóa thi lại để bảo toàn kết quả).
+                      ✓ Bạn đã vượt qua kỳ thi tốt nghiệp cuối khóa và được cấp Bằng Chứng Nhận Tốt Nghiệp chính thức.
                     </span>
                   </div>
                   <button
@@ -765,8 +782,12 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                     }
                     className="w-full py-3 px-5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#10B981] text-xs sm:text-sm font-bold text-[#059669] dark:text-[#34D399] cursor-pointer"
                   >
-                    Xem lại Bảng điểm Kỳ thi Tốt nghiệp (25 câu) →
+                    Xem lại Bảng điểm Kỳ thi Tốt nghiệp →
                   </button>
+                </div>
+              ) : !canTakeFinalExam && role === 'STUDENT' ? (
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/40 text-xs text-amber-800 dark:text-amber-300 font-semibold">
+                  Bạn cần hoàn thành đầy đủ {workspaceSessions.length}/{workspaceSessions.length} buổi học trước khi vào phòng thi tốt nghiệp cuối khóa.
                 </div>
               ) : (
                 <button
@@ -776,8 +797,77 @@ export const CohortWorkspaceView: React.FC<{ cohortId: string }> = ({ cohortId }
                   }
                   className="w-full py-3 px-5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold cursor-pointer"
                 >
-                  Vào Phòng Thi Cuối Khóa (25 Câu · Có Camera Giám Sát) →
+                  Vào Phòng Thi Cuối Khóa (Có Camera Giám Sát) →
                 </button>
+              )}
+
+              {/* Course Review Form for Enrolled Students */}
+              {role === 'STUDENT' && (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (reviewComment.trim().length < 5 || isSubmittingReview) return;
+                    setIsSubmittingReview(true);
+                    setReviewFeedbackMsg(null);
+                    try {
+                      await studentLearningApi.submitCohortReview(
+                        cohort.id,
+                        reviewRating,
+                        reviewComment.trim()
+                      );
+                      setReviewFeedbackMsg('Cảm ơn bạn! Đánh giá khóa học đã được lưu lên hệ thống.');
+                      setReviewComment('');
+                    } catch (err) {
+                      setReviewFeedbackMsg(
+                        err instanceof Error ? err.message : 'Không thể gửi đánh giá lúc này.'
+                      );
+                    } finally {
+                      setIsSubmittingReview(false);
+                    }
+                  }}
+                  className="pt-5 border-t border-[#E2ECE7] dark:border-[#1E2D24] space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                      Gửi đánh giá chất lượng khóa học ({cohort.code})
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => setReviewRating(star)}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-bold cursor-pointer ${
+                            star <= reviewRating
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                          }`}
+                        >
+                          {star}★
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={reviewComment}
+                    onChange={(e) => setReviewComment(e.target.value)}
+                    placeholder="Chia sẻ trải nghiệm học tập thực tế của bạn cùng giảng viên & trợ giảng AI..."
+                    className="w-full px-3 py-2 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs"
+                  />
+                  {reviewFeedbackMsg && (
+                    <p className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
+                      {reviewFeedbackMsg}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={isSubmittingReview || reviewComment.trim().length < 5}
+                    className="px-4 py-2 rounded-lg bg-[#0F172A] dark:bg-white/10 text-white text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSubmittingReview ? 'Đang gửi...' : 'Gửi đánh giá khóa học'}
+                  </button>
+                </form>
               )}
             </div>
 

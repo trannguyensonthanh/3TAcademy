@@ -179,6 +179,10 @@ export const LivestreamClassView: React.FC<{
 
   // Realtime collaboration state
   const [runtimeState, setRuntimeState] = useState<LiveRoomRuntimeState>(DEFAULT_ROOM_STATE);
+  const hostMediaRef = useRef<LiveRoomRuntimeState['hostMedia']>(undefined);
+  useEffect(() => {
+    hostMediaRef.current = runtimeState.hostMedia;
+  }, [runtimeState.hostMedia]);
   const [chatMessages, setChatMessages] = useState<LiveSessionChatMessage[]>([]);
   const [chatInput, setChatInput] = useState<string>('');
   const [qaList, setQaList] = useState<LiveQuestionItem[]>([]);
@@ -201,11 +205,12 @@ export const LivestreamClassView: React.FC<{
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingStartMsRef = useRef<number>(0);
 
-  const activeSessionId = guestMeta?.sessionId || roomData?.session.id || sessionId;
+  const activeSessionId = guestMeta?.sessionId || roomData?.session?.id || sessionId;
   const activeSession = roomData?.session;
   const activeCohort = roomData?.cohort;
-  const isHost =
-    Boolean(roomData?.isHost) || role === 'INSTRUCTOR' || role === 'ADMIN';
+  const isHost = roomData
+    ? Boolean(roomData.isHost)
+    : role === 'INSTRUCTOR' || role === 'ADMIN';
   const sessionStatus = activeSession?.status || 'LIVE';
 
   const currentAccountId = currentUser?.id ? String(currentUser.id) : '';
@@ -540,8 +545,9 @@ export const LivestreamClassView: React.FC<{
 
   // Connect to Backend SSE stream for real-time Chat, Q&A, Hand Raise, Reactions, Status, Mute, Kick & Online Presence
   useEffect(() => {
-    if (!roomData?.session.id || typeof EventSource === 'undefined') return;
-    const eventsUrl = learningApi.getLiveEventsUrl(roomData.session.id);
+    const sseSessionId = roomData?.session?.id;
+    if (!sseSessionId || typeof EventSource === 'undefined') return;
+    const eventsUrl = learningApi.getLiveEventsUrl(sseSessionId);
     const source = new EventSource(eventsUrl);
 
     source.onopen = () => setSseConnected(true);
@@ -1011,10 +1017,23 @@ export const LivestreamClassView: React.FC<{
               } else if (trackEv.track.kind === 'video') {
                 receivedVideoCount += 1;
                 const label = (trackEv.track.label || '').toLowerCase();
+                const settings =
+                  typeof trackEv.track.getSettings === 'function'
+                    ? (trackEv.track.getSettings() as MediaTrackSettings & { displaySurface?: string })
+                    : undefined;
+                const currentHostMedia = hostMediaRef.current;
+                const onlyScreenActiveOnHost =
+                  Boolean(currentHostMedia?.screenSharing) && !currentHostMedia?.camOn;
                 const isScreen =
+                  onlyScreenActiveOnHost ||
+                  Boolean(settings?.displaySurface) ||
                   label.includes('screen') ||
                   label.includes('window') ||
                   label.includes('display') ||
+                  label.includes('monitor') ||
+                  label.includes('web-contents') ||
+                  label.includes('màn hình') ||
+                  label.includes('cửa sổ') ||
                   receivedVideoCount > 1;
                 if (isScreen) {
                   setHostWebRtcScreenStream(stream);
@@ -1067,7 +1086,7 @@ export const LivestreamClassView: React.FC<{
       setSseConnected(false);
     };
   }, [
-    roomData?.session.id,
+    roomData?.session?.id,
     spawnFloatingReaction,
     currentUser?.id,
     isHost,
@@ -1142,6 +1161,44 @@ export const LivestreamClassView: React.FC<{
     roomData?.participants,
     currentAccountId,
   ]);
+
+    // Auto-open room to LIVE when Instructor starts Camera, Mic, or Screen Share while session is SCHEDULED
+  useEffect(() => {
+    if (!isHost || !activeSessionId) return;
+    if ((camOn || micOn || screenSharing) && sessionStatus === 'SCHEDULED') {
+      void teachApi
+        .updateSessionLiveStatus(String(activeSessionId), { status: 'LIVE' })
+        .then((res) => {
+          updateSessionDetails(String(activeSessionId), { status: res.status });
+          setRoomData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  session: { ...prev.session, status: res.status },
+                }
+              : prev
+          );
+        })
+        .catch(() => {});
+    }
+  }, [isHost, activeSessionId, camOn, micOn, screenSharing, sessionStatus, updateSessionDetails]);
+
+  // Gentle backup poll when Student is waiting for Instructor to start LIVE
+  useEffect(() => {
+    if (isHost || joinedAsVerifiedGuest || sessionStatus === 'LIVE' || !sessionId) return;
+    const poll = window.setInterval(() => {
+      void learningApi
+        .getLiveSessionRoom(sessionId)
+        .then((data) => {
+          if (data.session.status === 'LIVE') {
+            setRoomData(data);
+            setRuntimeState(data.roomState ?? DEFAULT_ROOM_STATE);
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(poll);
+  }, [isHost, joinedAsVerifiedGuest, sessionStatus, sessionId]);
 
   // Zero-config Real-time Instructor Camera + Screen Share Frame & Audio Sync over SSE
   useEffect(() => {
@@ -1929,29 +1986,68 @@ export const LivestreamClassView: React.FC<{
     }
   };
 
-  // Explicit Save Recording to Cloudflare R2 (MP4)
+  // Explicit Save Recording to Cloudflare R2 (Direct Presigned PUT first, Base64 fallback for small files)
   const handleSavePendingRecording = async () => {
     if (!pendingRecording) return;
     setIsUploadingRecording(true);
     try {
-      const base64Data = await blobToBase64(pendingRecording.blob);
-      const uploaded = await teachApi.uploadSessionRecordingToR2(
-        activeSessionId,
-        {
-          fileName: `buoi-${sessionOrder}-session-${activeSessionId}-${Date.now()}.mp4`,
-          contentType: 'video/mp4',
-          base64Data,
-          markReplayReady: false,
-        }
-      );
+      let finalStatus: 'LIVE' | 'SCHEDULED' | 'REPLAY_READY' = sessionStatus;
+      let finalVideoUrl = '';
+      let finalRecording = runtimeState.recording;
 
-      setRuntimeState((prev) => ({
-        ...prev,
-        recording: uploaded.recording,
-      }));
+      let uploadedViaPresigned = false;
+      try {
+        const presigned = await learningApi.presignLiveRecordingUpload(
+          String(activeSessionId),
+          'video/mp4'
+        );
+        const targetPutUrl = presigned.presignedUploadUrl || presigned.uploadUrl;
+        if (targetPutUrl) {
+          const putRes = await fetch(targetPutUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'video/mp4' },
+            body: pendingRecording.blob,
+          });
+          if (putRes.ok) {
+            const stopped = await teachApi.stopSessionRecording(activeSessionId, {
+              objectKey: presigned.objectKey,
+              markReplayReady: false,
+            });
+            finalStatus = stopped.status;
+            finalVideoUrl = stopped.videoUrl || presigned.publicUrl;
+            finalRecording = stopped.recording;
+            uploadedViaPresigned = true;
+          }
+        }
+      } catch {
+        // Fallback to API Base64 upload below
+      }
+
+      if (!uploadedViaPresigned) {
+        const base64Data = await blobToBase64(pendingRecording.blob);
+        const uploaded = await teachApi.uploadSessionRecordingToR2(
+          activeSessionId,
+          {
+            fileName: `buoi-${sessionOrder}-session-${activeSessionId}-${Date.now()}.mp4`,
+            contentType: 'video/mp4',
+            base64Data,
+            markReplayReady: false,
+          }
+        );
+        finalStatus = uploaded.status;
+        finalVideoUrl = uploaded.videoUrl;
+        finalRecording = uploaded.recording;
+      }
+
+      if (finalRecording) {
+        setRuntimeState((prev) => ({
+          ...prev,
+          recording: finalRecording,
+        }));
+      }
       updateSessionDetails(String(activeSessionId), {
-        status: uploaded.status,
-        videoR2Key: uploaded.videoUrl,
+        status: finalStatus,
+        videoR2Key: finalVideoUrl,
       });
       setRoomData((prev) =>
         prev
@@ -1959,12 +2055,12 @@ export const LivestreamClassView: React.FC<{
               ...prev,
               session: {
                 ...prev.session,
-                status: uploaded.status,
-                videoR2Key: uploaded.videoUrl,
+                status: finalStatus,
+                videoR2Key: finalVideoUrl,
               },
               video: {
                 ...prev.video,
-                videoUrl: uploaded.videoUrl,
+                videoUrl: finalVideoUrl,
                 playbackType: 'MP4',
               },
             }
@@ -2462,7 +2558,7 @@ export const LivestreamClassView: React.FC<{
                 <button
                   type="button"
                   onClick={() =>
-                    navigate(`/learn/${activeSession.cohortId}/session/${activeSession.id}`)
+                    navigate(`/app/cohorts/${activeSession.cohortId}/sessions/${activeSession.id}`)
                   }
                   className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
                 >
@@ -2519,7 +2615,7 @@ export const LivestreamClassView: React.FC<{
             <button
               type="button"
               onClick={() =>
-                navigate(`/learn/${activeSession.cohortId}/session/${activeSession.id}`)
+                navigate(`/app/cohorts/${activeSession.cohortId}/sessions/${activeSession.id}`)
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
             >

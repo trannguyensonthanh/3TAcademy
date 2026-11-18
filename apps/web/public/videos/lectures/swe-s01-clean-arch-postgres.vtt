@@ -1,0 +1,7 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:26.470
+TS. Lê Minh Khoa: Chào các bạn học viên khóa Kiến trúc Backend Chuyên sâu. Khi xử lý giao dịch tài chính và đối soát chuyển khoản tự động, hai tiến trình đồng thời có thể cùng đọc trạng thái đơn hàng đang chờ và cộng trùng quyền lợi. Sử dụng giao dịch ACID kèm khóa dòng SELECT FOR UPDATE và mã giao dịch bất biến giúp hệ thống đạt tính nhất quán tuyệt đối dưới tải cao.
+
+00:00:26.470 --> 00:00:51.070
+TS. Lê Minh Khoa: Mỗi khi một API báo cáo trên bảng lớn phản hồi chậm, nguyên tắc đầu tiên của kỹ sư thực chiến là đo lường bằng lệnh EXPLAIN ANALYZE BUFFERS. Từ kế hoạch thực thi thực tế, ta xác định chính xác nút thắt quét tuần tự và thiết kế chỉ mục tổ hợp tối ưu giúp giảm độ trễ xuống dưới mười lăm mili giây.

@@ -1,4 +1,5 @@
 import { CertificateRecord } from '../types/domain';
+import { buildCertificateVerifyUrl, encodeQrMatrix } from './qrMatrix';
 
 function stringToUint8Array(str: string): Uint8Array {
   const arr = new Uint8Array(str.length);
@@ -143,7 +144,13 @@ function drawWrappedText(
   return currentY;
 }
 
-function drawStylizedQrMatrix(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, seedText: string) {
+function drawScannableQrMatrix(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  verifyUrl: string
+) {
   ctx.save();
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(x, y, size, size);
@@ -151,39 +158,20 @@ function drawStylizedQrMatrix(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.lineWidth = 2;
   ctx.strokeRect(x, y, size, size);
 
-  const cells = 15;
-  const padding = 10;
-  const cellSize = (size - padding * 2) / cells;
+  const matrix = encodeQrMatrix(verifyUrl);
+  const quietModules = 2;
+  const totalCells = matrix.length + quietModules * 2;
+  const cellSize = size / totalCells;
   ctx.fillStyle = '#0F172A';
 
-  const drawFinder = (r0: number, c0: number) => {
-    for (let r = 0; r < 4; r++) {
-      for (let c = 0; c < 4; c++) {
-        if (r === 0 || r === 3 || c === 0 || c === 3 || (r >= 1 && r <= 2 && c >= 1 && c <= 2)) {
-          ctx.fillRect(x + padding + (c0 + c) * cellSize, y + padding + (r0 + r) * cellSize, cellSize - 0.5, cellSize - 0.5);
-        }
-      }
-    }
-  };
-
-  drawFinder(0, 0);
-  drawFinder(0, cells - 4);
-  drawFinder(cells - 4, 0);
-
-  for (let r = 0; r < cells; r++) {
-    for (let c = 0; c < cells; c++) {
-      const inFinder =
-        (r < 5 && c < 5) ||
-        (r < 5 && c >= cells - 5) ||
-        (r >= cells - 5 && c < 5);
-      if (inFinder) continue;
-      const hash = (seedText.charCodeAt((r * cells + c) % seedText.length) + r * 17 + c * 31) % 3;
-      if (hash !== 0) {
+  for (let r = 0; r < matrix.length; r += 1) {
+    for (let c = 0; c < matrix[r].length; c += 1) {
+      if (matrix[r][c]) {
         ctx.fillRect(
-          x + padding + c * cellSize,
-          y + padding + r * cellSize,
-          cellSize - 1,
-          cellSize - 1
+          x + (c + quietModules) * cellSize,
+          y + (r + quietModules) * cellSize,
+          Math.ceil(cellSize),
+          Math.ceil(cellSize)
         );
       }
     }
@@ -430,8 +418,9 @@ export async function exportCertificateToPdf(cert: CertificateRecord): Promise<s
   // 9. Footer: 3 Columns (QR & Cryptographic Signature | Official Red Seal & Instructor | Academy Director)
   const footerY = 985;
 
-  // Left Column: QR & Blockchain/SHA256 Digital Verification
-  drawStylizedQrMatrix(ctx, 180, footerY, 150, cert.certificateCode + cert.verificationSignature);
+  // Left Column: Scannable QR & SHA256 Digital Verification
+  const verifyUrl = buildCertificateVerifyUrl(cert.certificateCode);
+  drawScannableQrMatrix(ctx, 180, footerY, 150, verifyUrl);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#0F172A';
@@ -453,9 +442,20 @@ export async function exportCertificateToPdf(cert: CertificateRecord): Promise<s
       ? cert.verificationSignature.slice(0, 42) + '...'
       : cert.verificationSignature;
   ctx.fillText(shortSig, 352, footerY + 114);
-  ctx.fillText(`Tra cứu chính chủ: 3tacademy.vn/verify/${cert.certificateCode}`, 352, footerY + 138);
+  ctx.fillText(
+    `Tra cứu: /certificates/verify/${cert.certificateCode}`,
+    352,
+    footerY + 138
+  );
 
   // Center Column: Instructor Signature
+  const resolvedInstructorName = cert.instructorName || 'TS. Lê Minh Khoa';
+  const cursiveInstructorName = resolvedInstructorName
+    .replace(/^(PGS\.TS\.|TS\.|ThS\.|CN\.|KS\.)\s*/i, '')
+    .trim();
+  const resolvedInstructorTitle =
+    cert.instructorTitle || 'Giảng viên Trưởng bộ môn Chuyên môn';
+
   ctx.textAlign = 'center';
   ctx.fillStyle = '#334155';
   ctx.font = 'bold 17px Arial, sans-serif';
@@ -467,14 +467,14 @@ export async function exportCertificateToPdf(cert: CertificateRecord): Promise<s
   // Stylized signature
   ctx.fillStyle = '#1E3A8A';
   ctx.font = 'italic bold 30px Georgia, serif';
-  ctx.fillText('Trần Minh Khoa', 1120, footerY + 110);
+  ctx.fillText(cursiveInstructorName, 1120, footerY + 110);
 
   ctx.fillStyle = '#0F172A';
   ctx.font = 'bold 18px Arial, sans-serif';
-  ctx.fillText('TS. Trần Minh Khoa', 1120, footerY + 152);
+  ctx.fillText(resolvedInstructorName, 1120, footerY + 152);
   ctx.fillStyle = '#475569';
   ctx.font = '14px Arial, sans-serif';
-  ctx.fillText('Giảng viên Trưởng bộ môn AI & Data', 1120, footerY + 176);
+  ctx.fillText(resolvedInstructorTitle, 1120, footerY + 176);
 
   // Right Column: Official Academy Red Stamp & Director Signature
   ctx.textAlign = 'center';

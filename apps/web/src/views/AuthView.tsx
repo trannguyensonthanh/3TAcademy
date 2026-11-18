@@ -73,7 +73,30 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
   const handleGoogleOneTap = async () => {
     setErrorMsg(null);
     try {
-      const idToken = 'google-oauth-id-token';
+      const envObj = (import.meta as any).env || {};
+      const isDev = Boolean(envObj.DEV) || envObj.MODE !== 'production';
+      const fallbackEmail = email.trim() && email.includes('@') ? email.trim() : 'an.student@3t.edu.vn';
+
+      let idToken = '';
+      const googleSdk = (window as any).google?.accounts?.id;
+      if (googleSdk && envObj.VITE_GOOGLE_CLIENT_ID) {
+        idToken = await new Promise<string>((resolve, reject) => {
+          googleSdk.initialize({
+            client_id: String(envObj.VITE_GOOGLE_CLIENT_ID),
+            callback: (resp: { credential?: string }) => {
+              if (resp?.credential) resolve(resp.credential);
+              else reject(new Error('Không nhận được Google ID Token.'));
+            },
+          });
+          googleSdk.prompt();
+        });
+      } else if (isDev) {
+        idToken = `dev-google-oauth:${fallbackEmail}`;
+      } else {
+        setErrorMsg('Chưa cấu hình VITE_GOOGLE_CLIENT_ID trên môi trường Production.');
+        return;
+      }
+
       const res = await authApi.googleLogin(idToken);
       if (res.accessToken) {
         setAuthAccessToken(res.accessToken);
@@ -90,8 +113,10 @@ export const AuthView: React.FC<{ initialMode: 'LOGIN' | 'REGISTER' }> = ({
         navigate('/teach');
       } else if (nextRole === 'ADMIN') {
         navigate('/admin');
-      } else {
+      } else if (res.isNewUser) {
         navigate('/onboarding');
+      } else {
+        navigate('/app');
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Xác thực Google OAuth không thành công.');

@@ -301,6 +301,7 @@ export interface SmartSyncSelectionState {
   syncFullName: boolean; // Mặc định false (không tích) để giữ tên thật cấp chứng chỉ
   syncHeadline: boolean; // Mặc định true
   syncCareerObjective: boolean; // Mặc định true
+  syncContactLinks?: boolean; // Mặc định true (cập nhật SĐT / GitHub / LinkedIn từ CV nếu tích)
   syncSkills: boolean; // Mặc định true
   syncProjects: boolean; // Mặc định true
   syncExperienceAndEdu: boolean; // Mặc định true
@@ -362,13 +363,22 @@ export function applySmartSyncSelection(
     (a) => !existingAwardKeys.has(a.title.trim().toLowerCase())
   );
 
+  const overwriteContacts = selection.syncContactLinks === true;
+
   return {
     fullName: selection.syncFullName ? parsed.fullName : current.fullName,
+    avatarUrl: current.avatarUrl || parsed.avatarUrl,
     headline: selection.syncHeadline ? parsed.headline : current.headline,
     email: current.email || parsed.email,
-    phone: current.phone || parsed.phone,
-    githubUrl: current.githubUrl || parsed.githubUrl,
-    linkedinUrl: current.linkedinUrl || parsed.linkedinUrl,
+    phone: overwriteContacts
+      ? parsed.phone || current.phone
+      : current.phone || parsed.phone,
+    githubUrl: overwriteContacts
+      ? parsed.githubUrl || current.githubUrl
+      : current.githubUrl || parsed.githubUrl,
+    linkedinUrl: overwriteContacts
+      ? parsed.linkedinUrl || current.linkedinUrl
+      : current.linkedinUrl || parsed.linkedinUrl,
     careerObjective: selection.syncCareerObjective
       ? parsed.careerObjective
       : current.careerObjective,
@@ -476,6 +486,7 @@ export const StudentProfileCvWorkspace: React.FC = () => {
     syncFullName: false, // Mặc định KHÔNG tích để giữ tên thật cấp chứng chỉ
     syncHeadline: true,
     syncCareerObjective: true,
+    syncContactLinks: true,
     syncSkills: true,
     syncProjects: true,
     syncExperienceAndEdu: true,
@@ -526,6 +537,8 @@ export const StudentProfileCvWorkspace: React.FC = () => {
         fullName: resume.fullName,
         avatarUrl: resume.avatarUrl,
         phone: resume.phone,
+        githubUrl: resume.githubUrl,
+        linkedinUrl: resume.linkedinUrl,
         bio: resume.headline,
         careerGoal: resume.careerObjective,
       });
@@ -536,6 +549,8 @@ export const StudentProfileCvWorkspace: React.FC = () => {
               fullName: resume.fullName || prev.fullName,
               avatarUrl: resume.avatarUrl || prev.avatarUrl,
               phone: resume.phone || prev.phone,
+              githubUrl: resume.githubUrl || prev.githubUrl,
+              linkedinUrl: resume.linkedinUrl || prev.linkedinUrl,
               bio: resume.headline || prev.bio,
               careerGoal: resume.careerObjective || prev.careerGoal,
             }
@@ -547,7 +562,8 @@ export const StudentProfileCvWorkspace: React.FC = () => {
           : 'CV_Ho_So_Nang_Luc_2026.pdf';
       const saved = await profileAndInterviewApi.uploadAndParseCv(
         targetFileName,
-        resume
+        resume,
+        { overwriteProfile: true, previewOnly: false }
       );
       if (saved.fileName) {
         updateLatestCv(saved.fileName);
@@ -565,7 +581,11 @@ export const StudentProfileCvWorkspace: React.FC = () => {
     if (!file) return;
     setIsUploading(true);
     try {
-      const res = await profileAndInterviewApi.uploadAndParseCv(file);
+      // previewOnly: true đảm bảo chỉ trích xuất nội dung PDF, KHÔNG tự ý ghi đè DB trước khi học viên xác nhận
+      const res = await profileAndInterviewApi.uploadAndParseCv(file, undefined, {
+        previewOnly: true,
+        overwriteProfile: false,
+      });
       const parsedResume = mapParsedCvToStudentResume(res.cvParsedData, resume);
 
       // Reset lựa chọn mặc định: Họ tên [ ] (false), các mục còn lại [x] (true)
@@ -573,6 +593,7 @@ export const StudentProfileCvWorkspace: React.FC = () => {
         syncFullName: false,
         syncHeadline: true,
         syncCareerObjective: true,
+        syncContactLinks: true,
         syncSkills: true,
         syncProjects: true,
         syncExperienceAndEdu: true,
@@ -600,16 +621,51 @@ export const StudentProfileCvWorkspace: React.FC = () => {
       pendingSyncModal.parsedResume,
       syncSelection
     );
+    const shouldUpdateProfileFields = Boolean(
+      syncSelection.syncFullName ||
+        syncSelection.syncHeadline ||
+        syncSelection.syncCareerObjective ||
+        syncSelection.syncContactLinks
+    );
     setIsSaving(true);
     try {
+      if (shouldUpdateProfileFields) {
+        await profileAndInterviewApi.updateMyProfile({
+          fullName: mergedResume.fullName,
+          avatarUrl: mergedResume.avatarUrl,
+          phone: mergedResume.phone,
+          githubUrl: mergedResume.githubUrl,
+          linkedinUrl: mergedResume.linkedinUrl,
+          bio: mergedResume.headline,
+          careerGoal: mergedResume.careerObjective,
+        });
+        setCurrentUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                fullName: mergedResume.fullName || prev.fullName,
+                avatarUrl: mergedResume.avatarUrl || prev.avatarUrl,
+                phone: mergedResume.phone || prev.phone,
+                githubUrl: mergedResume.githubUrl || prev.githubUrl,
+                linkedinUrl: mergedResume.linkedinUrl || prev.linkedinUrl,
+                bio: mergedResume.headline || prev.bio,
+                careerGoal: mergedResume.careerObjective || prev.careerGoal,
+              }
+            : prev
+        );
+      }
       await profileAndInterviewApi.uploadAndParseCv(
         pendingSyncModal.fileName,
-        mergedResume
+        mergedResume,
+        {
+          overwriteProfile: shouldUpdateProfileFields,
+          previewOnly: false,
+        }
       );
       setResume(mergedResume);
       updateLatestCv(pendingSyncModal.fileName);
       setPendingSyncModal(null);
-      showSuccessBanner('Đã lưu thành công toàn bộ hồ sơ năng lực của bạn.');
+      showSuccessBanner('Đã đồng bộ và lưu thành công hồ sơ năng lực theo lựa chọn của bạn.');
     } finally {
       setIsSaving(false);
     }
@@ -2101,6 +2157,36 @@ export const StudentProfileCvWorkspace: React.FC = () => {
                   <p className="text-[#059669] dark:text-[#34D399] leading-relaxed bg-emerald-500/5 p-2.5 rounded-lg border border-[#10B981]/25">
                     {pendingSyncModal.parsedResume.careerObjective}
                   </p>
+                </div>
+              </label>
+
+              {/* Mục 3B: [x] Số điện thoại, GitHub & LinkedIn */}
+              <label className="flex items-start gap-3 p-3.5 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] cursor-pointer hover:border-[#10B981]/60 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={syncSelection.syncContactLinks ?? true}
+                  onChange={(e) =>
+                    setSyncSelection({
+                      ...syncSelection,
+                      syncContactLinks: e.target.checked,
+                    })
+                  }
+                  className="mt-0.5 w-4 h-4 accent-[#10B981] rounded cursor-pointer"
+                />
+                <div className="flex-1 space-y-1">
+                  <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                    Số điện thoại, GitHub &amp; LinkedIn
+                  </div>
+                  <div className="text-[#475569] dark:text-[#94A3B8] space-y-0.5">
+                    <div>
+                      Bỏ chọn nếu bạn muốn ưu tiên giữ thông tin liên hệ đang lưu trên hệ thống.
+                    </div>
+                    <div className="font-mono text-[11px] text-[#059669] dark:text-[#34D399]">
+                      SĐT: {pendingSyncModal.parsedResume.phone || 'Không đổi'} · GitHub:{' '}
+                      {pendingSyncModal.parsedResume.githubUrl || 'Không đổi'} · LinkedIn:{' '}
+                      {pendingSyncModal.parsedResume.linkedinUrl || 'Không đổi'}
+                    </div>
+                  </div>
                 </div>
               </label>
 

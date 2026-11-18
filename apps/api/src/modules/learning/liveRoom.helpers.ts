@@ -538,7 +538,7 @@ const RELIABLE_MP4_LECTURE_VIDEOS = [
 
 // Matches seed placeholder keys that were never uploaded as real objects to R2
 const SEED_PLACEHOLDER_KEY_REGEX =
-  /^(recordings\/(ai|fs|de|do|sec|cloud|data|ml)-|.*\/master\.m3u8$)/i;
+  /^(recordings\/(ai|py|swe|fs|de|do|sec|cloud|data|ml)-|.*\/master\.m3u8$)/i;
 
 /**
  * Resolves a session's `videoR2Key` into a playable URL and stream type (HLS or MP4).
@@ -566,8 +566,8 @@ export function resolvePlayableVideoSource(
       Math.max(0, sessionOrder - 1) % RELIABLE_MP4_LECTURE_VIDEOS.length
     ] ?? RELIABLE_MP4_LECTURE_VIDEOS[0]!;
 
-  // Full URL (e.g., https://pub-7ab9c21bfa214570bd20463f8f4522c2.r2.dev/recordings/session-6/...)
-  if (/^https?:\/\//i.test(raw)) {
+  // Full URL (e.g., https://pub-....r2.dev/recordings/session-6/...) or local static lecture video (/videos/lectures/...)
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('/videos/')) {
     const isHls = /\.m3u8(\?.*)?$/i.test(raw);
     return {
       videoUrl: raw,

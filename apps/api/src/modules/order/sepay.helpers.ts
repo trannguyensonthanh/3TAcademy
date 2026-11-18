@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export interface SepayWebhookUrls {
   publicBaseUrl: string;
   primaryWebhookUrl: string;
@@ -45,8 +47,6 @@ export function buildSepayWebhookUrls(
   };
 }
 
-// Matches standard order codes (e.g. 3T436921255, ORD3T260324) or structured numeric-suffix codes (e.g. ORD3T-2026-001)
-// without swallowing bank/wallet hyphenated suffixes like "-CHUYEN TIEN" or "-MOMO".
 const ORDER_CODE_PATTERN =
   /(?:^|[^A-Z0-9])((?:ORD)?(?:3T|ET)\d[A-Z0-9]*|(?:ORD)?(?:3T|ET)(?:-[0-9]+)+)(?=$|[^A-Z0-9])/i;
 
@@ -81,13 +81,21 @@ export function isIncomingSepayTransfer(payload: Record<string, unknown>): boole
   return normalized === 'in';
 }
 
+function safeEqualStrings(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export function isSepaySecretAuthorized(
   headers: Record<string, string | string[] | undefined>,
   configuredSecret?: string
 ): boolean {
   const secret = configuredSecret?.trim();
   if (!secret) {
-    return true;
+    // In production, webhook secret is mandatory; in dev/test, allow when unset.
+    return process.env.NODE_ENV !== 'production';
   }
 
   const rawAuth = headers.authorization ?? headers.Authorization;
@@ -95,14 +103,14 @@ export function isSepaySecretAuthorized(
   if (typeof authHeader === 'string') {
     const trimmed = authHeader.trim();
     const token = trimmed.replace(/^(?:Apikey|Bearer)\s+/i, '').trim();
-    if (token === secret) {
+    if (safeEqualStrings(token, secret)) {
       return true;
     }
   }
 
   const rawCustomHeader = headers['x-sepay-secret'] ?? headers['X-Sepay-Secret'];
   const customHeader = Array.isArray(rawCustomHeader) ? rawCustomHeader[0] : rawCustomHeader;
-  if (typeof customHeader === 'string' && customHeader.trim() === secret) {
+  if (typeof customHeader === 'string' && safeEqualStrings(customHeader.trim(), secret)) {
     return true;
   }
 

@@ -199,7 +199,7 @@ export function evaluatePasswordStrength(password: string): PasswordStrengthResu
 /**
  * Core Business Rule:
  * A ClassSession is marked Completed (isCompleted = true) ONLY when the student
- * passes the session's short competency quiz (SESSION_ASSIGNMENT) with >= 67% score,
+ * passes the session's short competency quiz (SESSION_ASSIGNMENT) with >= 70% score,
  * NEVER by passive video watching alone.
  */
 export interface QuizEvaluationOutput {
@@ -232,13 +232,13 @@ export function evaluateSessionQuizAndUnlock(
 
   let correctCount = 0;
   session.quizQuestions.forEach((q, idx) => {
-    if (selectedAnswers[idx] === q.correctIndex) {
+    if (typeof q.correctIndex === 'number' && selectedAnswers[idx] === q.correctIndex) {
       correctCount += 1;
     }
   });
 
   const scorePercent = Math.round((correctCount / totalQuestions) * 100);
-  const passed = scorePercent >= 67; // e.g., at least 2/3 correct
+  const passed = scorePercent >= 70;
 
   const updatedSession: ClassSession = {
     ...session,
@@ -310,8 +310,8 @@ export function calculateCohortCompetencyProgress(
         )
       : 0;
 
-  // Eligible for Final AI Proctored Exam when >= 80% sessions passed or at least 5 sessions in ongoing cohort
-  const eligibleForFinalExam = percentage >= 75;
+  // Eligible for Final AI Proctored Exam when all sessions in the cohort are completed (100%)
+  const eligibleForFinalExam = totalCount > 0 && completedCount === totalCount;
 
   return {
     completedCount,
@@ -378,8 +378,15 @@ export interface PathRecommendation {
   rationale: string;
 }
 
+export const CANONICAL_COURSE_SLUGS = {
+  AI_ENGINEER: 'ai-engineering-rag-agents-llmops',
+  CLOUD_BACKEND: 'backend-architecture-distributed-systems',
+  DATA_ANALYTICS: 'data-engineering-streaming-lakehouse',
+  PYTHON_SQL: 'python-sql-for-data-and-ai',
+} as const;
+
 export function calculatePathRecommendation(
-  careerGoal: 'AI_ENGINEER' | 'CLOUD_BACKEND' | 'DATA_ANALYTICS',
+  careerGoal: 'AI_ENGINEER' | 'CLOUD_BACKEND' | 'DATA_ANALYTICS' | 'PYTHON_SQL',
   diagnosticAnswers: number[]
 ): PathRecommendation {
   // Correct answers for the 3 diagnostic questions: [1, 0, 2]
@@ -390,57 +397,99 @@ export function calculatePathRecommendation(
   });
   const diagnosticScore = Math.round((correct / 3) * 100);
 
-  if (careerGoal === 'CLOUD_BACKEND') {
+  if (careerGoal === 'PYTHON_SQL') {
     return {
-      recommendedCourseSlug: 'distributed-backend-cloud-native-golang',
-      recommendedCohortCode: 'SWE-CLOUD-2026-K01',
+      recommendedCourseSlug: CANONICAL_COURSE_SLUGS.PYTHON_SQL,
+      recommendedCohortCode: 'PY-SQL-2026-K01',
       readinessLevel:
-        correct >= 2 ? 'Nền tảng vững — Sẵn sàng học thiết kế hệ thống lớn' : 'Cần củng cố thêm — Bắt đầu từ kiến thức nền tảng Backend',
+        correct >= 2
+          ? 'Nền tảng tư duy tốt — Nắm vững nhanh Python & PostgreSQL thực chiến'
+          : 'Khởi điểm lý tưởng — Xây gốc lập trình Python & SQL bài bản từ đầu',
       diagnosticScore,
       rationale:
-        'Dựa trên mục tiêu phát triển nghề nghiệp của bạn, lộ trình Kỹ sư Backend & Cloud Thực chiến sẽ giúp bạn tự tin thiết kế hệ thống thanh toán tự động và tối ưu cơ sở dữ liệu.',
+        'Lộ trình Lập trình Python & SQL Thực chiến sẽ trang bị nền tảng xử lý dữ liệu và truy vấn tối ưu để bạn tiến xa sang mảng Dữ liệu hoặc Kỹ sư AI.',
+    };
+  }
+
+  if (careerGoal === 'CLOUD_BACKEND') {
+    return {
+      recommendedCourseSlug: CANONICAL_COURSE_SLUGS.CLOUD_BACKEND,
+      recommendedCohortCode: 'SWE-ARCH-2026-K01',
+      readinessLevel:
+        correct >= 2
+          ? 'Nền tảng vững — Sẵn sàng học thiết kế hệ thống phân tán chịu tải cao'
+          : 'Cần củng cố thêm — Bắt đầu từ kiến trúc Backend & PostgreSQL ACID',
+      diagnosticScore,
+      rationale:
+        'Dựa trên mục tiêu phát triển nghề nghiệp của bạn, lộ trình Kiến trúc Backend Chuyên sâu sẽ giúp bạn thiết kế hệ thống thanh toán tự động, chống race-condition và tối ưu cơ sở dữ liệu.',
     };
   }
 
   if (careerGoal === 'DATA_ANALYTICS') {
     return {
-      recommendedCourseSlug: 'analytics-engineering-dbt-lakehouse',
-      recommendedCohortCode: 'DATA-AE-2026-K01',
+      recommendedCourseSlug: CANONICAL_COURSE_SLUGS.DATA_ANALYTICS,
+      recommendedCohortCode: 'DATA-PIPE-2026-K01',
       readinessLevel:
-        correct >= 2 ? 'Sẵn sàng thực hành Mô hình hóa dữ liệu & Báo cáo' : 'Khởi điểm phù hợp — Tập trung rèn kỹ năng truy vấn SQL & Python',
+        correct >= 2
+          ? 'Sẵn sàng thực hành Streaming Pipeline & Kiến trúc Lakehouse'
+          : 'Khởi điểm phù hợp — Tập trung rèn kỹ năng đường ống dữ liệu & SQL phân tích',
       diagnosticScore,
       rationale:
-        'Bạn có tư duy làm việc với số liệu rất tốt. Lớp Phân tích dữ liệu thực chiến sẽ hướng dẫn bạn cách chuẩn hóa kho dữ liệu và tự động hóa kiểm tra số liệu hàng ngày.',
+        'Bạn có tư duy làm việc với dữ liệu rất tốt. Lớp Kỹ thuật Dữ liệu: Streaming Pipeline & Lakehouse hướng dẫn bạn chuẩn hóa luồng sự kiện Kafka, DuckDB và kiểm định chất lượng dữ liệu.',
     };
   }
 
   return {
-    recommendedCourseSlug: 'ai-engineer-hybrid-rag',
+    recommendedCourseSlug: CANONICAL_COURSE_SLUGS.AI_ENGINEER,
     recommendedCohortCode: 'AI-ENG-2026-K01',
     readinessLevel:
       correct >= 2
-        ? 'Nền tảng Python tốt — Sẵn sàng vào thẳng Lớp Kỹ Sư AI Thực Chiến'
-        : 'Nền tảng Cơ bản — Trợ giảng AI sẽ kèm thêm cho bạn phần Python & SQL',
+        ? 'Nền tảng Python tốt — Sẵn sàng vào thẳng Lớp Kỹ sư AI Thực chiến'
+        : 'Nền tảng Cơ bản — Trợ giảng AI sẽ kèm thêm cho bạn phần Python & Hybrid RAG',
     diagnosticScore,
     rationale:
-      'Lộ trình Kỹ sư AI Thực chiến hoàn toàn vừa sức với bạn hiện tại để tự tay xây dựng ứng dụng Trợ lý AI doanh nghiệp trong 12 buổi học trực tiếp.',
+      'Lộ trình Kỹ sư AI Thực chiến giúp bạn tự tay xây dựng hệ thống Hybrid RAG (pgvector HNSW + RRF), Multi-Agent và LLMOps chuẩn doanh nghiệp trong 6 buổi chuyên sâu.',
   };
 }
 
+function toIcsUtcTimestamp(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`
+  );
+}
+
 /**
- * Generates an RFC-5545 compliant .ics calendar content string for a Cohort.
+ * Generates an RFC-5545 compliant .ics calendar content string from real Cohort startDate & scheduleSlots.
  */
 export function generateCohortIcsContent(cohort: Cohort, courseTitle: string): string {
   const formattedSchedule = formatScheduleSlots(cohort.scheduleSlots);
+  const firstSlot = cohort.scheduleSlots?.[0];
+  const [startHour = '19', startMin = '30'] = (firstSlot?.startTime || '19:30').split(':');
+  const [endHour = '21', endMin = '30'] = (firstSlot?.endTime || '21:30').split(':');
+
+  const rawDate = (cohort.startDate || '').trim();
+  const baseDateStr = /^\d{4}-\d{2}-\d{2}/.test(rawDate)
+    ? rawDate.slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const startDateObj = new Date(`${baseDateStr}T${startHour.padStart(2, '0')}:${startMin.padStart(2, '0')}:00+07:00`);
+  const endDateObj = new Date(`${baseDateStr}T${endHour.padStart(2, '0')}:${endMin.padStart(2, '0')}:00+07:00`);
+  const safeStart = Number.isNaN(startDateObj.getTime()) ? new Date() : startDateObj;
+  const safeEnd = Number.isNaN(endDateObj.getTime())
+    ? new Date(safeStart.getTime() + 2 * 3600 * 1000)
+    : endDateObj;
+
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//3T Academy//EduTech AI Platform//VI',
     'BEGIN:VEVENT',
-    `UID:${cohort.code}@3tacademy.vn`,
-    'DTSTAMP:20261109T080000Z',
-    'DTSTART:20261117T123000Z',
-    'DTEND:20261117T143000Z',
+    `UID:${cohort.code}@3t.edu.vn`,
+    `DTSTAMP:${toIcsUtcTimestamp(new Date())}`,
+    `DTSTART:${toIcsUtcTimestamp(safeStart)}`,
+    `DTEND:${toIcsUtcTimestamp(safeEnd)}`,
     `SUMMARY:[3T Academy] ${cohort.code} - ${courseTitle}`,
     `DESCRIPTION:Lịch học trực tiếp đợt ${cohort.code} (${formattedSchedule}). Truy cập phòng Live và AI Tutor tại 3T Academy.`,
     'LOCATION:3T Academy Live Studio & Multi-modal Workspace',

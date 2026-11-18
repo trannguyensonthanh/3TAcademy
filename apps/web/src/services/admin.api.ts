@@ -2,6 +2,7 @@ import { httpRequest } from './apiClient';
 import {
   Course,
   Cohort,
+  ClassSession,
   CohortScheduleSlot,
   CertificateRecord,
   PaymentTransactionRecord,
@@ -65,6 +66,24 @@ export interface AdminOverviewResponse {
   activeCohortsCount: number;
   totalStudentsCount: number;
   issuedCertificatesCount: number;
+  todaySessionsCount?: number;
+  todaySessions?: ClassSession[];
+  reviewSummary?: {
+    totalReviews: number;
+    avgRating?: number;
+    averageRating?: number;
+    fiveStarCount?: number;
+    ratingDistribution?: Array<{ stars: number; count: number; percent: number }>;
+    recentReviews: Array<{
+      id: string;
+      rating: number;
+      comment: string;
+      studentName: string;
+      courseTitle: string;
+      cohortCode: string;
+      createdAt: string;
+    }>;
+  };
   cohorts: Cohort[];
   certificates: Record<string, CertificateRecord>;
   enrollments: Enrollment[];
@@ -97,6 +116,7 @@ export const adminApi = {
     code: string;
     name: string;
     tuitionVnd: number;
+    maxSeats?: number;
     startDate: string;
     scheduleSlots: CohortScheduleSlot[];
     instructorName?: string;

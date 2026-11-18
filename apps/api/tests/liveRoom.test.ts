@@ -18,8 +18,13 @@ const { state } = vi.hoisted(() => {
   process.env.JWT_ACCESS_SECRET = 'test_jwt_access_secret_key_must_be_at_least_32_chars';
   process.env.JWT_REFRESH_SECRET ??= 'test_jwt_refresh_secret_key_must_be_at_least_32_chars';
   process.env.LIVEKIT_API_URL = 'wss://livekit.test.3t.edu.vn';
-  process.env.LIVEKIT_API_KEY = 'devkey';
+  process.env.LIVEKIT_API_KEY = 'test-livekit-key';
   process.env.LIVEKIT_API_SECRET = 'secret_key_for_testing_only_123456';
+  process.env.R2_ACCOUNT_ID = 'test-r2-account';
+  process.env.R2_ACCESS_KEY_ID = 'test-r2-access-key';
+  process.env.R2_SECRET_ACCESS_KEY = 'test-r2-secret-key';
+  process.env.R2_BUCKET_NAME = 'edutech-storage';
+  process.env.R2_PUBLIC_DOMAIN = 'https://pub-test-bucket.r2.dev';
 
   return {
     state: {

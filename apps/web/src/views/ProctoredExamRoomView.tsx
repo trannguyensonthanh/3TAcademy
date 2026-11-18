@@ -32,19 +32,25 @@ const FALLBACK_EXAM_QUESTION: StudentSafePromptConfigItem = {
 };
 
 export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ assessmentId }) => {
-  const { cohorts, currentUser, issueNewCertificate, setInterviewCredits, navigate } = useAcademy();
+  const {
+    cohorts,
+    currentUser,
+    refreshEnrollments,
+    refreshCertificates,
+    setInterviewCredits,
+    navigate,
+  } = useAcademy();
 
-  const { data: examPayload } = useAsyncData(
+  const { data: examPayload, isLoading: isLoadingExam, error: examError } = useAsyncData(
     () => assessmentApi.getAssessmentForStudent(assessmentId),
     [assessmentId]
   );
 
-  const targetCohort =
-    cohorts.find(
-      (c) =>
-        c.id === examPayload?.cohortId ||
-        assessmentId.includes(c.id)
-    ) ?? cohorts[0];
+  const targetCohort = cohorts.find(
+    (c) =>
+      c.id === examPayload?.cohortId ||
+      assessmentId.includes(c.id)
+  );
 
   const examQuestions: StudentSafePromptConfigItem[] =
     examPayload?.promptConfig && examPayload.promptConfig.length > 0
@@ -52,19 +58,14 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
       : [FALLBACK_EXAM_QUESTION];
 
   const [step, setStep] = useState<'CHECKIN' | 'EXAM_ACTIVE'>('CHECKIN');
-  const [faceCaptured, setFaceCaptured] = useState<boolean>(true);
+  const [faceCaptured, setFaceCaptured] = useState<boolean>(false);
   const [proctoringState, setProctoringState] = useState<ProctoringState>('NORMAL');
   const studentDisplayName = currentUser?.fullName || '';
   const studentDisplayEmail = currentUser?.email || '';
   const [proctorLogs, setProctorLogs] = useState<
     { time: string; state: ProctoringState; text: string }[]
-  >([
-    {
-      time: new Date().toTimeString().slice(0, 8),
-      state: 'NORMAL',
-      text: `Đã xác nhận khuôn mặt trùng khớp với hồ sơ học viên ${studentDisplayName}.`,
-    },
-  ]);
+  >([]);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Real Webcam state via navigator.mediaDevices.getUserMedia({ video: true })
   const streamRef = useRef<MediaStream | null>(null);
@@ -72,6 +73,14 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
   const proctorVideoRef = useRef<HTMLVideoElement | null>(null);
   const [webcamActive, setWebcamActive] = useState<boolean>(false);
   const [webcamNotice, setWebcamNotice] = useState<string | null>(null);
+  const [cvTelemetry, setCvTelemetry] = useState<{
+    detector: string;
+    yoloActive: boolean;
+    faceCount: number;
+    yawDeg: number;
+    pitchDeg: number;
+    latencyMs: number;
+  } | null>(null);
 
   // 25 Multiple Choice Questions (A, B, C, D) — starts empty so student selects answers
   const [currentIdx, setCurrentIdx] = useState<number>(0);
@@ -108,26 +117,94 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
     return () => window.clearInterval(timer);
   }, [step]);
 
-  // Real browser visibilitychange / window blur proctoring telemetry
+  useEffect(() => {
+    if (examPayload?.timeLimitMinutes && examPayload.timeLimitMinutes > 0) {
+      setExamSeconds(examPayload.timeLimitMinutes * 60);
+    }
+  }, [examPayload?.timeLimitMinutes]);
+
+  // Real browser visibilitychange / window blur / fullscreenchange proctoring telemetry
   useEffect(() => {
     if (step !== 'EXAM_ACTIVE') return;
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        void handleTriggerProctorState('ALERT');
+        void handleTriggerProctorState('ALERT', 'TAB_HIDDEN');
       } else {
-        void handleTriggerProctorState('NORMAL');
+        void handleTriggerProctorState('NORMAL', 'CAMERA_NORMAL');
       }
     };
     const handleWindowBlur = () => {
-      void handleTriggerProctorState('WARNING');
+      void handleTriggerProctorState('WARNING', 'LOOK_AWAY');
+    };
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        void handleTriggerProctorState('WARNING', 'FULLSCREEN_EXIT');
+      }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, [step, assessmentId]);
+
+  // Real-time Two-Tier Computer Vision Proctoring (MediaPipe/YuNet + SolvePnP + YOLOv8n ONNX + Gemini Vision)
+  useEffect(() => {
+    if (step !== 'EXAM_ACTIVE' || !webcamActive) return;
+    let cancelled = false;
+
+    const captureAndAnalyzeFrame = async () => {
+      const videoEl = proctorVideoRef.current;
+      if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 240;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      const imageBase64 = canvas.toDataURL('image/jpeg', 0.68);
+
+      try {
+        const res = await assessmentApi.analyzeProctoringSnapshot(assessmentId, imageBase64);
+        if (cancelled) return;
+        setCvTelemetry({
+          detector: res.detectorTier1 || 'OPENCV_SOLVEPNP',
+          yoloActive: Boolean(res.yoloObjectDetectorActive),
+          faceCount: res.faceCount ?? 1,
+          yawDeg: res.headPose?.yawDeg ?? 0,
+          pitchDeg: res.headPose?.pitchDeg ?? 0,
+          latencyMs: res.latencyMs ?? 0,
+        });
+        setProctoringState(res.state || 'NORMAL');
+        if (res.state !== 'NORMAL') {
+          const stamp = new Date().toTimeString().slice(0, 8);
+          setProctorLogs((prev) => [
+            { time: stamp, state: res.state, text: res.message },
+            ...prev,
+          ]);
+        }
+      } catch {
+        // Ignore transient network hiccups so exam experience stays uninterrupted
+      }
+    };
+
+    const initialTimer = window.setTimeout(() => {
+      void captureAndAnalyzeFrame();
+    }, 2500);
+    const intervalId = window.setInterval(() => {
+      void captureAndAnalyzeFrame();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [step, webcamActive, assessmentId]);
 
   const handleEnableRealWebcam = async () => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -163,49 +240,73 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
     return `${m}:${s}`;
   };
 
-  const handleTriggerProctorState = async (nextState: ProctoringState) => {
+  const handleTriggerProctorState = async (
+    nextState: ProctoringState,
+    explicitEventType?: string
+  ) => {
     setProctoringState(nextState);
     const now = new Date();
     const stamp = now.toTimeString().slice(0, 8);
     const msg =
       nextState === 'NORMAL'
         ? 'Camera ổn định — Chúc bạn làm bài thi thật tốt nhé!'
+        : explicitEventType === 'FULLSCREEN_EXIT'
+        ? 'Nhắc nhở: Bạn vừa thoát chế độ toàn màn hình phòng thi.'
         : nextState === 'WARNING'
-        ? 'Hệ thống chưa nhìn rõ khuôn mặt bạn, bạn vui lòng hướng mắt về màn hình làm bài nhé.'
+        ? 'Hệ thống chưa nhìn rõ khuôn mặt hoặc tiêu điểm cửa sổ bị rời đi, bạn vui lòng hướng mắt về màn hình làm bài nhé.'
         : 'Cảnh báo: Phát hiện rời khỏi màn hình thi hoặc chuyển tab. Sự kiện đã được ghi nhận để Giảng viên xem xét.';
 
     setProctorLogs((prev) => [{ time: stamp, state: nextState, text: msg }, ...prev]);
     const eventType =
-      nextState === 'WARNING'
-        ? 'LOOK_AWAY_WARNING'
+      explicitEventType ||
+      (nextState === 'WARNING'
+        ? 'LOOK_AWAY'
         : nextState === 'ALERT'
-        ? 'TAB_SWITCH_OR_MULTI_FACE_ALERT'
-        : 'CAMERA_NORMAL';
-    await assessmentApi.reportProctoringEvent(assessmentId, eventType, msg);
+        ? 'TAB_HIDDEN'
+        : 'CAMERA_NORMAL');
+    await assessmentApi.reportProctoringEvent(assessmentId, eventType, msg).catch(() => undefined);
+  };
+
+  const handleEnterExamActive = async () => {
+    setSubmitError(null);
+    try {
+      await assessmentApi.startAssessmentAttempt(assessmentId);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : 'Bạn chưa đủ điều kiện vào phòng thi cuối khóa.'
+      );
+      return;
+    }
+    if (typeof document !== 'undefined' && document.documentElement?.requestFullscreen) {
+      void document.documentElement.requestFullscreen().catch(() => undefined);
+    }
+    setProctorLogs([
+      {
+        time: new Date().toTimeString().slice(0, 8),
+        state: 'NORMAL',
+        text: `Đã khởi tạo phiên thi có giám sát cho học viên ${studentDisplayName}.`,
+      },
+    ]);
+    setStep('EXAM_ACTIVE');
   };
 
   const handleSubmitFinalExam = async () => {
-    const alreadyPassed = Boolean(examPayload?.isRetakeLocked);
-    const result = await assessmentApi.submitAssessmentAttempt(
-      assessmentId,
-      selectedAnswers
-    );
-    if (result.passed && !alreadyPassed) {
-      if (currentUser) {
-        issueNewCertificate(
-          studentDisplayName,
-          studentDisplayEmail,
-          targetCohort?.code || '',
-          Math.round(result.scoreOutOf10 * 10)
-        );
-      }
+    setSubmitError(null);
+    try {
+      const result = await assessmentApi.submitAssessmentAttempt(
+        assessmentId,
+        selectedAnswers
+      );
       if (typeof result.updatedInterviewCredits === 'number') {
         setInterviewCredits(result.updatedInterviewCredits);
-      } else {
-        setInterviewCredits((prev) => prev + (result.bonusInterviewCreditsAdded ?? 4));
       }
+      await Promise.all([refreshEnrollments(), refreshCertificates()]);
+      navigate(`/app/assessments/${assessmentId}/results`);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : 'Không thể nộp bài thi cuối khóa lúc này.'
+      );
     }
-    navigate(`/app/assessments/${assessmentId}/results`);
   };
 
   const proctorStatusInfo =
@@ -385,16 +486,23 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
 
                 <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] space-y-2 text-xs text-[#475569] dark:text-[#94A3B8]">
                   <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                    Quyền lợi ngay khi vượt qua 25 câu trắc nghiệm cuối khóa:
+                    Quyền lợi ngay khi vượt qua bài thi tốt nghiệp cuối khóa:
                   </div>
-                  <p>• Cấp ngay <strong>Chứng chỉ Tốt nghiệp 3T Academy</strong>.</p>
-                  <p>• Tặng thêm <strong>4 lượt Luyện phỏng vấn AI</strong> và mở khóa <strong>Gợi ý cập nhật &amp; Đánh giá lại CV</strong>.</p>
+                  <p>• Cấp ngay <strong>Bằng Chứng Nhận Tốt Nghiệp 3T Academy</strong> (chữ ký số HMAC-SHA256) khi phòng thi hợp lệ.</p>
+                  <p>• Đồng bộ kết quả năng lực chuyên môn vào <strong>Hồ sơ CV &amp; Sổ đăng bộ Văn bằng</strong>.</p>
                 </div>
+
+                {(submitError || examError) && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/40 text-xs font-semibold text-rose-600 dark:text-rose-300">
+                    {submitError || examError}
+                  </div>
+                )}
 
                 <button
                   type="button"
-                  onClick={() => setStep('EXAM_ACTIVE')}
-                  className="w-full py-3.5 px-5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-sm font-bold shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                  disabled={isLoadingExam}
+                  onClick={() => void handleEnterExamActive()}
+                  className="w-full py-3.5 px-5 rounded-xl bg-[#10B981] hover:bg-[#059669] disabled:opacity-50 text-white text-sm font-bold shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Maximize2 className="w-4 h-4" />
                   <span>Bắt đầu vào phòng thi toàn màn hình</span>
@@ -605,6 +713,26 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
 
                 {webcamNotice && (
                   <div className="text-[11px] text-emerald-300">{webcamNotice}</div>
+                )}
+
+                {cvTelemetry && (
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-emerald-500/30 text-[11px] font-mono space-y-1">
+                    <div className="flex items-center justify-between text-emerald-400 font-bold">
+                      <span>CV Engine: {cvTelemetry.detector}</span>
+                      <span>{cvTelemetry.latencyMs > 0 ? `${Math.round(cvTelemetry.latencyMs)}ms` : 'Live'}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span>Khuôn mặt: {cvTelemetry.faceCount}</span>
+                      <span>
+                        Yaw {cvTelemetry.yawDeg.toFixed(1)}° · Pitch {cvTelemetry.pitchDeg.toFixed(1)}°
+                      </span>
+                    </div>
+                    {cvTelemetry.yoloActive && (
+                      <div className="text-[10px] text-emerald-300/90">
+                        • YOLOv8n ONNX: Đang quét vật thể cấm (điện thoại / tài liệu)
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {/* Live Status Message Box inside Corner Camera Widget */}

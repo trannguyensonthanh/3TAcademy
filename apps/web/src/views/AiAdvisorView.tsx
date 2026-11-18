@@ -53,19 +53,20 @@ export const AiAdvisorView: React.FC = () => {
 
     try {
       const apiRes = await catalogApi.askCareerAdvisor(promptText, 'Học viên 3T Academy');
-      const matchedCohort =
-        cohorts.find(
-          (c) =>
-            c.id === apiRes.recommendedCohortId ||
-            c.code.toLowerCase() === String(apiRes.recommendedCohortId).toLowerCase()
-        ) ?? cohorts[0];
+      const matchedCohort = apiRes.recommendedCohortId
+        ? cohorts.find(
+            (c) =>
+              c.id === apiRes.recommendedCohortId ||
+              c.code.toLowerCase() === String(apiRes.recommendedCohortId).toLowerCase()
+          )
+        : undefined;
 
       const recommendedCodes =
         apiRes.recommendedCohortCodes && apiRes.recommendedCohortCodes.length > 0
           ? apiRes.recommendedCohortCodes
           : matchedCohort
           ? [matchedCohort.code]
-          : cohorts.slice(0, 2).map((c) => c.code);
+          : [];
 
       const aiTurn: AdvisorChatTurn = {
         id: `ai-${Date.now()}`,

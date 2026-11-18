@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { pool } from './db/index.js';
 import { correlationIdMiddleware } from './middlewares/correlationId.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { authRouter } from './modules/auth/auth.routes.js';
@@ -41,16 +42,26 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 app.use(correlationIdMiddleware);
 
-// Deep Healthcheck endpoints
+// Healthcheck endpoints (supports Nginx /health, /health/live, /health/ready)
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'UP', service: '3t-academy-api', version: '3.2.0' });
+});
+
 app.get('/health/live', (_req, res) => {
-  res.status(200).json({ status: 'UP', service: '3t-academy-api', version: '3.1.0' });
+  res.status(200).json({ status: 'UP', service: '3t-academy-api', version: '3.2.0' });
 });
 
 app.get('/health/ready', async (_req, res) => {
   try {
-    res.status(200).json({ status: 'READY', db: 'CONNECTED', redis: 'CONNECTED' });
+    if (typeof (pool as { query?: unknown }).query === 'function') {
+      await pool.query('SELECT 1');
+    }
+    res.status(200).json({ status: 'READY', db: 'CONNECTED' });
   } catch (error) {
-    res.status(503).json({ status: 'NOT_READY', error });
+    res.status(503).json({
+      status: 'NOT_READY',
+      error: error instanceof Error ? error.message : 'DB_UNAVAILABLE',
+    });
   }
 });
 
@@ -58,7 +69,7 @@ app.get('/health/ready', async (_req, res) => {
 app.get('/api/v1', (_req, res) => {
   res.json({
     name: '3T AI Academy Backend API',
-    version: '3.1.0',
+    version: '3.2.0',
     status: 'ONLINE',
     sepayWebhook: getConfiguredSepayWebhookUrls(),
   });

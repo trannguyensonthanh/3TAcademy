@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { eq, desc, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db/index.js';
@@ -11,18 +11,172 @@ import {
   enrollments,
   cohorts,
   courses,
+  certificates,
 } from '../../db/schema/index.js';
 import { requireAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { aiServiceClient } from '../../integrations/aiService.client.js';
+import { generateGeminiText } from '../../integrations/ragAi.service.js';
 import { normalizeMasteryScore } from '../../db/helpers.js';
 
 export const profileRouter = Router();
+
+const KNOWN_TECH_KEYWORDS = [
+  'Python',
+  'AsyncIO',
+  'FastAPI',
+  'Pydantic',
+  'Pytest',
+  'TypeScript',
+  'JavaScript',
+  'Node.js',
+  'Express',
+  'Drizzle ORM',
+  'React',
+  'PostgreSQL',
+  'pgvector',
+  'SQL',
+  'Redis',
+  'BullMQ',
+  'Docker',
+  'Kubernetes',
+  'CI/CD',
+  'GitHub Actions',
+  'Git',
+  'Linux',
+  'Hybrid RAG',
+  'LangGraph',
+  'Function Calling',
+  'LLMOps',
+  'Ragas',
+  'Apache Spark',
+  'PySpark',
+  'Apache Kafka',
+  'dbt',
+  'Lakehouse',
+];
+
+function extractReadableTextFromPdfBuffer(buf: Buffer): string {
+  const latin = buf.toString('latin1');
+  const textChunks: string[] = [];
+
+  // Extract parenthesized PDF text literals (...) and UTF-8 runs
+  const parenRegex = /\(([^()]{2,200})\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = parenRegex.exec(latin)) !== null) {
+    const cleaned = (m[1] || '').replace(/\\[nrtbf()\\]/g, ' ').trim();
+    if (/[A-Za-z0-9@]/.test(cleaned)) {
+      textChunks.push(cleaned);
+    }
+  }
+
+  const utf8Fallback = buf
+    .toString('utf8')
+    .replace(/[^\p{L}\p{N}\s@._:/+-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return `${textChunks.join(' ')} ${utf8Fallback}`.slice(0, 30000);
+}
+
+function extractStructuredSignalsFromCvText(rawText: string) {
+  const text = rawText || '';
+  const lower = text.toLowerCase();
+
+  const detectedSkills = KNOWN_TECH_KEYWORDS.filter((kw) =>
+    lower.includes(kw.toLowerCase())
+  );
+
+  const phoneMatch = text.match(/(?:\+84|0)(?:[\s.-]*\d){8,9}/);
+  const githubMatch = text.match(/https?:\/\/(?:www\.)?github\.com\/[A-Za-z0-9_.-]+/i);
+  const linkedinMatch = text.match(
+    /https?:\/\/(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_.-]+/i
+  );
+
+  return {
+    skills: detectedSkills,
+    phone: phoneMatch ? phoneMatch[0].replace(/\s+/g, '') : undefined,
+    githubUrl: githubMatch ? githubMatch[0] : undefined,
+    linkedinUrl: linkedinMatch ? linkedinMatch[0] : undefined,
+  };
+}
+
+async function parseMultipartOrJsonCvRequest(req: Request): Promise<{
+  fileName: string;
+  rawText: string;
+  mode?: 'PARSE_PDF' | 'SAVE_RESUME';
+  overwriteProfile: boolean;
+  previewOnly: boolean;
+  resumeData?: Record<string, unknown>;
+}> {
+  const contentType = String(req.headers['content-type'] || '');
+  if (contentType.toLowerCase().includes('multipart/form-data')) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const rawBody = Buffer.concat(chunks);
+    const webReq = new Response(rawBody, {
+      headers: { 'content-type': contentType },
+    });
+    const formData = await webReq.formData();
+
+    let fileName = String(formData.get('fileName') || '');
+    let rawText = String(formData.get('rawText') || '');
+    const modeRaw = String(formData.get('mode') || 'PARSE_PDF');
+    const overwriteProfile =
+      String(formData.get('overwriteProfile') || 'false').toLowerCase() === 'true';
+    const previewOnly =
+      String(formData.get('previewOnly') || 'false').toLowerCase() === 'true';
+
+    const fileEntry =
+      formData.get('file') || formData.get('cv') || formData.get('pdf');
+    if (fileEntry && typeof fileEntry === 'object' && 'arrayBuffer' in fileEntry) {
+      const f = fileEntry as File;
+      if (f.name && !fileName) fileName = f.name;
+      const arrBuf = await f.arrayBuffer();
+      const extracted = extractReadableTextFromPdfBuffer(Buffer.from(arrBuf));
+      rawText = `${rawText} ${extracted}`.trim();
+    }
+
+    let resumeData: Record<string, unknown> | undefined;
+    const resumeStr = formData.get('resumeData');
+    if (typeof resumeStr === 'string' && resumeStr.trim()) {
+      try {
+        resumeData = JSON.parse(resumeStr) as Record<string, unknown>;
+      } catch {
+        // ignore invalid json
+      }
+    }
+
+    return {
+      fileName: fileName || 'CV_Ung_Vien.pdf',
+      rawText,
+      mode: modeRaw === 'SAVE_RESUME' ? 'SAVE_RESUME' : 'PARSE_PDF',
+      overwriteProfile,
+      previewOnly,
+      resumeData,
+    };
+  }
+
+  const body = (req.body || {}) as Record<string, unknown>;
+  return {
+    fileName: String(body.fileName || 'CV_Ung_Vien.pdf'),
+    rawText: typeof body.rawText === 'string' ? body.rawText : '',
+    mode: body.mode as 'PARSE_PDF' | 'SAVE_RESUME' | undefined,
+    overwriteProfile: Boolean(body.overwriteProfile),
+    previewOnly: Boolean(body.previewOnly),
+    resumeData: body.resumeData as Record<string, unknown> | undefined,
+  };
+}
 
 function normalizeCvData(
   rawCv: Record<string, unknown>,
   profile?: {
     fullName?: string;
+    phone?: string | null;
+    githubUrl?: string | null;
+    linkedinUrl?: string | null;
     avatarUrl?: string | null;
     bio?: string | null;
     careerGoal?: string | null;
@@ -34,9 +188,11 @@ function normalizeCvData(
   const normalizedProjects = projectsRaw.map((p: Record<string, unknown>, idx: number) => {
     const list = Array.isArray(p.highlights)
       ? (p.highlights as string[])
-      : Array.isArray(p.bullets)
-        ? (p.bullets as string[])
-        : [];
+      : typeof p.highlights === 'string' && p.highlights.trim()
+        ? [p.highlights.trim()]
+        : Array.isArray(p.bullets)
+          ? (p.bullets as string[])
+          : [];
     const techStackStr = Array.isArray(p.techStack)
       ? p.techStack.join(', ')
       : String(p.techStack || '');
@@ -107,7 +263,7 @@ function normalizeCvData(
     return {
       id: String(obj.id || `cert-${idx + 1}`),
       title: String(obj.title || ''),
-      issuer: String(obj.issuer || ''),
+      issuer: String(obj.issuer || '3T AI Academy'),
       dateOrCode: String(obj.dateOrCode || ''),
       detail: obj.detail ? String(obj.detail) : undefined,
     };
@@ -142,17 +298,18 @@ function normalizeCvData(
   return {
     fileName,
     updatedAt,
+    extractedAt: String(rawCv.extractedAt || updatedAt),
     fullName: String(rawCv.fullName || profile?.fullName || ''),
     candidateName: String(rawCv.candidateName || rawCv.fullName || profile?.fullName || ''),
     headline: String(rawCv.headline || profile?.bio || ''),
     targetRole: String(rawCv.targetRole || rawCv.headline || profile?.bio || ''),
     summaryBio: String(rawCv.summaryBio || rawCv.careerObjective || profile?.careerGoal || ''),
     email: String(rawCv.email || email || ''),
-    phone: String(rawCv.phone || ''),
+    phone: String(profile?.phone || rawCv.phone || ''),
     location: String(rawCv.location || ''),
-    avatarUrl: String(rawCv.avatarUrl || profile?.avatarUrl || ''),
-    githubUrl: String(rawCv.githubUrl || ''),
-    linkedinUrl: String(rawCv.linkedinUrl || ''),
+    avatarUrl: String(profile?.avatarUrl || rawCv.avatarUrl || ''),
+    githubUrl: String(profile?.githubUrl || rawCv.githubUrl || ''),
+    linkedinUrl: String(profile?.linkedinUrl || rawCv.linkedinUrl || ''),
     careerObjective: String(rawCv.careerObjective || profile?.careerGoal || ''),
     skills: skillsList,
     externalSkills,
@@ -165,48 +322,77 @@ function normalizeCvData(
   };
 }
 
-// 5.1 GET /me/profile-skills
-profileRouter.get('/me/profile-skills', requireAuth, async (req, res, next) => {
+// 5.1 GET /me/profile-skills & /me/profile
+async function handleGetProfileSkills(req: Request, res: any, next: any) {
   try {
     const accountId = req.user!.id;
 
-    const [[profile], [account], skillStates, interviews, myEnrollments, allCohorts, allCourses] =
-      await Promise.all([
-        db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
-        db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
-        db
-          .select({
-            skillId: studentSkillStates.skillId,
-            code: skills.code,
-            name: skills.name,
-            masteryScore: studentSkillStates.masteryScore,
-            evidenceCount: studentSkillStates.evidenceCount,
-            trend: studentSkillStates.trend,
-            updatedAt: studentSkillStates.updatedAt,
-          })
-          .from(studentSkillStates)
-          .innerJoin(skills, eq(studentSkillStates.skillId, skills.id))
-          .where(eq(studentSkillStates.accountId, accountId)),
-        db
-          .select()
-          .from(mockInterviews)
-          .where(eq(mockInterviews.accountId, accountId))
-          .orderBy(desc(mockInterviews.createdAt)),
-        db.select().from(enrollments).where(eq(enrollments.accountId, accountId)),
-        db.select().from(cohorts),
-        db.select().from(courses),
-      ]);
+    const [
+      [profile],
+      [account],
+      skillStates,
+      interviews,
+      myEnrollments,
+      allCohorts,
+      allCourses,
+      myCerts,
+    ] = await Promise.all([
+      db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
+      db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+      db
+        .select({
+          skillId: studentSkillStates.skillId,
+          code: skills.code,
+          name: skills.name,
+          masteryScore: studentSkillStates.masteryScore,
+          evidenceCount: studentSkillStates.evidenceCount,
+          trend: studentSkillStates.trend,
+          updatedAt: studentSkillStates.updatedAt,
+        })
+        .from(studentSkillStates)
+        .innerJoin(skills, eq(studentSkillStates.skillId, skills.id))
+        .where(eq(studentSkillStates.accountId, accountId)),
+      db
+        .select()
+        .from(mockInterviews)
+        .where(eq(mockInterviews.accountId, accountId))
+        .orderBy(desc(mockInterviews.createdAt)),
+      db.select().from(enrollments).where(eq(enrollments.accountId, accountId)),
+      db.select().from(cohorts),
+      db.select().from(courses),
+      db.select().from(certificates).where(eq(certificates.accountId, accountId)),
+    ]);
 
     const rawCv = (profile?.cvParsedData ?? {}) as Record<string, unknown>;
     const cvParsedData = normalizeCvData(rawCv, profile, account?.email);
 
+    // Sync earned non-revoked 3T certificates into awardsAndCerts view if not yet listed
+    for (const cert of myCerts.filter((c) => !c.revokedAt)) {
+      const alreadyListed = cvParsedData.awardsAndCerts.some((a) =>
+        a.dateOrCode.includes(cert.certificateCode)
+      );
+      if (!alreadyListed) {
+        const enr = myEnrollments.find((e) => e.id === cert.enrollmentId);
+        const ch = enr ? allCohorts.find((c) => c.id === enr.cohortId) : undefined;
+        const cr = ch ? allCourses.find((c) => c.id === ch.courseId) : undefined;
+        const certEntry = {
+          id: `3t-cert-${cert.id}`,
+          title: `Chứng chỉ Tốt nghiệp: ${cr?.title || ch?.name || '3T Academy'}`,
+          issuer: '3T AI Academy',
+          dateOrCode: `${cert.issuedAt.toLocaleDateString('vi-VN')} · ${cert.certificateCode}`,
+        };
+        cvParsedData.awardsAndCerts.push(certEntry);
+        cvParsedData.certificationsAndAwards.push(certEntry);
+      }
+    }
+
     const primaryEnrollment = myEnrollments[0];
     const primaryCohort = primaryEnrollment
       ? allCohorts.find((c) => c.id === primaryEnrollment.cohortId)
-      : allCohorts[0];
+      : undefined;
     const primaryCourse = primaryCohort
       ? allCourses.find((c) => c.id === primaryCohort.courseId)
-      : allCourses[0];
+      : undefined;
 
     const userProfileDto = {
       userId: String(accountId),
@@ -216,9 +402,10 @@ profileRouter.get('/me/profile-skills', requireAuth, async (req, res, next) => {
       headline: cvParsedData.headline,
       bio: profile?.bio || cvParsedData.headline,
       email: account?.email || req.user!.email,
-      phone: cvParsedData.phone,
-      githubUrl: cvParsedData.githubUrl,
-      linkedinUrl: cvParsedData.linkedinUrl,
+      phone: profile?.phone || cvParsedData.phone,
+      githubUrl: profile?.githubUrl || cvParsedData.githubUrl,
+      linkedinUrl: profile?.linkedinUrl || cvParsedData.linkedinUrl,
+      preferences: profile?.preferences || {},
       careerObjective: cvParsedData.careerObjective,
       careerGoal: profile?.careerGoal || cvParsedData.careerObjective,
       latestCvFileName: cvParsedData.fileName,
@@ -233,6 +420,10 @@ profileRouter.get('/me/profile-skills', requireAuth, async (req, res, next) => {
       cvParsedData,
       studentSkillStates: skillStates.map((s) => {
         const score = normalizeMasteryScore(s.masteryScore);
+        const rawTrend = Number(s.trend || 0);
+        const pctDelta = Math.abs(rawTrend) <= 1 && rawTrend !== 0
+          ? Math.round(rawTrend * 100)
+          : Math.round(rawTrend);
         return {
           userId: String(accountId),
           skillId: String(s.skillId),
@@ -246,7 +437,7 @@ profileRouter.get('/me/profile-skills', requireAuth, async (req, res, next) => {
           cohortCode: primaryCohort?.code || '',
           courseTitle: primaryCourse?.title || '',
           sourceLabel: `${s.evidenceCount} bài kiểm tra thực chiến`,
-          trend: s.trend > 0 ? `+${Math.round(s.trend * 100)}%` : 'Ổn định',
+          trend: pctDelta > 0 ? `+${pctDelta}%` : pctDelta < 0 ? `${pctDelta}%` : 'Ổn định',
           updatedAt: s.updatedAt.toLocaleDateString('vi-VN'),
           lastUpdated: s.updatedAt.toLocaleDateString('vi-VN'),
         };
@@ -261,15 +452,28 @@ profileRouter.get('/me/profile-skills', requireAuth, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
+}
+
+profileRouter.get('/me/profile-skills', requireAuth, handleGetProfileSkills);
+profileRouter.get('/me/profile', requireAuth, handleGetProfileSkills);
 
 // 5.1B PUT /me/profile
 const updateProfileSchema = z.object({
-  fullName: z.string().min(2),
+  fullName: z.string().min(2).optional(),
   avatarUrl: z.string().optional(),
   phone: z.string().optional(),
+  githubUrl: z.string().optional(),
+  linkedinUrl: z.string().optional(),
   bio: z.string().optional(),
   careerGoal: z.string().optional(),
+  preferences: z
+    .object({
+      emailReminders: z.boolean().optional(),
+      liveSessionAlerts: z.boolean().optional(),
+      aiStudyNudges: z.boolean().optional(),
+      marketingUpdates: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 profileRouter.put(
@@ -279,12 +483,31 @@ profileRouter.put(
   async (req, res, next) => {
     try {
       const accountId = req.user!.id;
-      const { fullName, avatarUrl, phone, bio, careerGoal } = req.body;
+      const {
+        fullName,
+        avatarUrl,
+        phone,
+        githubUrl,
+        linkedinUrl,
+        bio,
+        careerGoal,
+        preferences,
+      } = req.body;
 
       const [[existingProfile], [account]] = await Promise.all([
         db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
         db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
       ]);
+
+      const resolvedFullName = fullName?.trim() || existingProfile?.fullName || '';
+      const resolvedPhone = phone !== undefined ? phone.trim() : existingProfile?.phone ?? '';
+      const resolvedGithub =
+        githubUrl !== undefined ? githubUrl.trim() : existingProfile?.githubUrl ?? '';
+      const resolvedLinkedin =
+        linkedinUrl !== undefined ? linkedinUrl.trim() : existingProfile?.linkedinUrl ?? '';
+      const resolvedPrefs = preferences
+        ? { ...(existingProfile?.preferences || {}), ...preferences }
+        : existingProfile?.preferences || {};
 
       const currentCv = normalizeCvData(
         (existingProfile?.cvParsedData ?? {}) as Record<string, unknown>,
@@ -294,9 +517,11 @@ profileRouter.put(
 
       const updatedCv = {
         ...currentCv,
-        fullName: fullName || currentCv.fullName,
+        fullName: resolvedFullName || currentCv.fullName,
         avatarUrl: avatarUrl ?? existingProfile?.avatarUrl ?? currentCv.avatarUrl,
-        phone: phone ?? currentCv.phone,
+        phone: resolvedPhone || currentCv.phone,
+        githubUrl: resolvedGithub || currentCv.githubUrl,
+        linkedinUrl: resolvedLinkedin || currentCv.linkedinUrl,
         headline: bio ?? existingProfile?.bio ?? currentCv.headline,
         careerObjective: careerGoal ?? existingProfile?.careerGoal ?? currentCv.careerObjective,
       };
@@ -304,10 +529,14 @@ profileRouter.put(
       const [updated] = await db
         .update(userProfiles)
         .set({
-          fullName,
+          fullName: resolvedFullName,
+          phone: resolvedPhone || null,
+          githubUrl: resolvedGithub || null,
+          linkedinUrl: resolvedLinkedin || null,
           avatarUrl: avatarUrl ?? existingProfile?.avatarUrl,
           bio: bio ?? existingProfile?.bio,
           careerGoal: careerGoal ?? existingProfile?.careerGoal,
+          preferences: resolvedPrefs,
           cvParsedData: updatedCv,
           updatedAt: new Date(),
         })
@@ -319,12 +548,13 @@ profileRouter.put(
         id: String(accountId),
         email: account?.email || req.user!.email,
         role: account?.role || req.user!.role,
-        fullName: updated?.fullName || fullName,
+        fullName: updated?.fullName || resolvedFullName,
         avatarUrl: updated?.avatarUrl || updatedCv.avatarUrl,
         headline: updated?.bio || updatedCv.headline,
-        phone: updatedCv.phone,
-        githubUrl: updatedCv.githubUrl,
-        linkedinUrl: updatedCv.linkedinUrl,
+        phone: updated?.phone || updatedCv.phone,
+        githubUrl: updated?.githubUrl || updatedCv.githubUrl,
+        linkedinUrl: updated?.linkedinUrl || updatedCv.linkedinUrl,
+        preferences: updated?.preferences || resolvedPrefs,
         careerObjective: updated?.careerGoal || updatedCv.careerObjective,
         bio: updated?.bio || updatedCv.headline,
         careerGoal: updated?.careerGoal || updatedCv.careerObjective,
@@ -345,15 +575,12 @@ profileRouter.put(
   }
 );
 
-// 5.2 POST /me/cv/upload & POST /me/cv
-async function handleUploadCv(req: any, res: any, next: any) {
+// 5.2 POST /me/cv/upload & POST /me/cv (Supports BOTH multipart/form-data PDF & JSON!)
+async function handleUploadCv(req: Request, res: any, next: any) {
   try {
     const accountId = req.user!.id;
-    const body = req.body || {};
-    const fileName = String(body.fileName || 'CV_Ung_Vien.pdf');
-    const rawText = typeof body.rawText === 'string' ? body.rawText : '';
-    const mode = body.mode as 'PARSE_PDF' | 'SAVE_RESUME' | undefined;
-    const resumeData = body.resumeData as Record<string, unknown> | undefined;
+    const parsedReq = await parseMultipartOrJsonCvRequest(req);
+    const { fileName, rawText, mode, overwriteProfile, previewOnly, resumeData } = parsedReq;
 
     const [[existingProfile], [account]] = await Promise.all([
       db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
@@ -367,30 +594,80 @@ async function handleUploadCv(req: any, res: any, next: any) {
     );
 
     if (mode === 'PARSE_PDF' || (!resumeData && mode !== 'SAVE_RESUME')) {
-      let aiExtractedSkills: string[] = [];
+      const localSignals = extractStructuredSignalsFromCvText(`${rawText} ${fileName}`);
+      let aiSkills = [...localSignals.skills];
+      let aiProjects = currentCv.projects;
+      let extractedPhone = localSignals.phone;
+      let extractedGithub = localSignals.githubUrl;
+      let extractedLinkedin = localSignals.linkedinUrl;
+
       try {
-        const parsed = await aiServiceClient.parseCvPdf(rawText || fileName);
-        if (Array.isArray(parsed.skills)) aiExtractedSkills = parsed.skills;
+        const parsed = await aiServiceClient.parseCvPdf(rawText || fileName, req.correlationId);
+        if (Array.isArray(parsed.skills)) {
+          aiSkills = Array.from(new Set([...aiSkills, ...parsed.skills]));
+        }
+        if (Array.isArray(parsed.projects) && parsed.projects.length > 0) {
+          aiProjects = parsed.projects as typeof currentCv.projects;
+        }
+        if (parsed.phone) extractedPhone = parsed.phone;
+        if (parsed.githubUrl) extractedGithub = parsed.githubUrl;
+        if (parsed.linkedinUrl) extractedLinkedin = parsed.linkedinUrl;
       } catch {
-        // AI service unavailable; preserve current skills
+        // Local extraction already captured tech keywords & contact links
       }
 
       const nowIso = new Date().toISOString();
+      const mergedSkills = Array.from(new Set([...currentCv.skills, ...aiSkills]));
       const extractedCvData = normalizeCvData(
         {
           ...currentCv,
           fileName,
           updatedAt: nowIso,
           extractedAt: nowIso,
-          skills: Array.from(new Set([...currentCv.skills, ...aiExtractedSkills])),
+          phone: overwriteProfile
+            ? extractedPhone || currentCv.phone
+            : currentCv.phone || extractedPhone || '',
+          githubUrl: overwriteProfile
+            ? extractedGithub || currentCv.githubUrl
+            : currentCv.githubUrl || extractedGithub || '',
+          linkedinUrl: overwriteProfile
+            ? extractedLinkedin || currentCv.linkedinUrl
+            : currentCv.linkedinUrl || extractedLinkedin || '',
+          skills: mergedSkills,
+          externalSkills: mergedSkills.map((name) => ({
+            name,
+            note: `Trích xuất từ ${fileName}`,
+          })),
+          projects: aiProjects,
         },
         existingProfile,
         account?.email
       );
 
+      if (!previewOnly) {
+        await db
+          .update(userProfiles)
+          .set({
+            phone: overwriteProfile
+              ? extractedCvData.phone || existingProfile?.phone || null
+              : existingProfile?.phone || extractedCvData.phone || null,
+            githubUrl: overwriteProfile
+              ? extractedCvData.githubUrl || existingProfile?.githubUrl || null
+              : existingProfile?.githubUrl || extractedCvData.githubUrl || null,
+            linkedinUrl: overwriteProfile
+              ? extractedCvData.linkedinUrl || existingProfile?.linkedinUrl || null
+              : existingProfile?.linkedinUrl || extractedCvData.linkedinUrl || null,
+            cvParsedData: extractedCvData,
+            updatedAt: new Date(),
+          })
+          .where(eq(userProfiles.accountId, accountId));
+      }
+
       res.json({
         fileName,
         mode: 'PARSE_PDF',
+        persisted: !previewOnly,
+        overwriteProfile,
         updatedAt: nowIso,
         cvParsedData: extractedCvData,
       });
@@ -402,17 +679,32 @@ async function handleUploadCv(req: any, res: any, next: any) {
       {
         ...currentCv,
         ...(resumeData || {}),
-        fileName,
+        fileName: (resumeData?.fileName as string) || fileName || currentCv.fileName,
         updatedAt: nowIso,
       },
-      existingProfile,
+      overwriteProfile ? undefined : existingProfile,
       account?.email
     );
 
     await db
       .update(userProfiles)
       .set({
-        fullName: mergedCv.fullName || existingProfile?.fullName || '',
+        fullName:
+          overwriteProfile || !existingProfile?.fullName
+            ? mergedCv.fullName || existingProfile?.fullName || ''
+            : existingProfile.fullName,
+        phone:
+          overwriteProfile || !existingProfile?.phone
+            ? mergedCv.phone || existingProfile?.phone || null
+            : existingProfile.phone,
+        githubUrl:
+          overwriteProfile || !existingProfile?.githubUrl
+            ? mergedCv.githubUrl || existingProfile?.githubUrl || null
+            : existingProfile.githubUrl,
+        linkedinUrl:
+          overwriteProfile || !existingProfile?.linkedinUrl
+            ? mergedCv.linkedinUrl || existingProfile?.linkedinUrl || null
+            : existingProfile.linkedinUrl,
         bio: mergedCv.headline || existingProfile?.bio,
         careerGoal: mergedCv.careerObjective || existingProfile?.careerGoal,
         cvParsedData: mergedCv,
@@ -421,8 +713,9 @@ async function handleUploadCv(req: any, res: any, next: any) {
       .where(eq(userProfiles.accountId, accountId));
 
     res.json({
-      fileName,
+      fileName: mergedCv.fileName,
       mode: 'SAVE_RESUME',
+      overwriteProfile,
       updatedAt: nowIso,
       cvParsedData: mergedCv,
     });
@@ -440,6 +733,130 @@ const screenCvSchema = z.object({
   targetRole: z.string().min(2),
   jdRawText: z.string().min(10),
 });
+
+function buildRoleAdaptiveInterviewQuestions(params: {
+  candidateName: string;
+  targetRole: string;
+  targetLevel: string;
+  jdRawText: string;
+  projectTitle?: string;
+}) {
+  const combined = `${params.targetRole} ${params.jdRawText}`.toLowerCase();
+  const projectRef = params.projectTitle
+    ? `dự án "${params.projectTitle}" trong hồ sơ của bạn`
+    : 'dự án kỹ thuật tiêu biểu nhất trong CV của bạn';
+
+  const q1 = {
+    stageTag: 'Câu 1/3 · Bảo vệ kiến trúc dự án thực tế trong CV',
+    text: `Chào ${params.candidateName}! Ứng tuyển vị trí ${params.targetRole} (${params.targetLevel}), bạn hãy trình bày kiến trúc cốt lõi của ${projectRef}, điểm nghẽn kỹ thuật khó nhất bạn từng xử lý và kết quả đo lường thực tế?`,
+  };
+
+  if (combined.includes('kafka') || combined.includes('spark') || combined.includes('data')) {
+    return [
+      q1,
+      {
+        stageTag: 'Câu 2/3 · Xử lý dữ liệu lớn & Kiến trúc Streaming/Lakehouse',
+        text: 'Khi đường ống PySpark hoặc Kafka Consumer gặp hiện tượng Data Skew (một phân vùng chậm gấp nhiều lần các phân vùng còn lại) và sự kiện đến trễ, bạn xử lý Partitioning, Broadcast Join và Idempotent Upsert xuống tầng Silver/Gold như thế nào?',
+      },
+      {
+        stageTag: 'Câu 3/3 · Kiểm định chất lượng dữ liệu & Vận hành SLA',
+        text: 'Làm thế nào để bạn thiết kế kiểm thử chất lượng dữ liệu tự động với dbt và đảm bảo khi chạy lại (Backfill) 3 tháng lịch sử không xảy ra nhân bản dữ liệu trên báo cáo?',
+      },
+    ];
+  }
+
+  if (
+    combined.includes('backend') ||
+    combined.includes('typescript') ||
+    combined.includes('node') ||
+    combined.includes('distributed')
+  ) {
+    return [
+      q1,
+      {
+        stageTag: 'Câu 2/3 · Giao dịch ACID, Concurrency & Idempotent Webhook',
+        text: 'Giả sử cổng thanh toán gửi đồng thời 3 gói tin webhook trùng lặp cho cùng một đơn hàng học phí, bạn thiết kế giao dịch PostgreSQL (SELECT FOR UPDATE / Unique Constraint) như thế nào để không cộng trùng sĩ số lớp?',
+      },
+      {
+        stageTag: 'Câu 3/3 · Bảo mật phân quyền đối tượng & Tối ưu hiệu năng p95',
+        text: 'Bạn phân biệt kiểm tra vai trò RBAC với kiểm tra quyền sở hữu tài nguyên chống lỗi IDOR như thế nào, và dùng EXPLAIN ANALYZE / Redis Cache-Aside ra sao khi truy vấn bị chậm ở phân vị p95?',
+      },
+    ];
+  }
+
+  if (combined.includes('python') && combined.includes('sql') && !combined.includes('rag')) {
+    return [
+      q1,
+      {
+        stageTag: 'Câu 2/3 · Lập trình Bất đồng bộ Python AsyncIO & Connection Pool',
+        text: 'Khi dịch vụ Python cần gọi hàng trăm yêu cầu HTTP đồng thời và ghi kết quả vào PostgreSQL, bạn kết hợp httpx.AsyncClient, asyncio.Semaphore và Connection Pool như thế nào để không làm nghẽn Event Loop?',
+      },
+      {
+        stageTag: 'Câu 3/3 · Truy vấn SQL Phân tích & Chống SQL Injection',
+        text: 'Bạn hãy so sánh cách hoạt động của Window Functions (DENSE_RANK, LAG) với GROUP BY trên PostgreSQL, và nêu nguyên tắc bắt buộc để ngăn chặn triệt để SQL Injection?',
+      },
+    ];
+  }
+
+  // Default AI / LLM / RAG track
+  return [
+    q1,
+    {
+      stageTag: 'Câu 2/3 · Kiến trúc Hybrid RAG, pgvector HNSW & RRF',
+      text: 'Khi xây dựng hệ thống RAG trên PostgreSQL pgvector, vì sao cần kết hợp tìm kiếm ngữ nghĩa với tsvector qua công thức Reciprocal Rank Fusion (RRF), và viết câu lệnh ORDER BY thế nào để không làm mất tác dụng của chỉ mục HNSW?',
+    },
+    {
+      stageTag: 'Câu 3/3 · Function Calling, Guardrails & Đánh giá Ragas',
+      text: 'Trong hệ thống AI Production có phân quyền nhiều khóa học/phòng ban, bạn đặt bộ lọc cách ly dữ liệu ở tầng nào và sử dụng chỉ số Faithfulness / Context Recall của Ragas ra sao để kiểm soát ảo giác?',
+    },
+  ];
+}
+
+function evaluateCandidateAnswerQuality(answer: string, jdRawText: string, questionText: string) {
+  const clean = answer.trim();
+  const wordCount = clean.split(/\s+/).filter(Boolean).length;
+
+  const refTokens = new Set(
+    `${jdRawText} ${questionText}`
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length >= 4)
+  );
+  const ansTokens = clean
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 4);
+
+  let keywordHits = 0;
+  const matchedSet = new Set<string>();
+  for (const tk of ansTokens) {
+    if (refTokens.has(tk) && !matchedSet.has(tk)) {
+      matchedSet.add(tk);
+      keywordHits += 1;
+    }
+  }
+
+  const hasMetrics = /\b(\d+%|\d+\s*(ms|s|giây|mb|gb|rps|user|dòng|lần)|o\(1\)|o\(n|p95|p99)\b/i.test(
+    clean
+  );
+  const structureScore = Math.min(35, Math.round(wordCount * 0.7));
+  const relevanceScore = Math.min(45, keywordHits * 7);
+  const metricBonus = hasMetrics ? 12 : 0;
+
+  const rawScore = 15 + structureScore + relevanceScore + metricBonus;
+  const score = Math.min(96, Math.max(35, rawScore));
+
+  const feedback =
+    score >= 82
+      ? 'Câu trả lời có chiều sâu kỹ thuật tốt, bám sát từ khóa cốt lõi của vị trí ứng tuyển và trình bày rõ cơ chế xử lý.'
+      : score >= 65
+        ? 'Nêu được hướng giải quyết đúng trọng tâm nhưng nên bổ sung thêm cơ chế xử lý lỗi biên và số liệu đo kiểm thực tế.'
+        : 'Câu trả lời còn khá ngắn hoặc thiếu chi tiết kiến trúc cụ thể; hãy phân tích rõ công cụ, luồng dữ liệu và lý do lựa chọn kỹ thuật.';
+
+  return { score, wordCount, hasMetrics, keywordHits, feedback };
+}
 
 profileRouter.post(
   '/interviews/screen-cv',
@@ -466,51 +883,82 @@ profileRouter.post(
       const skillMap = new Map(allSkills.map((s) => [s.id, s]));
       const rawCv = (profile?.cvParsedData ?? {}) as Record<string, unknown>;
       const cvSkills = Array.isArray(rawCv.skills)
-        ? (rawCv.skills as string[]).map((s) => String(s).toLowerCase())
+        ? (rawCv.skills as string[]).map((s) => String(s))
         : [];
       const learnedSkillNames = userSkillStates
         .map((ss) => skillMap.get(ss.skillId)?.name || '')
         .filter(Boolean);
 
+      const allCandidateSkills = Array.from(new Set([...cvSkills, ...learnedSkillNames]));
       const jdLower = jdRawText.toLowerCase();
-      const matchedSkills = [...cvSkills, ...learnedSkillNames.map((s) => s.toLowerCase())].filter(
-        (sk) => sk && jdLower.includes(sk.split(' ')[0] || sk)
-      );
+      const matchedSkills = allCandidateSkills.filter((sk) => {
+        const firstToken = sk.toLowerCase().split(/[\s/&]+/)[0] || '';
+        return firstToken.length >= 2 && jdLower.includes(firstToken);
+      });
 
-      let matchPercent = Math.min(
-        95,
-        Math.max(45, 55 + matchedSkills.length * 6 + userSkillStates.length * 4)
+      const jdExpectedTechs = KNOWN_TECH_KEYWORDS.filter((kw) =>
+        jdLower.includes(kw.toLowerCase())
       );
-      let missingKeywordsOrGaps: string[] = [];
+      const candidateLowerJoin = allCandidateSkills.join(' ').toLowerCase();
+      let missingKeywordsOrGaps = jdExpectedTechs
+        .filter((kw) => !candidateLowerJoin.includes(kw.toLowerCase()))
+        .map((kw) => `Bổ sung minh chứng thực hành cho kỹ năng yêu cầu trong JD: ${kw}`);
+
+      let matchPercent =
+        jdExpectedTechs.length > 0
+          ? Math.min(
+              95,
+              Math.max(
+                40,
+                Math.round(
+                  45 +
+                    ((jdExpectedTechs.length - missingKeywordsOrGaps.length) /
+                      jdExpectedTechs.length) *
+                      45
+                )
+              )
+            )
+          : Math.min(92, Math.max(50, 55 + matchedSkills.length * 7));
 
       try {
-        const aiResult = await aiServiceClient.screenCv({
-          cvData: rawCv,
-          targetLevel,
-          targetRole,
-          jdRawText,
-        });
-        if (typeof aiResult.matchScore === 'number') {
-          matchPercent = aiResult.matchScore;
+        const aiResult = await aiServiceClient.screenCv(
+          {
+            cvData: rawCv,
+            targetLevel,
+            targetRole,
+            jdRawText,
+          },
+          req.correlationId
+        );
+        const aiScore = aiResult.matchScore ?? aiResult.match_score;
+        if (typeof aiScore === 'number') {
+          matchPercent = aiScore;
         }
-        if (Array.isArray(aiResult.missingSkills)) {
-          missingKeywordsOrGaps = aiResult.missingSkills;
+        const aiMissing = aiResult.missingSkills ?? aiResult.missing_skills;
+        if (Array.isArray(aiMissing) && aiMissing.length > 0) {
+          missingKeywordsOrGaps = aiMissing;
         }
       } catch {
-        if (missingKeywordsOrGaps.length === 0) {
-          missingKeywordsOrGaps = [
-            'Bổ sung số liệu đo lường cụ thể (latency, throughput, độ chính xác) cho các dự án trong CV.',
-          ];
-        }
+        // Deterministic JD vs CV + 3T Skill Mastery comparison already computed
       }
 
-      const passedGate = matchPercent >= 60;
+      if (missingKeywordsOrGaps.length === 0) {
+        missingKeywordsOrGaps = [
+          'Nêu thêm chỉ số định lượng (độ trễ p95, thông lượng tải hoặc độ chính xác) cho dự án trọng tâm trong CV.',
+        ];
+      }
+
+      const passedGate = matchPercent >= 55;
       const cvScreeningResult = {
         matchPercent,
+        matchScore: matchPercent,
         passedGate,
+        matchedSkills,
         layoutAndPresentationFeedback:
-          'Bố cục CV phân tách rõ ràng giữa Mục tiêu nghề nghiệp, Kỹ năng công nghệ và Dự án thực tế.',
-        jdMatchEvaluation: `Hồ sơ hiện tại đạt độ khớp ${matchPercent}% so với yêu cầu tuyển dụng vị trí ${targetRole} (${targetLevel}).`,
+          allCandidateSkills.length > 0
+            ? `Hồ sơ đã đồng bộ ${allCandidateSkills.length} nhóm kỹ năng chuyên môn (${matchedSkills.length} kỹ năng khớp trực tiếp JD).`
+            : 'Hồ sơ hiện chưa cập nhật danh sách kỹ năng/dự án; bạn nên bổ sung thông tin ở mục Hồ sơ năng lực để tăng điểm khớp JD.',
+        jdMatchEvaluation: `Hồ sơ đạt độ khớp ${matchPercent}% so với yêu cầu vị trí ${targetRole} (${targetLevel}).`,
         missingKeywordsOrGaps,
       };
 
@@ -534,6 +982,7 @@ profileRouter.post(
         passedGate: cvScreeningResult.passedGate,
         creditDeducted: 0,
         availableCredits: profile?.interviewCredits ?? 0,
+        matchedSkills,
         layoutAndPresentationFeedback: cvScreeningResult.layoutAndPresentationFeedback,
         jdMatchEvaluation: cvScreeningResult.jdMatchEvaluation,
         missingKeywordsOrGaps: cvScreeningResult.missingKeywordsOrGaps,
@@ -546,7 +995,7 @@ profileRouter.post(
   }
 );
 
-// 5.4 POST /interviews/:interviewId/start
+// 5.4 POST /interviews/:interviewId/start (Strict Ownership + Credit Gate!)
 profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
@@ -557,9 +1006,29 @@ profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, re
       db.select().from(mockInterviews).where(eq(mockInterviews.id, interviewId)).limit(1),
     ]);
 
+    if (!interview) {
+      res.status(404).json({
+        success: false,
+        status: 404,
+        code: 'INTERVIEW_NOT_FOUND',
+        message: 'Không tìm thấy phiên phỏng vấn',
+      });
+      return;
+    }
+
+    if (Number(interview.accountId) !== Number(accountId)) {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'FORBIDDEN_INTERVIEW_OWNER',
+        message: 'Bạn không có quyền truy cập phiên phỏng vấn của người khác',
+      });
+      return;
+    }
+
     if (!profile || profile.interviewCredits <= 0) {
       const message =
-        'Bạn đã hết lượt phỏng vấn thử AI. Hãy hoàn thành khóa học và nhận chứng chỉ để được cộng thêm +4 lượt miễn phí!';
+        'Bạn hiện có 0 lượt phỏng vấn AI. Hãy đăng ký một đợt học chính thức tại 3T Academy để nhận ngay +4 lượt Luyện phỏng vấn 1-1!';
       res.status(402).json({
         success: false,
         status: 402,
@@ -573,19 +1042,37 @@ profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, re
       return;
     }
 
-    const roleLabel = interview?.targetRole || 'AI Engineer';
-    const firstQuestion = {
+    const rawCv = (profile.cvParsedData ?? {}) as Record<string, unknown>;
+    const projects = Array.isArray(rawCv.projects)
+      ? (rawCv.projects as Array<Record<string, unknown>>)
+      : [];
+    const firstProjTitle = projects[0]
+      ? String(projects[0].name || projects[0].title || '')
+      : undefined;
+
+    const questionBank = buildRoleAdaptiveInterviewQuestions({
+      candidateName: profile.fullName || 'bạn',
+      targetRole: interview.targetRole,
+      targetLevel: interview.targetLevel,
+      jdRawText: interview.jdRawText,
+      projectTitle: firstProjTitle,
+    });
+
+    const firstQ = questionBank[0]!;
+    const firstQuestionEntry = {
       speaker: 'SENIOR_AI',
       speakerLabel: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-      stageTag: 'Câu 1/3 · Xác thực dự án trong CV',
-      text: `Chào bạn! Dựa trên hồ sơ ứng tuyển vị trí ${roleLabel}, bạn hãy trình bày kiến trúc kỹ thuật của dự án tâm đắc nhất trong CV và cách bạn giải quyết bài toán tối ưu hiệu năng thực tế?`,
+      stageTag: firstQ.stageTag,
+      text: firstQ.text,
+      plannedQuestions: questionBank,
+      createdAt: new Date().toISOString(),
     };
 
     const [updated] = await db
       .update(mockInterviews)
       .set({
         status: 'IN_PROGRESS',
-        transcriptLog: [firstQuestion],
+        transcriptLog: [firstQuestionEntry],
       })
       .where(eq(mockInterviews.id, interviewId))
       .returning();
@@ -596,11 +1083,12 @@ profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, re
       creditDeducted: 0,
       startedAt: new Date().toISOString(),
       turnIndex: 0,
-      totalTurns: 3,
-      stageTag: firstQuestion.stageTag,
-      questionText: firstQuestion.text,
+      totalTurns: questionBank.length,
+      stageTag: firstQ.stageTag,
+      questionText: firstQ.text,
+      plannedQuestions: questionBank,
       interviewerName: 'Hội đồng Phỏng vấn Kỹ thuật AI',
-      interviewerTitle: 'Chuyên gia Phỏng vấn Kỹ thuật — 3T Academy',
+      interviewerTitle: `Chuyên gia Phỏng vấn ${interview.targetRole} — 3T Academy`,
     });
   } catch (err) {
     next(err);
@@ -631,17 +1119,17 @@ profileRouter.post(
   validate(turnSchema),
   async (req, res, next) => {
     try {
+      const accountId = req.user!.id;
       const interviewId = Number(req.params.interviewId);
       const { turnIndex: reqTurnIdx, questionPrompt, durationSec } = req.body;
       const answerTranscript = String(
         req.body.answerTranscript || req.body.transcript || ''
       ).trim();
 
-      const [interview] = await db
-        .select()
-        .from(mockInterviews)
-        .where(eq(mockInterviews.id, interviewId))
-        .limit(1);
+      const [[interview], [profile]] = await Promise.all([
+        db.select().from(mockInterviews).where(eq(mockInterviews.id, interviewId)).limit(1),
+        db.select().from(userProfiles).where(eq(userProfiles.accountId, accountId)).limit(1),
+      ]);
 
       if (!interview) {
         res.status(404).json({
@@ -649,39 +1137,57 @@ profileRouter.post(
           status: 404,
           code: 'INTERVIEW_NOT_FOUND',
           message: 'Không tìm thấy phiên phỏng vấn',
-          error: {
-            code: 'INTERVIEW_NOT_FOUND',
-            message: 'Không tìm thấy phiên phỏng vấn',
-          },
         });
         return;
       }
 
-      const currentLog = Array.isArray(interview.transcriptLog) ? interview.transcriptLog : [];
-      const currentTurnIdx = reqTurnIdx ?? Math.floor(currentLog.length / 2);
+      if (Number(interview.accountId) !== Number(accountId)) {
+        res.status(403).json({
+          success: false,
+          status: 403,
+          code: 'FORBIDDEN_INTERVIEW_OWNER',
+          message: 'Bạn không có quyền thao tác trên phiên phỏng vấn của người khác',
+        });
+        return;
+      }
 
-      const followUpQuestions = [
-        {
-          stageTag: 'Câu 2/3 · Xử lý tình huống kỹ thuật chuyên sâu',
-          text: 'Khi hệ thống cần kết hợp tìm kiếm từ khóa và tìm kiếm vector ngữ nghĩa trên dữ liệu lớn, bạn thiết kế cơ chế xếp hạng và xử lý bất đồng bộ như thế nào để đảm bảo độ trễ thấp?',
-        },
-        {
-          stageTag: 'Câu 3/3 · Bảo mật dữ liệu & Phân quyền doanh nghiệp',
-          text: 'Câu hỏi cuối cùng: Nếu tài liệu nội bộ có phân quyền theo phòng ban, bạn đặt bộ lọc kiểm soát truy cập ở tầng cơ sở dữ liệu như thế nào trước khi đưa ngữ cảnh vào mô hình ngôn ngữ lớn?',
-        },
-      ];
+      const currentLog = Array.isArray(interview.transcriptLog)
+        ? (interview.transcriptLog as Array<Record<string, unknown>>)
+        : [];
+      const studentTurnsCount = currentLog.filter((entry) => entry.speaker === 'STUDENT').length;
+      const currentTurnIdx = reqTurnIdx ?? studentTurnsCount;
 
-      const nextQ = followUpQuestions[currentTurnIdx] || null;
-      const isCompleted = currentTurnIdx >= 2 || !nextQ;
+      const questionBank = buildRoleAdaptiveInterviewQuestions({
+        candidateName: profile?.fullName || 'bạn',
+        targetRole: interview.targetRole,
+        targetLevel: interview.targetLevel,
+        jdRawText: interview.jdRawText,
+      });
+
+      const currentQuestionText =
+        questionPrompt ||
+        questionBank[currentTurnIdx]?.text ||
+        String(currentLog[currentLog.length - 1]?.text || '');
+
+      const turnEval = evaluateCandidateAnswerQuality(
+        answerTranscript,
+        interview.jdRawText,
+        currentQuestionText
+      );
+
+      const nextQ = questionBank[currentTurnIdx + 1] || null;
+      const isCompleted = currentTurnIdx + 1 >= questionBank.length || !nextQ;
 
       const updatedLog = [
         ...currentLog,
         {
           speaker: 'STUDENT',
-          speakerLabel: 'Ứng viên',
-          stageTag: `Trả lời câu ${currentTurnIdx + 1}/3`,
-          questionPrompt,
+          speakerLabel: profile?.fullName || 'Ứng viên',
+          stageTag: `Trả lời câu ${currentTurnIdx + 1}/${questionBank.length}`,
+          questionPrompt: currentQuestionText,
           text: answerTranscript,
+          score: turnEval.score,
+          feedback: turnEval.feedback,
           durationSec: durationSec ?? 45,
           createdAt: new Date().toISOString(),
         },
@@ -709,12 +1215,12 @@ profileRouter.post(
         acknowledged: true,
         turnCount: currentTurnIdx + 1,
         turnIndex: currentTurnIdx + 1,
-        turnEvaluation:
-          'Câu trả lời bám sát trọng tâm kỹ thuật và nêu được hướng giải quyết thực tế.',
-        evaluationNote:
-          'Câu trả lời bám sát trọng tâm kỹ thuật và nêu được hướng giải quyết thực tế.',
-        betterAnswerTip:
-          'Hãy bổ sung thêm số liệu đo lường cụ thể trong quá trình vận hành thực tế.',
+        turnScore: turnEval.score,
+        turnEvaluation: turnEval.feedback,
+        evaluationNote: turnEval.feedback,
+        betterAnswerTip: turnEval.hasMetrics
+          ? 'Bạn đã dẫn chứng số liệu rất tốt; hãy tiếp tục liên hệ trực tiếp với kinh nghiệm vận hành của mình ở câu tiếp theo.'
+          : 'Hãy nêu thêm thông số cụ thể (ví dụ độ trễ ms, số lượng bản ghi hoặc cấu hình thực tế) để tăng sức thuyết phục.',
         nextStageTag: nextQ?.stageTag ?? null,
         nextQuestionText: nextQ?.text ?? null,
         isCompleted,
@@ -725,7 +1231,7 @@ profileRouter.post(
   }
 );
 
-// 5.6 POST /interviews/:interviewId/complete (Deducts 1 credit upon full completion)
+// 5.6 POST /interviews/:interviewId/complete (Deducts 1 credit ONLY once upon completion!)
 profileRouter.post('/interviews/:interviewId/complete', requireAuth, async (req, res, next) => {
   try {
     const accountId = req.user!.id;
@@ -737,34 +1243,130 @@ profileRouter.post('/interviews/:interviewId/complete', requireAuth, async (req,
       .where(eq(mockInterviews.id, interviewId))
       .limit(1);
 
-    const turns = Array.isArray(existingInterview?.transcriptLog)
-      ? existingInterview.transcriptLog
+    if (!existingInterview) {
+      res.status(404).json({
+        code: 'INTERVIEW_NOT_FOUND',
+        message: 'Không tìm thấy phiên phỏng vấn',
+      });
+      return;
+    }
+
+    if (Number(existingInterview.accountId) !== Number(accountId)) {
+      res.status(403).json({
+        code: 'FORBIDDEN_INTERVIEW_OWNER',
+        message: 'Bạn không có quyền hoàn tất phiên phỏng vấn của người khác',
+      });
+      return;
+    }
+
+    // Idempotency: if already COMPLETED, return existing report without deducting another credit!
+    if (existingInterview.status === 'COMPLETED' && existingInterview.evaluationReport) {
+      const [prof] = await db
+        .select({ interviewCredits: userProfiles.interviewCredits })
+        .from(userProfiles)
+        .where(eq(userProfiles.accountId, accountId))
+        .limit(1);
+      res.json({
+        interviewId: String(interviewId),
+        status: 'COMPLETED',
+        creditDeducted: 0,
+        remainingCredits: prof?.interviewCredits ?? 0,
+        completedAt: existingInterview.completedAt?.toISOString() || new Date().toISOString(),
+        evaluationReport: existingInterview.evaluationReport,
+      });
+      return;
+    }
+
+    const turns = Array.isArray(existingInterview.transcriptLog)
+      ? (existingInterview.transcriptLog as Array<Record<string, unknown>>)
       : [];
-    const studentTurns = turns.filter(
-      (t: Record<string, unknown>) => t.speaker === 'STUDENT'
+    const studentTurns = turns.filter((t) => t.speaker === 'STUDENT');
+
+    const turnReviews = studentTurns.map((t, idx) => {
+      const qPrompt = String(t.questionPrompt || `Câu hỏi chuyên môn ${idx + 1}`);
+      const ansText = String(t.text || '');
+      const evalRes = evaluateCandidateAnswerQuality(
+        ansText,
+        existingInterview.jdRawText,
+        qPrompt
+      );
+      const score = typeof t.score === 'number' ? t.score : evalRes.score;
+      const feedback = typeof t.feedback === 'string' ? t.feedback : evalRes.feedback;
+      return {
+        turnNumber: idx + 1,
+        question: qPrompt,
+        candidateAnswer: ansText,
+        score,
+        feedback,
+      };
+    });
+
+    const avgTurnScore =
+      turnReviews.length > 0
+        ? Math.round(
+            turnReviews.reduce((acc, r) => acc + r.score, 0) / turnReviews.length
+          )
+        : 45;
+
+    const completionFactor = Math.min(1, turnReviews.length / 3);
+    const overallScore = Math.max(
+      35,
+      Math.min(96, Math.round(avgTurnScore * (0.75 + 0.25 * completionFactor)))
+    );
+    const technicalAccuracy = avgTurnScore;
+    const projectDepthScore = turnReviews[0]?.score ?? overallScore;
+    const communicationScore = Math.min(
+      96,
+      Math.max(40, overallScore + (turnReviews.length >= 3 ? 2 : -5))
     );
 
-    const avgLen =
-      studentTurns.length > 0
-        ? studentTurns.reduce(
-            (acc: number, t: Record<string, unknown>) => acc + String(t.text || '').length,
-            0
-          ) / studentTurns.length
-        : 0;
+    let aiSummaryFeedback = '';
+    try {
+      const geminiSummary = await generateGeminiText({
+        systemInstruction:
+          'Bạn là Chuyên gia Tuyển dụng Kỹ thuật. Viết 2 câu nhận xét ngắn gọn, khách quan bằng tiếng Việt dựa trên câu trả lời thực tế của ứng viên.',
+        prompt:
+          `Vị trí: ${existingInterview.targetRole} (${existingInterview.targetLevel})\n` +
+          turnReviews
+            .map((r) => `Câu ${r.turnNumber}: ${r.question}\nTrả lời: ${r.candidateAnswer}`)
+            .join('\n\n'),
+        temperature: 0.2,
+        timeoutMs: 4000,
+      });
+      if (geminiSummary) aiSummaryFeedback = geminiSummary;
+    } catch {
+      // Fallback to deterministic strengths & improvements
+    }
 
-    const baseScore = Math.min(95, Math.max(70, Math.round(72 + Math.min(20, avgLen / 12))));
     const evaluationReport = {
-      overallScore: baseScore,
-      projectDepthScore: Math.min(98, baseScore + 3),
-      communicationScore: Math.max(68, baseScore - 2),
-      technicalAccuracy: baseScore,
-      strengths: [
-        'Nắm vững kiến trúc kỹ thuật của dự án trong hồ sơ năng lực.',
-        'Trình bày giải pháp rõ ràng, có tư duy xử lý bất đồng bộ và bảo mật dữ liệu.',
-      ],
-      improvements: [
-        'Cần nêu chi tiết hơn các chỉ số giám sát hiệu năng hệ thống trong môi trường thực tế.',
-      ],
+      overallScore,
+      projectDepthScore,
+      communicationScore,
+      technicalAccuracy,
+      verdict:
+        overallScore >= 80
+          ? 'STRONG_FIT'
+          : overallScore >= 65
+            ? 'POTENTIAL_FIT'
+            : 'NEEDS_PRACTICE',
+      summaryFeedback: aiSummaryFeedback || undefined,
+      turnReviews,
+      strengths:
+        overallScore >= 75
+          ? [
+              `Hoàn thành ${turnReviews.length} lượt phỏng vấn chuyên môn sát với vị trí ${existingInterview.targetRole}.`,
+              'Nắm được luồng thiết kế hệ thống và các từ khóa kỹ thuật trọng tâm của JD.',
+            ]
+          : [
+              `Đã tham gia trả lời ${turnReviews.length} câu hỏi phỏng vấn cho vị trí ${existingInterview.targetRole}.`,
+            ],
+      improvements:
+        overallScore >= 85
+          ? ['Tiếp tục bổ sung thêm các tình huống xử lý sự cố quy mô lớn và tối ưu chi phí vận hành.']
+          : [
+              'Trình bày câu trả lời theo cấu trúc STAR (Bối cảnh -> Giải pháp kỹ thuật -> Chỉ số đo lường cụ thể).',
+              'Ôn tập kỹ hơn các học phần chuyên sâu liên quan trực tiếp tới từ khóa còn thiếu trong JD.',
+            ],
     };
 
     const now = new Date();
@@ -810,7 +1412,28 @@ profileRouter.post('/interviews/:interviewId/complete', requireAuth, async (req,
 // 5.7 DELETE /interviews/:interviewId (Abort incomplete interview without deducting credits)
 profileRouter.delete('/interviews/:interviewId', requireAuth, async (req, res, next) => {
   try {
+    const accountId = req.user!.id;
     const interviewId = Number(req.params.interviewId);
+
+    const [interview] = await db
+      .select()
+      .from(mockInterviews)
+      .where(eq(mockInterviews.id, interviewId))
+      .limit(1);
+
+    if (!interview) {
+      res.status(404).json({ code: 'INTERVIEW_NOT_FOUND', message: 'Không tìm thấy phiên phỏng vấn' });
+      return;
+    }
+
+    if (Number(interview.accountId) !== Number(accountId)) {
+      res.status(403).json({
+        code: 'FORBIDDEN_INTERVIEW_OWNER',
+        message: 'Bạn không có quyền xóa phiên phỏng vấn của người khác',
+      });
+      return;
+    }
+
     await db.delete(mockInterviews).where(eq(mockInterviews.id, interviewId));
 
     res.json({

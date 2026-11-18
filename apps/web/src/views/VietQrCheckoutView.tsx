@@ -33,11 +33,14 @@ export const VietQrCheckoutView: React.FC<{ cohortCode: string }> = ({ cohortCod
     role,
   } = useAcademy();
 
-  const targetCohort =
-    cohorts.find((c) => c.code.toLowerCase() === cohortCode.toLowerCase()) ?? cohorts[0];
+  const targetCohort = cohorts.find(
+    (c) =>
+      c.code.toLowerCase() === cohortCode.toLowerCase() ||
+      String(c.id) === String(cohortCode)
+  );
   const course = targetCohort
-    ? courses.find((cr) => cr.id === targetCohort.courseId) ?? courses[0]
-    : courses[0];
+    ? courses.find((cr) => cr.id === targetCohort.courseId)
+    : undefined;
 
   const [paymentState, setPaymentState] = useState<'WAITING' | 'SUCCESS' | 'EXPIRED'>('WAITING');
   const [secondsLeft, setSecondsLeft] = useState<number>(900);

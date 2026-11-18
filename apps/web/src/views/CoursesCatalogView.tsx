@@ -32,8 +32,6 @@ function getCategoryFallbackIcon(cat: CourseCategoryItem) {
   return Database;
 }
 
-const TARGET_SKILLS = ['Python', 'Trợ lý AI', 'RAG', 'Node.js', 'SQL'];
-
 const DIFFICULTY_LABELS: Record<
   number,
   { label: string; shortLabel: string; colorClass: string }
@@ -62,6 +60,7 @@ export const CoursesCatalogView: React.FC = () => {
   const {
     courses: contextCourses,
     categories: contextCategories,
+    skills: contextSkills,
     cohorts,
     navigate,
     searchQueryGlobal,
@@ -76,10 +75,19 @@ export const CoursesCatalogView: React.FC = () => {
 
   const { data: apiCategories } = useAsyncData(() => catalogApi.getCategories(), []);
   const { data: apiAllCourses } = useAsyncData(() => catalogApi.getCourses(), []);
+  const { data: apiSkills } = useAsyncData(() => catalogApi.getSkills(), []);
 
   const courses = apiAllCourses && apiAllCourses.length > 0 ? apiAllCourses : contextCourses;
   const rawCategoryList =
     apiCategories && apiCategories.length > 0 ? apiCategories : contextCategories;
+  const targetSkillNames = useMemo(() => {
+    const sourceSkills = apiSkills && apiSkills.length > 0 ? apiSkills : contextSkills;
+    const fromDb = Array.from(new Set(sourceSkills.map((s) => s.name).filter(Boolean)));
+    if (fromDb.length > 0) return fromDb.slice(0, 10);
+    return Array.from(
+      new Set(courses.flatMap((c) => c.skills.map((s) => s.name)).filter(Boolean))
+    ).slice(0, 10);
+  }, [apiSkills, contextSkills, courses]);
 
   const realCategories = useMemo(
     () => rawCategoryList.filter((cat) => !isAllCategoryItem(cat)),
@@ -354,7 +362,7 @@ export const CoursesCatalogView: React.FC = () => {
               Kỹ năng
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {TARGET_SKILLS.map((skill) => {
+              {targetSkillNames.map((skill) => {
                 const active = selectedSkill === skill;
                 return (
                   <button

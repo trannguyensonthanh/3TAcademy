@@ -7,6 +7,7 @@ import {
   CohortMaterial,
   UpcomingTaskItem,
   OrderReceipt,
+  Notification,
 } from '../types/domain';
 import { QuizEvaluationOutput } from '../utils/academyLogic';
 
@@ -15,6 +16,8 @@ export interface StudentDashboardSummaryResponse {
   resumeSession: ClassSession | null;
   upcomingTasks: UpcomingTaskItem[];
   streakDays: number;
+  sessions?: ClassSession[];
+  notifications?: Notification[];
   attemptTrend?: {
     label: string;
     subLabel?: string;
@@ -180,6 +183,38 @@ export const learningApi = {
       method: 'GET',
     }),
 
+  markNotificationRead: (notificationId: string) =>
+    httpRequest<{ id: string; isRead: boolean; readAt: string }>(
+      `/me/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'PATCH' }
+    ),
+
+  markAllNotificationsRead: () =>
+    httpRequest<{ success: boolean; readAt: string }>('/me/notifications/read-all', {
+      method: 'POST',
+    }),
+
+  submitCohortReview: (cohortId: string, rating: number, comment: string) =>
+    httpRequest<{ id: string; rating: number; comment: string; createdAt: string }>(
+      `/cohorts/${encodeURIComponent(cohortId)}/reviews`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ rating, comment }),
+      }
+    ),
+
+  presignLiveRecordingUpload: (sessionId: string, contentType?: string) =>
+    httpRequest<{
+      sessionId?: string;
+      objectKey: string;
+      presignedUploadUrl?: string | null;
+      uploadUrl?: string | null;
+      publicUrl: string;
+    }>(`/live/sessions/${encodeURIComponent(sessionId)}/recording/presign`, {
+      method: 'POST',
+      body: JSON.stringify({ contentType }),
+    }),
+
   getMyEnrollments: () =>
     httpRequest<{ enrolledCohortIds: string[]; cohorts: Cohort[]; receipts: OrderReceipt[] }>(
       '/me/enrollments',
@@ -207,18 +242,29 @@ export const learningApi = {
       { method: 'GET' }
     ),
 
-  updateVideoProgress: (sessionId: string, lastPositionSec: number, completed?: boolean) =>
+  updateVideoProgress: (
+    sessionId: string,
+    lastPositionSec: number,
+    completed?: boolean,
+    durationSeconds?: number
+  ) =>
     httpRequest<{
       sessionId: string;
       lastPositionSec: number;
+      maxWatchedSec?: number;
+      durationSeconds?: number;
       isCompleted?: boolean;
       savedAt: string;
       updatedSession?: ClassSession;
     }>(`/sessions/${encodeURIComponent(sessionId)}/progress`, {
       method: 'PUT',
-      body: JSON.stringify(
-        completed !== undefined ? { lastPositionSec, completed } : { lastPositionSec }
-      ),
+      body: JSON.stringify({
+        lastPositionSec,
+        ...(completed !== undefined ? { completed } : {}),
+        ...(typeof durationSeconds === 'number' && durationSeconds > 0
+          ? { durationSeconds: Math.round(durationSeconds) }
+          : {}),
+      }),
     }),
 
   submitSessionQuiz: (sessionId: string, answers: number[]) =>

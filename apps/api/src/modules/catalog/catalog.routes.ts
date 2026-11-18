@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { eq, or, desc } from 'drizzle-orm';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import {
   categories,
   courses,
   cohorts,
+  classSessions,
   skills,
   courseSkills,
   courseReviews,
@@ -22,6 +24,7 @@ import {
 import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/auth.js';
 import { askCareerAdvisorRag } from '../../integrations/ragAi.service.js';
+import { env } from '../../config/env.js';
 import {
   formatScheduleLabels,
   buildInstructorStaffMap,
@@ -34,12 +37,14 @@ const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
   'ai-llm-engineering': 'Trí tuệ nhân tạo & AI',
   'ai & llm engineering': 'Trí tuệ nhân tạo & AI',
   'ai & dữ liệu': 'Trí tuệ nhân tạo & AI',
+  'software-system-architecture': 'Lập trình Backend & Hệ thống',
   'backend-system-architecture': 'Lập trình Backend & Hệ thống',
   'backend & system architecture': 'Lập trình Backend & Hệ thống',
   'kỹ thuật phần mềm & cloud': 'Lập trình Backend & Hệ thống',
   'data-engineering-analytics': 'Kỹ thuật Dữ liệu',
   'data engineering & analytics': 'Kỹ thuật Dữ liệu',
   'phân tích dữ liệu': 'Kỹ thuật Dữ liệu',
+  'core-programming-sql': 'Lập trình Nền tảng',
   'foundational-programming': 'Lập trình Nền tảng',
   'foundational programming': 'Lập trình Nền tảng',
 };
@@ -79,7 +84,6 @@ async function ensureCatalogConsistency(): Promise<void> {
   if (catalogConsistencySynced) return;
   try {
     const allCats = await db.select().from(categories);
-
     for (const cat of allCats) {
       const expectedName = humanizeCategoryName(cat.slug, cat.name);
       if (expectedName && cat.name !== expectedName) {
@@ -89,7 +93,6 @@ async function ensureCatalogConsistency(): Promise<void> {
           .where(eq(categories.id, cat.id));
       }
     }
-
     catalogConsistencySynced = true;
   } catch {
     // Non-fatal fallback
@@ -103,6 +106,94 @@ const ALL_CATEGORY_TOKENS = new Set([
   'tất cả chuyên ngành',
   'tất cả khóa học',
 ]);
+
+// 2.0 GET /catalog/summary — Real public stats & instructors for HomeView (eliminates hardcodes!)
+catalogRouter.get('/catalog/summary', async (_req, res, next) => {
+  try {
+    const [
+      allPublishedCourses,
+      allCohorts,
+      allSessions,
+      allEnrollments,
+      allReviews,
+      allInstructors,
+      allProfiles,
+      allAccounts,
+    ] = await Promise.all([
+      db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
+      db.select().from(cohorts),
+      db.select().from(classSessions),
+      db.select().from(enrollments),
+      db.select().from(courseReviews).where(eq(courseReviews.isPublic, true)),
+      db.select().from(instructorProfiles),
+      db.select().from(userProfiles),
+      db.select().from(accounts),
+    ]);
+
+    const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
+    const accountMap = new Map(allAccounts.map((a) => [a.id, a]));
+
+    const activeEnrollments = allEnrollments.filter((e) => e.status !== 'REVOKED');
+    const uniqueStudents = new Set(activeEnrollments.map((e) => e.accountId)).size;
+    const avgRating =
+      allReviews.length > 0
+        ? Number(
+            (allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length).toFixed(1)
+          )
+        : 0;
+
+    const avgSessionsPerCohort =
+      allCohorts.length > 0
+        ? Math.round(allSessions.length / allCohorts.length)
+        : 6;
+
+    const instructors = allInstructors
+      .filter((inst) => accountMap.get(inst.accountId)?.status === 'ACTIVE')
+      .map((inst) => {
+        const prof = profileMap.get(inst.accountId);
+        const cv = (prof?.cvParsedData ?? {}) as Record<string, unknown>;
+        const summaryBio = inst.expertiseSummaryMd || prof?.bio || '';
+        return {
+          id: String(inst.accountId),
+          fullName: prof?.fullName || '',
+          headline: inst.headline,
+          organization: inst.organization || 'Học viện Công nghệ 3T Academy',
+          yearsOfExperience: inst.yearsOfExperience || 0,
+          expertiseSummaryMd: summaryBio,
+          bio: summaryBio,
+          avatarUrl: prof?.avatarUrl || '',
+          skills: Array.isArray(cv.skills) ? (cv.skills as string[]) : [],
+          socialLinks: inst.socialLinks || {},
+        };
+      });
+
+    const openingOrActiveCohortsCount = allCohorts.filter(
+      (c) => c.status === 'OPENING' || c.status === 'ONGOING'
+    ).length;
+
+    res.json({
+      stats: {
+        publishedCoursesCount: allPublishedCourses.length,
+        openingOrActiveCohortsCount,
+        enrolledStudentsCount: uniqueStudents,
+        instructorsCount: instructors.length,
+        averageRating: avgRating,
+        reviewsCount: allReviews.length,
+        sessionsPerCourse: avgSessionsPerCohort,
+      },
+      publishedCoursesCount: allPublishedCourses.length,
+      activeCohortsCount: openingOrActiveCohortsCount,
+      sessionsPerCourse: avgSessionsPerCohort,
+      totalEnrolledStudents: uniqueStudents,
+      totalEnrollments: activeEnrollments.length,
+      reviewCount: allReviews.length,
+      ratingAvg: avgRating,
+      instructors,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // 2.1 GET /categories
 catalogRouter.get('/categories', async (_req, res, next) => {
@@ -181,16 +272,23 @@ catalogRouter.get('/courses', async (req, res, next) => {
     const { q, categoryId, category, level } = req.query;
     const categoryFilter = categoryId || category;
 
-    const [allCats, allCourses, allCohorts, allReviews, allSkills, allCourseSkills, getStaffForInstructor] =
-      await Promise.all([
-        db.select().from(categories),
-        db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
-        db.select().from(cohorts),
-        db.select().from(courseReviews),
-        db.select().from(skills),
-        db.select().from(courseSkills),
-        buildInstructorStaffMap(),
-      ]);
+    const [
+      allCats,
+      allCourses,
+      allCohorts,
+      allReviews,
+      allSkills,
+      allCourseSkills,
+      getStaffForInstructor,
+    ] = await Promise.all([
+      db.select().from(categories),
+      db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
+      db.select().from(cohorts),
+      db.select().from(courseReviews).where(eq(courseReviews.isPublic, true)),
+      db.select().from(skills),
+      db.select().from(courseSkills),
+      buildInstructorStaffMap(),
+    ]);
 
     const catMap = new Map(allCats.map((c) => [c.id, c]));
     const skillMap = new Map(allSkills.map((s) => [s.id, s]));
@@ -269,7 +367,8 @@ catalogRouter.get('/courses', async (req, res, next) => {
         courseCohorts[0];
       const syllabus = Array.isArray(c.syllabusTemplate) ? c.syllabusTemplate : [];
       const durationWeeks = syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0;
-      const totalHours = syllabus.length * 3;
+      const totalHours = syllabus.length * 2;
+      const categoryObj = catMap.get(c.categoryId);
 
       const mappedSkills = allCourseSkills
         .filter((cs) => cs.courseId === c.id)
@@ -291,7 +390,8 @@ catalogRouter.get('/courses', async (req, res, next) => {
         slug: c.slug,
         title: c.title,
         categoryId: c.categoryId,
-        category: humanizeCategoryName(catMap.get(c.categoryId)?.slug, catMap.get(c.categoryId)?.name || ''),
+        categorySlug: categoryObj?.slug || '',
+        category: humanizeCategoryName(categoryObj?.slug, categoryObj?.name || ''),
         shortDescription: c.shortDescription,
         descriptionMd: c.descriptionMd,
         thumbnailUrl: c.thumbnailUrl,
@@ -310,6 +410,7 @@ catalogRouter.get('/courses', async (req, res, next) => {
         cohorts: courseCohorts.map((ch) => {
           const staffInfo = getStaffForInstructor(ch.instructorId);
           const labels = formatScheduleLabels(ch.scheduleSlots || []);
+          const maxSeats = ch.maxSeats ?? 35;
           return {
             id: String(ch.id),
             courseId: String(c.id),
@@ -322,6 +423,8 @@ catalogRouter.get('/courses', async (req, res, next) => {
             curriculumVersion: ch.curriculumVersion,
             techStackNotes: ch.techStackNotes,
             tuitionVnd: ch.tuitionVnd,
+            maxSeats,
+            seatsRemaining: Math.max(0, maxSeats - ch.enrolledCount),
             enrolledCount: ch.enrolledCount,
             enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
             startDate: ch.startDate,
@@ -405,6 +508,7 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
         id: courseReviews.id,
         rating: courseReviews.rating,
         comment: courseReviews.comment,
+        isPublic: courseReviews.isPublic,
         createdAt: courseReviews.createdAt,
         studentName: userProfiles.fullName,
         avatarUrl: userProfiles.avatarUrl,
@@ -413,12 +517,17 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       .innerJoin(userProfiles, eq(courseReviews.accountId, userProfiles.accountId))
       .where(eq(courseReviews.courseId, course.id));
 
+    const publicReviews = reviews.filter((r) => r.isPublic);
     const syllabus = Array.isArray(course.syllabusTemplate) ? course.syllabusTemplate : [];
     const totalWeeks = syllabus.length > 0 ? Math.ceil(syllabus.length / 2) : 0;
-    const totalHours = syllabus.length * 3;
+    const totalHours = syllabus.length * 2;
     const ratingAvg =
-      reviews.length > 0
-        ? Number((reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1))
+      publicReviews.length > 0
+        ? Number(
+            (
+              publicReviews.reduce((acc, r) => acc + r.rating, 0) / publicReviews.length
+            ).toFixed(1)
+          )
         : 0;
 
     const mappedSkills = cSkills.map((s) => ({
@@ -432,6 +541,7 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
     const mappedCohorts = courseCohorts.map((ch) => {
       const staffInfo = getStaffForInstructor(ch.instructorId);
       const labels = formatScheduleLabels(ch.scheduleSlots || []);
+      const maxSeats = ch.maxSeats ?? 35;
       return {
         id: String(ch.id),
         courseId: String(course.id),
@@ -444,6 +554,8 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
         curriculumVersion: ch.curriculumVersion,
         techStackNotes: ch.techStackNotes,
         tuitionVnd: ch.tuitionVnd,
+        maxSeats,
+        seatsRemaining: Math.max(0, maxSeats - ch.enrolledCount),
         enrolledCount: ch.enrolledCount,
         enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
         startDate: ch.startDate,
@@ -462,6 +574,7 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       id: String(course.id),
       slug: course.slug,
       title: course.title,
+      categorySlug: category?.slug || '',
       category: humanizeCategoryName(category?.slug, category?.name || ''),
       shortDescription: course.shortDescription,
       descriptionMd: course.descriptionMd,
@@ -471,8 +584,8 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
       totalHours,
       ratingAvg,
       rating: ratingAvg,
-      reviewCount: reviews.length,
-      reviewsCount: reviews.length,
+      reviewCount: publicReviews.length,
+      reviewsCount: publicReviews.length,
       syllabusTemplate: syllabus,
       skills: mappedSkills,
     };
@@ -487,7 +600,7 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
         sessionsPerWeek: 2,
         modules: syllabus,
       },
-      reviews: reviews.map((r) => ({
+      reviews: publicReviews.map((r) => ({
         id: String(r.id),
         rating: r.rating,
         comment: r.comment,
@@ -511,13 +624,13 @@ catalogRouter.get('/cohorts', async (_req, res, next) => {
       buildInstructorStaffMap(),
     ]);
     const allCohorts = sortCohortsByPriority(rawCohorts);
-
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
 
     const formatted = allCohorts.map((ch) => {
       const course = courseMap.get(ch.courseId);
       const staffInfo = getStaffForInstructor(ch.instructorId);
       const labels = formatScheduleLabels(ch.scheduleSlots || []);
+      const maxSeats = ch.maxSeats ?? 35;
 
       return {
         id: String(ch.id),
@@ -531,6 +644,8 @@ catalogRouter.get('/cohorts', async (_req, res, next) => {
         curriculumVersion: ch.curriculumVersion,
         techStackNotes: ch.techStackNotes,
         tuitionVnd: ch.tuitionVnd,
+        maxSeats,
+        seatsRemaining: Math.max(0, maxSeats - ch.enrolledCount),
         enrolledCount: ch.enrolledCount,
         enrollmentOpenAt: ch.enrollmentOpenAt.toISOString(),
         startDate: ch.startDate,
@@ -556,37 +671,37 @@ const DEFAULT_ACADEMY_FAQS = [
     id: 'faq-1',
     question: 'Hình thức học tại 3T Academy là học trực tiếp cùng giảng viên hay xem video thu sẵn?',
     answer:
-      'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các buổi tối cố định trong tuần (2 buổi/tuần). Sau mỗi buổi học, bản ghi hình chất lượng cao kèm phụ đề và tài liệu sẽ được cập nhật trên hệ thống để bạn chủ động ôn tập lại bất cứ lúc nào.',
+      'Tại 3T Academy, bạn học trực tuyến tương tác trực tiếp (Live) cùng giảng viên vào các buổi cố định trong tuần (2 buổi/tuần). Sau mỗi buổi học, bản ghi MP4 chất lượng cao kèm phụ đề và tài liệu được cập nhật để bạn chủ động ôn tập lại bất cứ lúc nào.',
   },
   {
     id: 'faq-2',
     question: 'Nếu hôm đó mình bận việc đột xuất không vào lớp kịp thì có bị mất bài không?',
     answer:
-      'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải slide và mã nguồn thực hành. Trong lúc tự ôn bài, nếu có đoạn nào chưa rõ, bạn có thể hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích cặn kẽ theo đúng mốc thời gian giảng viên đã giảng.',
+      'Hoàn toàn không. Ngay sau khi ca học kết thúc, bạn có thể xem lại toàn bộ video bài giảng, tải slide và hỏi trực tiếp Trợ giảng AI ngay cạnh khung video để được giải thích theo đúng mốc thời gian giảng viên đã giảng.',
   },
   {
     id: 'faq-3',
     question: 'Mình mới bắt đầu hoặc trái ngành thì nên chọn khóa học nào trước?',
     answer:
-      'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố lại nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI. Sau khi nắm vững tư duy viết code Python và truy vấn cơ sở dữ liệu PostgreSQL, bạn có thể học tiếp lên các khóa chuyên sâu về Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
+      'Nếu bạn mới làm quen với lập trình hoặc muốn củng cố nền tảng, bạn nên bắt đầu từ khóa Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI, sau đó tiến lên các khóa chuyên sâu Kỹ sư AI Thực chiến, Kiến trúc Backend Chuyên sâu hoặc Kỹ sư Dữ liệu Hiện đại.',
   },
   {
     id: 'faq-4',
     question: 'Điều kiện để hoàn thành mỗi buổi học và nhận chứng chỉ tốt nghiệp là gì?',
     answer:
-      'Để đảm bảo chất lượng đầu ra thực chất, mỗi buổi học yêu cầu bạn theo dõi tối thiểu 80% thời lượng bài giảng và làm đạt từ 7.0/10 trở lên bài kiểm tra ngắn (10 câu trắc nghiệm) cuối buổi. Khi hoàn thành đầy đủ các buổi học và vượt qua kỳ thi sát hạch cuối khóa (25 câu), hệ thống sẽ cấp Chứng chỉ tốt nghiệp có mã định danh xác thực trực tuyến.',
+      'Mỗi buổi học được đánh dấu hoàn thành khi bạn làm đạt tối thiểu 70% bài Quiz kiểm tra năng lực cuối buổi. Khi hoàn thành trọn vẹn 6/6 buổi học của đợt học và vượt qua Kỳ thi sát hạch cuối khóa (từ 70% trở lên, tuân thủ quy chế giám sát AI Proctoring), hệ thống tự động cấp Chứng chỉ tốt nghiệp xác thực chữ ký số HMAC và QR trực tuyến.',
   },
   {
     id: 'faq-5',
-    question: 'Tính năng Hồ sơ của tôi (CV) và Luyện phỏng vấn 1-1 hoạt động như thế nào?',
+    question: 'Tính năng Hồ sơ năng lực (CV) và Luyện phỏng vấn 1-1 cùng AI hoạt động như thế nào?',
     answer:
-      'Khi bạn thiết lập hồ sơ ban đầu và hoàn thành các khóa học, toàn bộ thông tin cá nhân, mục tiêu nghề nghiệp, kỹ năng chuyên môn và đồ án bạn đã làm sẽ được đồng bộ vào mục Hồ sơ của tôi để tạo bản CV chuẩn kỹ sư công nghệ. Bạn cũng có thể sử dụng lượt Luyện phỏng vấn 1-1 bằng giọng nói để rà soát độ khớp của CV với vị trí ứng tuyển và tập trả lời phỏng vấn sát thực tế.',
+      'Tài khoản mới đăng ký có mặc định 0 lượt phỏng vấn AI. Ngay khi bạn đăng ký thành công một đợt học chính thức, hệ thống cấp ngay 4 lượt Luyện phỏng vấn giọng nói 1-1 hai vòng (Vòng 1 rà soát CV theo JD, Vòng 2 phỏng vấn chuyên môn cùng AI) và đồng bộ kỹ năng/chứng chỉ đạt được vào Hồ sơ năng lực.',
   },
   {
     id: 'faq-6',
     question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
     answer:
-      'Bạn chỉ cần chọn đợt học phù hợp với lịch cá nhân và bấm Đăng ký đợt học. Hệ thống sẽ hiển thị mã QR chuyển khoản ngân hàng (VietQR) với nội dung tự động. Ngay sau khi hoàn tất chuyển khoản trên ứng dụng ngân hàng, lớp học sẽ được mở khóa tự động chỉ sau vài giây mà không cần chờ duyệt thủ công.',
+      'Bạn chọn đợt học phù hợp và quét mã VietQR trên ứng dụng ngân hàng (10.000đ trên môi trường kiểm thử). Ngay sau khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
   },
 ];
 
@@ -617,7 +732,7 @@ catalogRouter.get('/faqs', async (_req, res, next) => {
           return;
         }
       } catch {
-        // Ignore parse error and fallback to default FAQs
+        // Fallback to default FAQs
       }
     }
 
@@ -628,7 +743,14 @@ catalogRouter.get('/faqs', async (_req, res, next) => {
 });
 
 // Helper to build CertificateRecord objects from DB
-export async function buildCertificateRecords(filterAccountId?: number) {
+export async function buildCertificateRecords(
+  options?: number | { filterAccountId?: number; filterInstructorId?: number }
+) {
+  const filterAccountId =
+    typeof options === 'number' ? options : options?.filterAccountId;
+  const filterInstructorId =
+    typeof options === 'number' ? undefined : options?.filterInstructorId;
+
   const [
     allCerts,
     allEnrollments,
@@ -665,7 +787,15 @@ export async function buildCertificateRecords(filterAccountId?: number) {
   const instMap = new Map(allInst.map((ip) => [ip.accountId, ip]));
   const skillMap = new Map(allSkills.map((s) => [s.id, s]));
 
-  return allCerts.map((cert) => {
+  const filteredCerts = filterInstructorId
+    ? allCerts.filter((cert) => {
+        const enr = enrollmentMap.get(cert.enrollmentId);
+        const ch = enr ? cohortMap.get(enr.cohortId) : undefined;
+        return ch?.instructorId === filterInstructorId;
+      })
+    : allCerts;
+
+  return filteredCerts.map((cert) => {
     const enr = enrollmentMap.get(cert.enrollmentId);
     const cohort = enr ? cohortMap.get(enr.cohortId) : undefined;
     const course = cohort ? courseMap.get(cohort.courseId) : undefined;
@@ -681,13 +811,16 @@ export async function buildCertificateRecords(filterAccountId?: number) {
       ? allAttempts.find(
           (att) => att.assessmentId === finalExam.id && att.accountId === cert.accountId
         )
-      : allAttempts.find((att) => att.accountId === cert.accountId);
+      : undefined;
 
     const rawScorePct = finalAttempt?.scorePct ? Number(finalAttempt.scorePct) : 0;
-    const finalScoreNum =
-      rawScorePct > 10
-        ? Number(rawScorePct.toFixed(1))
-        : Number((rawScorePct * 10).toFixed(1));
+    const finalScoreNum = Number(rawScorePct.toFixed(1));
+
+    const expectedHmac = crypto
+      .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
+      .update(`${cert.enrollmentId}:${cert.accountId}:${cert.certificateCode}`)
+      .digest('hex');
+    const isHmacAuthentic = cert.hmacSignature === expectedHmac;
 
     const userSkills = allSkillStates
       .filter((ss) => ss.accountId === cert.accountId)
@@ -703,6 +836,8 @@ export async function buildCertificateRecords(filterAccountId?: number) {
     return {
       code: cert.certificateCode,
       certificateCode: cert.certificateCode,
+      enrollmentId: cert.enrollmentId,
+      cohortId: cohort ? String(cohort.id) : '',
       accountId: cert.accountId,
       studentEmail: stuAcc?.email || '',
       studentName: stuProf?.fullName || '',
@@ -712,13 +847,15 @@ export async function buildCertificateRecords(filterAccountId?: number) {
       issuedAtIso: cert.issuedAt.toISOString(),
       finalScore: finalScoreNum,
       proctoringIntegrity:
-        finalAttempt?.integrityStatus === 'FLAGGED'
+        finalAttempt?.integrityStatus === 'FLAGGED' ||
+        finalAttempt?.integrityStatus === 'CONFIRMED_CHEAT'
           ? 'FLAGGED'
           : 'VERIFIED_CLEAN_PROCTORING',
       verificationSignature: cert.hmacSignature,
       hmacSignature: cert.hmacSignature,
-      instructorName: instProf?.fullName || '',
-      instructorTitle: instMeta?.headline || '',
+      isHmacAuthentic,
+      instructorName: instProf?.fullName || 'Hội đồng Học thuật 3T Academy',
+      instructorTitle: instMeta?.headline || 'Giảng viên Trưởng Khối Đào tạo',
       isRevoked: Boolean(cert.revokedAt),
       revokedAt: cert.revokedAt ? cert.revokedAt.toLocaleDateString('vi-VN') : undefined,
       revokedReason: cert.revokeReason || undefined,
@@ -729,15 +866,23 @@ export async function buildCertificateRecords(filterAccountId?: number) {
   });
 }
 
-// 2.7 GET /certificates
+// 2.7 GET /certificates — Strict RBAC & Privacy Protection!
+// Guests receive {} (never dump all students' certificates/emails publicly).
 catalogRouter.get('/certificates', optionalAuth, async (req, res, next) => {
   try {
-    const filterAccountId =
-      req.user && req.user.role === 'STUDENT' ? req.user.id : undefined;
+    if (!req.user) {
+      res.json({});
+      return;
+    }
 
-    const records = await buildCertificateRecords(filterAccountId);
+    const records =
+      req.user.role === 'ADMIN'
+        ? await buildCertificateRecords()
+        : req.user.role === 'INSTRUCTOR'
+          ? await buildCertificateRecords({ filterInstructorId: req.user.id })
+          : await buildCertificateRecords({ filterAccountId: req.user.id });
+
     const recordMap: Record<string, (typeof records)[number]> = {};
-
     for (const r of records) {
       recordMap[r.certificateCode] = r;
     }
@@ -748,12 +893,24 @@ catalogRouter.get('/certificates', optionalAuth, async (req, res, next) => {
   }
 });
 
-// 2.8 GET /certificates/verify/:code
+// 2.8 GET /certificates/verify/:code — Public Verification Ledger (employers, students, guests, staff)
 catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, next) => {
   try {
     const rawCode = String(req.params.code || '').trim();
-    const allRecords = await buildCertificateRecords();
+    if (!rawCode) {
+      res.status(200).json({
+        found: false,
+        valid: false,
+        accessDenied: false,
+        isOwner: false,
+        errorCode: 'NOT_FOUND',
+        message: 'Vui lòng nhập mã chứng chỉ cần tra cứu.',
+        certificate: null,
+      });
+      return;
+    }
 
+    const allRecords = await buildCertificateRecords();
     const matched = allRecords.find(
       (r) =>
         r.certificateCode.toLowerCase() === rawCode.toLowerCase() ||
@@ -761,7 +918,7 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
     );
 
     if (!matched) {
-      res.status(404).json({
+      res.status(200).json({
         found: false,
         valid: false,
         accessDenied: false,
@@ -773,30 +930,28 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
       return;
     }
 
-    if (req.user && req.user.role === 'STUDENT' && Number(req.user.id) !== Number(matched.accountId)) {
-      res.json({
-        found: true,
-        valid: false,
-        accessDenied: true,
-        isOwner: false,
-        errorCode: 'FORBIDDEN_OTHER_STUDENT',
-        message: 'Bạn chỉ được phép tra cứu chứng chỉ của chính mình.',
-        certificate: null,
-      });
-      return;
-    }
+    const isOwner = Boolean(req.user && Number(req.user.id) === Number(matched.accountId));
+    const isAdminOrInst =
+      req.user?.role === 'ADMIN' || req.user?.role === 'INSTRUCTOR';
 
-    const isOwner = req.user ? Number(req.user.id) === Number(matched.accountId) : true;
+    const sanitizedCert = {
+      ...matched,
+      studentEmail: isOwner || isAdminOrInst ? matched.studentEmail : '',
+    };
+
+    const isValid = !matched.isRevoked && matched.isHmacAuthentic;
 
     res.json({
       found: true,
-      valid: !matched.isRevoked,
+      valid: isValid,
       accessDenied: false,
       isOwner,
       message: matched.isRevoked
         ? `Chứng chỉ đã bị thu hồi: ${matched.revokeReason || 'Vi phạm quy chế'}`
-        : 'Chứng chỉ hợp lệ được ký số HMAC-SHA256 bởi 3T AI Academy.',
-      certificate: matched,
+        : !matched.isHmacAuthentic
+          ? 'Chữ ký số HMAC của chứng chỉ không khớp với sổ cái gốc.'
+          : 'Chứng chỉ hợp lệ được ký số HMAC-SHA256 bởi 3T AI Academy.',
+      certificate: sanitizedCert,
     });
   } catch (err) {
     next(err);

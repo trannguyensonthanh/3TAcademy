@@ -1,0 +1,7 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:30.870
+ThS. Nguyễn Thu Hà: Chào các bạn học viên khóa Kỹ thuật Dữ liệu tại Ba Tê Academy, cô là Thu Hà. Trong bài giảng này, chúng ta thiết kế đường ống dữ liệu chuẩn Medallion gồm ba tầng Bronze, Silver và Gold. Nhờ tính chất bất biến ở tầng Bronze và cơ chế khử trùng lặp theo khóa định danh ở tầng Silver, hệ thống luôn đảm bảo số liệu báo cáo chính xác ngay cả khi luồng thu thập thử lại nhiều lần.
+
+00:00:30.870 --> 00:00:52.000
+ThS. Nguyễn Thu Hà: Một đường ống dữ liệu tốt không bao giờ đẩy dữ liệu bẩn lên bảng điều khiển của ban giám đốc. Bằng cách đặt các chốt kiểm định tự động về miền giá trị, tỷ lệ rỗng và độ tươi dữ liệu trước khi xuất bản sang tầng Gold, chúng ta phát hiện và cô lập sự cố ngay lập tức.

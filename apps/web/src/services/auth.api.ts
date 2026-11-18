@@ -8,6 +8,9 @@ export interface AuthUserProfile {
   role: AppRole;
   avatarUrl?: string;
   phone?: string;
+  githubUrl?: string;
+  linkedinUrl?: string;
+  preferences?: Record<string, unknown>;
   bio?: string;
   careerGoal?: string;
   interviewCredits?: number;

@@ -51,35 +51,22 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
     return params.get('cohort') || '';
   }, [slug]);
 
-  const { data: detailData } = useAsyncData(
+  const { data: detailData, isLoading: isLoadingDetail } = useAsyncData(
     () => catalogApi.getCourseBySlug(cleanSlug),
     [cleanSlug]
   );
 
-  const fallbackCourse =
-    courses.find((c) => c.slug === cleanSlug) ??
-    courses[0] ?? {
-      id: '',
-      slug: cleanSlug,
-      title: 'Đang tải khóa học...',
-      category: 'Trí tuệ nhân tạo & AI' as const,
-      shortDescription: '',
-      descriptionMd: '',
-      difficultyLevel: 3 as const,
-      ratingAvg: 0,
-      reviewCount: 0,
-      skills: [],
-      syllabusTemplate: [],
-    };
+  const matchedContextCourse = courses.find((c) => c.slug === cleanSlug);
   const course = detailData?.course
     ? {
         ...detailData.course,
         syllabusTemplate:
           detailData.syllabusTemplate?.modules ?? detailData.course.syllabusTemplate ?? [],
       }
-    : fallbackCourse;
+    : matchedContextCourse;
 
   const courseCohorts = React.useMemo(() => {
+    if (!course) return [];
     const raw =
       detailData?.cohorts && detailData.cohorts.length > 0
         ? detailData.cohorts
@@ -89,10 +76,10 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
         s === 'OPENING' ? 1 : s === 'ONGOING' ? 2 : s === 'DRAFT' ? 3 : 4;
       return order(a.status) - order(b.status);
     });
-  }, [detailData?.cohorts, cohorts, course.id]);
+  }, [detailData?.cohorts, cohorts, course]);
 
   const [selectedCohortId, setSelectedCohortId] = useState<string>(
-    courseCohorts[0]?.id ?? cohorts[0]?.id ?? ''
+    courseCohorts[0]?.id ?? ''
   );
 
   React.useEffect(() => {
@@ -117,24 +104,56 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
     }
   }, [courseCohorts, selectedCohortId, requestedCohortCode]);
 
+  if (!course) {
+    return (
+      <div className="max-w-xl mx-auto px-6 py-20 text-center space-y-4">
+        {isLoadingDetail ? (
+          <>
+            <div className="w-8 h-8 rounded-full border-2 border-[#10B981] border-t-transparent animate-spin mx-auto" />
+            <p className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+              Đang tải thông tin khóa học...
+            </p>
+          </>
+        ) : (
+          <>
+            <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto" />
+            <h1 className="text-xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+              Không tìm thấy khóa học ({cleanSlug})
+            </h1>
+            <p className="text-sm text-[#475569] dark:text-[#94A3B8]">
+              Đường dẫn khóa học không tồn tại hoặc khóa học chưa được xuất bản.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate('/courses')}
+              className="px-5 py-2.5 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs font-semibold cursor-pointer"
+            >
+              Quay lại Danh mục Khóa học
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   const selectedCohort =
     courseCohorts.find((c) => String(c.id) === String(selectedCohortId)) ??
     courseCohorts.find((c) => c.status === 'OPENING') ??
-    courseCohorts[0] ??
-    cohorts[0] ?? {
-      id: selectedCohortId,
+    courseCohorts[0] ?? {
+      id: '',
       courseId: course.id,
       instructorId: '',
-      code: '',
-      name: 'Chưa có đợt khai giảng',
+      code: 'CHUA-MO-LOP',
+      name: 'Chưa có đợt khai giảng đang mở',
       curriculumVersion: 'v2026',
-      tuitionVnd: 0,
+      tuitionVnd: 10000,
       enrolledCount: 0,
+      maxSeats: 35,
       enrollmentOpenAt: '',
       startDate: '',
       endDate: '',
       scheduleSlots: [],
-      status: 'OPENING' as const,
+      status: 'CLOSED' as const,
       staff: [],
     };
 
@@ -500,7 +519,8 @@ export const CourseDetailView: React.FC<{ slug: string }> = ({ slug }) => {
             <div className="flex items-center justify-between">
               <span>Sĩ số đã ghi danh:</span>
               <span className="font-mono font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-                {selectedCohort.enrolledCount} học viên
+                {selectedCohort.enrolledCount}
+                {selectedCohort.maxSeats ? `/${selectedCohort.maxSeats}` : ''} học viên
               </span>
             </div>
             <div className="flex items-center justify-between">

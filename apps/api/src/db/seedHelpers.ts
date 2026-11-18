@@ -1,9 +1,13 @@
+import crypto from 'node:crypto';
+
 export interface SeedQuestionBase {
   prompt: string;
   options: [string, string, string, string];
   correctIndex: number;
   explanationMd: string;
   skillId?: number;
+  reviewJumpSec?: number;
+  slidePage?: number;
 }
 
 export interface BuiltQuizItemInput {
@@ -59,6 +63,10 @@ export interface AttemptSeedSpec {
   skillNamesById?: Map<number, string>;
 }
 
+export function sha256Hex(content: string): string {
+  return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 export function makeDeterministicVector(seedNum: number, dims: number): number[] {
   const vec: number[] = [];
   let normSq = 0;
@@ -74,7 +82,7 @@ export function makeDeterministicVector(seedNum: number, dims: number): number[]
 /**
  * Computes a deterministic 1024-dimensional L2-normalized semantic feature-hashing vector
  * from Vietnamese/English text so pgvector Cosine Similarity (`1 - (embedding <=> query_vec)`)
- * accurately ranks relevant knowledge chunks.
+ * accurately ranks relevant knowledge chunks, courses, user goals, and quiz items.
  */
 export function computeSemanticEmbedding1024(text: string, dims = 1024): number[] {
   const vec = new Float64Array(dims);
@@ -133,7 +141,6 @@ export function computeSemanticEmbedding1024(text: string, dims = 1024): number[
   return Array.from(vec, (v) => Number((v / norm).toFixed(6)));
 }
 
-
 function formatMmSs(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const mm = String(Math.floor(s / 60)).padStart(2, '0');
@@ -150,8 +157,13 @@ export function buildSessionQuizItems(
   baseQuestions: SeedQuestionBase[]
 ): BuiltQuizItemInput[] {
   return baseQuestions.map((q, idx) => {
-    const jumpSec = 180 + idx * 240;
-    const endSec = jumpSec + 45;
+    const jumpSec = q.reviewJumpSec ?? 180 + idx * 240;
+    const endSec = jumpSec + 60;
+    const slidePage = q.slidePage ?? 6 + idx * 3;
+    const promptText =
+      sessionOrder > 0
+        ? `Câu ${idx + 1} (Buổi ${sessionOrder} - ${topicTitle}): ${q.prompt}`
+        : `Câu ${idx + 1} (${topicTitle}): ${q.prompt}`;
     return {
       assessmentId,
       skillId: q.skillId ?? (idx % 2 === 0 ? primarySkillId : secondarySkillId),
@@ -160,10 +172,13 @@ export function buildSessionQuizItems(
       points: '10.00',
       promptConfig: {
         number: idx + 1,
-        prompt: `Câu ${idx + 1} (Buổi ${sessionOrder} - ${topicTitle}): ${q.prompt}`,
+        prompt: promptText,
         options: q.options,
-        slideLabel: `Buổi ${sessionOrder} · Slide Trang ${6 + idx * 2}`,
-        scenarioTag: idx % 3 === 0 ? 'Tình huống thực chiến' : 'Kiến thức cốt lõi',
+        slideLabel:
+          sessionOrder > 0
+            ? `Buổi ${sessionOrder} · Slide Trang ${slidePage}`
+            : `Tổng ôn · Slide Trang ${slidePage}`,
+        scenarioTag: idx % 2 === 0 ? 'Tình huống thực chiến' : 'Kiến thức cốt lõi',
       },
       gradingConfig: {
         correctIndex: q.correctIndex,
@@ -172,7 +187,7 @@ export function buildSessionQuizItems(
         reviewSegmentRangeSec: [jumpSec, endSec],
       },
       explanationMd: q.explanationMd,
-      itemEmbedding: makeDeterministicVector(assessmentId * 100 + idx, 1024),
+      itemEmbedding: computeSemanticEmbedding1024(`${q.prompt} ${q.explanationMd}`),
     };
   });
 }
@@ -226,7 +241,7 @@ export function buildAttemptDraftAndAnswerBuilders(spec: AttemptSeedSpec) {
     totalScoreNum += ptsEarned;
 
     if (isWrong && !forceZeroScore) {
-      const jumpSec = gCfg.reviewJumpSec ?? 10;
+      const jumpSec = gCfg.reviewJumpSec ?? 120;
       wrongItems.push({
         id: String(item.id),
         number: pCfg.number ?? item.itemOrder ?? idx + 1,
@@ -239,9 +254,9 @@ export function buildAttemptDraftAndAnswerBuilders(spec: AttemptSeedSpec) {
         correctIndex: correctIdx,
         correctOptionText: options[correctIdx] ?? '',
         explanation: item.explanationMd ?? '',
-        reviewTimestampLabel: gCfg.reviewTimestampLabel ?? '00:10 — 00:25',
+        reviewTimestampLabel: gCfg.reviewTimestampLabel ?? '02:00 — 03:00',
         reviewJumpSec: jumpSec,
-        reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec ?? [jumpSec, jumpSec + 15],
+        reviewSegmentRangeSec: gCfg.reviewSegmentRangeSec ?? [jumpSec, jumpSec + 60],
         slideLabel: pCfg.slideLabel ?? '',
       });
     }
@@ -262,7 +277,11 @@ export function buildAttemptDraftAndAnswerBuilders(spec: AttemptSeedSpec) {
     forceZeroScore || maxPossibleScoreNum <= 0
       ? 0
       : Math.round((totalScoreNum / maxPossibleScoreNum) * 100);
-  const isPassed = !forceZeroScore && integrityStatus !== 'FLAGGED' && integrityStatus !== 'CONFIRMED_CHEAT' && scorePctNum >= passScorePct;
+  const isPassed =
+    !forceZeroScore &&
+    integrityStatus !== 'FLAGGED' &&
+    integrityStatus !== 'CONFIRMED_CHEAT' &&
+    scorePctNum >= passScorePct;
 
   const attemptRow = {
     assessmentId,
@@ -294,16 +313,39 @@ export function buildAttemptDraftAndAnswerBuilders(spec: AttemptSeedSpec) {
 }
 
 export interface SeedAuditInput {
+  accounts?: Array<{
+    id: number;
+    role: string;
+  }>;
   cohorts: Array<{
     id: number;
     code: string;
+    status?: string;
+    maxSeats?: number;
     enrolledCount: number;
     scheduleSlots: Array<{ dayOfWeek: number; startTime: string; endTime: string }>;
+  }>;
+  orders?: Array<{
+    id: number;
+    orderCode: string;
+    accountId: number;
+    cohortId: number;
+    amountVnd: number;
+    status: string;
+    paidAt: Date | null;
+  }>;
+  paymentTransactions?: Array<{
+    id: number;
+    orderId: number | null;
+    amountVnd: number;
+    matchStatus: string;
   }>;
   enrollments: Array<{
     id: number;
     accountId: number;
     cohortId: number;
+    orderId?: number | null;
+    enrolledByAdmin?: number | null;
     status: string;
     finalExamPassed: boolean;
     enrolledAt: Date;
@@ -314,6 +356,7 @@ export interface SeedAuditInput {
     accountId: number;
     certificateCode: string;
     issuedAt: Date;
+    revokedAt?: Date | null;
   }>;
   sessions: Array<{
     id: number;
@@ -344,6 +387,7 @@ export interface SeedAuditInput {
     assessmentId: number;
     skillId: number;
     points: string | number;
+    gradingConfig?: unknown;
   }>;
   attempts: Array<{
     id: number;
@@ -390,21 +434,28 @@ export interface SeedAuditInput {
   }>;
 }
 
-const VALID_PROCTORING_TYPES = new Set([
+export const VALID_PROCTORING_TYPES = new Set([
   'NO_FACE',
   'MULTI_FACE',
   'FACE_MISMATCH',
   'TAB_HIDDEN',
   'FULLSCREEN_EXIT',
+  'PHONE_DETECTED',
 ]);
+
+function getVietnamDayOfWeek(date: Date): number {
+  const ictMs = date.getTime() + 7 * 60 * 60 * 1000;
+  return new Date(ictMs).getUTCDay();
+}
 
 export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
   const errors: string[] = [];
   const cohortMap = new Map(data.cohorts.map((c) => [c.id, c]));
   const sessionMap = new Map(data.sessions.map((s) => [s.id, s]));
   const assessmentMap = new Map(data.assessments.map((a) => [a.id, a]));
+  const accountRoleMap = new Map((data.accounts ?? []).map((a) => [a.id, a.role]));
 
-  // 1. Cohort enrolledCount vs active/completed enrollments
+  // 1. Cohort enrolledCount, maxSeats & status vs session statuses
   for (const cohort of data.cohorts) {
     const actualCount = data.enrollments.filter(
       (e) => e.cohortId === cohort.id && e.status !== 'REVOKED'
@@ -414,17 +465,69 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
         `Cohort ${cohort.code} enrolledCount=${cohort.enrolledCount} does not match actual enrollments=${actualCount}`
       );
     }
+    if (typeof cohort.maxSeats === 'number' && cohort.enrolledCount > cohort.maxSeats) {
+      errors.push(
+        `Cohort ${cohort.code} enrolledCount=${cohort.enrolledCount} exceeds maxSeats=${cohort.maxSeats}`
+      );
+    }
+
+    const cSessions = data.sessions.filter((s) => s.cohortId === cohort.id);
+    if (cohort.status === 'OPENING' && cSessions.some((s) => s.status === 'REPLAY_READY' || s.status === 'LIVE')) {
+      errors.push(`Cohort ${cohort.code} has status=OPENING but already contains LIVE/REPLAY_READY sessions`);
+    }
+    if (cohort.status === 'COMPLETED' && cSessions.some((s) => s.status !== 'REPLAY_READY')) {
+      errors.push(`Cohort ${cohort.code} has status=COMPLETED but not all sessions are REPLAY_READY`);
+    }
   }
 
-  // 2. Session media/subtitle/progress/chunk invariants + weekday check
+  // 2. Orders <-> PaymentTransactions <-> Enrollments invariants
+  if (data.orders && data.paymentTransactions) {
+    const orderMap = new Map(data.orders.map((o) => [o.id, o]));
+    for (const order of data.orders) {
+      const txns = data.paymentTransactions.filter((t) => t.orderId === order.id);
+      if (order.status === 'PAID') {
+        if (!order.paidAt) {
+          errors.push(`Order ${order.orderCode} is PAID but paidAt=null`);
+        }
+        const matchedTxn = txns.find(
+          (t) => t.matchStatus === 'MATCHED' && t.amountVnd >= order.amountVnd
+        );
+        if (!matchedTxn) {
+          errors.push(`Order ${order.orderCode} is PAID without a MATCHED payment >= ${order.amountVnd}`);
+        }
+        const enr = data.enrollments.find(
+          (e) => e.accountId === order.accountId && e.cohortId === order.cohortId
+        );
+        if (!enr) {
+          errors.push(`Order ${order.orderCode} is PAID but missing enrollment for account ${order.accountId}`);
+        }
+      } else {
+        const wrongEnr = data.enrollments.find((e) => e.orderId === order.id);
+        if (wrongEnr) {
+          errors.push(`Enrollment ${wrongEnr.id} references non-PAID order ${order.orderCode} (${order.status})`);
+        }
+      }
+    }
+    for (const enr of data.enrollments) {
+      if (!enr.enrolledByAdmin && enr.orderId !== undefined) {
+        const linkedOrder = enr.orderId ? orderMap.get(enr.orderId) : undefined;
+        if (!linkedOrder || linkedOrder.status !== 'PAID') {
+          errors.push(`Enrollment ${enr.id} has neither enrolledByAdmin nor a PAID order`);
+        }
+      }
+    }
+  }
+
+  // 3. Session media/subtitle/progress/chunk invariants + Vietnam (UTC+7) weekday check
   for (const sess of data.sessions) {
     const cohort = cohortMap.get(sess.cohortId);
     if (cohort && sess.scheduledStart && cohort.scheduleSlots.length > 0) {
+      const ictDay = getVietnamDayOfWeek(sess.scheduledStart);
       const utcDay = sess.scheduledStart.getUTCDay();
       const allowedDays = cohort.scheduleSlots.map((slot) => slot.dayOfWeek);
-      if (!allowedDays.includes(utcDay)) {
+      if (!allowedDays.includes(ictDay) && !allowedDays.includes(utcDay)) {
         errors.push(
-          `Session ${sess.id} (cohort ${cohort.code} order ${sess.sessionOrder}) scheduledStart day=${utcDay} not in scheduleSlots [${allowedDays.join(',')}]`
+          `Session ${sess.id} (cohort ${cohort.code} order ${sess.sessionOrder}) scheduledStart day=${ictDay} not in scheduleSlots [${allowedDays.join(',')}]`
         );
       }
     }
@@ -463,11 +566,23 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
         errors.push(`Session ${sess.id} (REPLAY_READY) is missing session_subtitles`);
       }
     }
+
+    // Verify every session_progress belongs to an enrolled student
+    for (const p of sessProg) {
+      const hasEnrollment = data.enrollments.some(
+        (e) => e.accountId === p.accountId && e.cohortId === sess.cohortId && e.status !== 'REVOKED'
+      );
+      if (!hasEnrollment) {
+        errors.push(
+          `Session progress for account ${p.accountId} on session ${sess.id} lacks active/completed enrollment`
+        );
+      }
+    }
   }
 
-  // 3. Enrollment completion vs certificate consistency
+  // 4. Enrollment completion vs certificate consistency
   for (const enr of data.enrollments) {
-    const cert = data.certificates.find((c) => c.enrollmentId === enr.id);
+    const cert = data.certificates.find((c) => c.enrollmentId === enr.id && !c.revokedAt);
     if (enr.finalExamPassed) {
       if (enr.status !== 'COMPLETED') {
         errors.push(`Enrollment ${enr.id} has finalExamPassed=true but status=${enr.status}`);
@@ -476,7 +591,7 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
         errors.push(`Enrollment ${enr.id} has finalExamPassed=true but completedAt=null`);
       }
       if (!cert) {
-        errors.push(`Enrollment ${enr.id} has finalExamPassed=true but no certificate`);
+        errors.push(`Enrollment ${enr.id} has finalExamPassed=true but no active certificate`);
       } else if (enr.completedAt && cert.issuedAt.getTime() !== enr.completedAt.getTime()) {
         errors.push(
           `Enrollment ${enr.id} completedAt (${enr.completedAt.toISOString()}) !== cert.issuedAt (${cert.issuedAt.toISOString()})`
@@ -487,12 +602,35 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
     }
   }
 
-  // 4. Final exam eligibility & timeline check
+  // 5. Assessment answer-key distribution check (when gradingConfig is provided)
+  for (const ass of data.assessments) {
+    const items = data.assessmentItems.filter((i) => i.assessmentId === ass.id);
+    const indices = items
+      .map((i) => (i.gradingConfig as { correctIndex?: number } | undefined)?.correctIndex)
+      .filter((idx): idx is number => typeof idx === 'number');
+    if (indices.length >= 4) {
+      const uniqueIndices = new Set(indices);
+      if (uniqueIndices.size < 2) {
+        errors.push(
+          `Assessment ${ass.id} has all ${indices.length} items using identical correctIndex=${indices[0]}`
+        );
+      }
+    }
+  }
+
+  // 6. Final exam eligibility & attempt/answers/proctoring/skills invariants
   for (const att of data.attempts) {
     const ass = assessmentMap.get(att.assessmentId);
     if (!ass) {
       errors.push(`Attempt ${att.id} references missing assessment ${att.assessmentId}`);
       continue;
+    }
+
+    const hasEnr = data.enrollments.some(
+      (e) => e.accountId === att.accountId && e.cohortId === ass.cohortId && e.status !== 'REVOKED'
+    );
+    if (!hasEnr) {
+      errors.push(`Attempt ${att.id} by account ${att.accountId} has no enrollment in cohort ${ass.cohortId}`);
     }
 
     const items = data.assessmentItems.filter((i) => i.assessmentId === ass.id);
@@ -521,7 +659,6 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
       }
     }
 
-    // Proctoring risk delta check
     const attEvents = data.proctoringEvents.filter((ev) => ev.attemptId === att.id);
     const sumRisk = attEvents.reduce((acc, ev) => acc + Number(ev.riskDelta ?? 0), 0);
     if (Math.abs(sumRisk - Number(att.totalRiskScore ?? 0)) > 0.01) {
@@ -530,7 +667,6 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
       );
     }
 
-    // Skill coverage check
     const skillSet = new Set(
       data.skillStates.filter((s) => s.accountId === att.accountId).map((s) => s.skillId)
     );
@@ -574,18 +710,18 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
     }
   }
 
-  // 5. Proctoring event type validation
+  // 7. Proctoring event type validation
   for (const ev of data.proctoringEvents) {
     if (!VALID_PROCTORING_TYPES.has(ev.eventType)) {
       errors.push(`Invalid proctoring eventType "${ev.eventType}" on attempt ${ev.attemptId}`);
     }
   }
 
-  // 6. CV updatedAt / extractedAt vs certificate issuedAt
+  // 8. CV updatedAt / extractedAt vs certificate issuedAt
   for (const prof of data.profiles) {
     const cv = prof.cvParsedData || {};
     const awards = Array.isArray(cv.awardsAndCerts) ? cv.awardsAndCerts : [];
-    const userCerts = data.certificates.filter((c) => c.accountId === prof.accountId);
+    const userCerts = data.certificates.filter((c) => c.accountId === prof.accountId && !c.revokedAt);
     const updatedStr = typeof cv.updatedAt === 'string' ? cv.updatedAt : null;
     const extractedStr = typeof cv.extractedAt === 'string' ? cv.extractedAt : null;
 
@@ -595,7 +731,7 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
           typeof aw === 'object' &&
           aw !== null &&
           typeof (aw as { dateOrCode?: unknown }).dateOrCode === 'string' &&
-          ((aw as { dateOrCode: string }).dateOrCode.includes(cert.certificateCode))
+          (aw as { dateOrCode: string }).dateOrCode.includes(cert.certificateCode)
       );
       if (mentioned) {
         if (updatedStr && new Date(updatedStr).getTime() < cert.issuedAt.getTime()) {
@@ -612,18 +748,26 @@ export function findSeedConsistencyViolations(data: SeedAuditInput): string[] {
     }
   }
 
-  // 7. Interview credits accounting for students
-  const enrolledAccountIds = new Set(data.enrollments.map((e) => e.accountId));
+  // 9. Interview credits accounting:
+  //    Default 0 on registration, +4 per non-revoked course enrollment, -1 per COMPLETED mock interview (0 for ADMIN/INSTRUCTOR).
   for (const prof of data.profiles) {
-    if (!enrolledAccountIds.has(prof.accountId)) continue;
-    const certsCount = data.certificates.filter((c) => c.accountId === prof.accountId).length;
+    const role = accountRoleMap.get(prof.accountId) ?? 'STUDENT';
+    if (role !== 'STUDENT') {
+      if (prof.interviewCredits !== 0) {
+        errors.push(`Non-student account ${prof.accountId} (${role}) must have interviewCredits=0`);
+      }
+      continue;
+    }
+    const activeOrCompletedEnrollments = data.enrollments.filter(
+      (e) => e.accountId === prof.accountId && e.status !== 'REVOKED'
+    ).length;
     const completedMockCount = data.mockInterviews.filter(
       (m) => m.accountId === prof.accountId && m.status === 'COMPLETED'
     ).length;
-    const expectedCredits = 2 + 4 * certsCount - completedMockCount;
+    const expectedCredits = Math.max(0, 4 * activeOrCompletedEnrollments - completedMockCount);
     if (prof.interviewCredits !== expectedCredits) {
       errors.push(
-        `Account ${prof.accountId} interviewCredits=${prof.interviewCredits} !== expected ${expectedCredits} (2 base + 4*${certsCount} certs - ${completedMockCount} mocks)`
+        `Account ${prof.accountId} interviewCredits=${prof.interviewCredits} !== expected ${expectedCredits} (0 base + 4*${activeOrCompletedEnrollments} enrollments - ${completedMockCount} mocks)`
       );
     }
   }

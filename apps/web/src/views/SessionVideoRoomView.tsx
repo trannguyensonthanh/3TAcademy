@@ -164,21 +164,18 @@ export const SessionVideoRoomView: React.FC<{
     `quiz-${session.id}`;
   const videoUrl = sessionDetail.videoUrl || '';
   const rawTranscriptLines = sessionDetail.transcript ?? [];
-  const sessionAttachments =
-    sessionDetail.attachments && sessionDetail.attachments.length > 0
-      ? sessionDetail.attachments
-      : materials;
+  const sessionAttachments = sessionDetail.attachments ?? [];
+  const quizQuestionCount =
+    sessionDetail.quizSummary?.questionCount || session.quizQuestions.length || 4;
 
   const { data: sessionDiscussions, refetch: refetchDiscussions } = useAsyncQuery(
     () => studentLearningApi.getSessionDiscussions(session.id),
-    sessionDetail.discussions ?? discussions,
+    sessionDetail.discussions ?? [],
     [session.id]
   );
 
   const rawEffectiveDiscussions =
-    sessionDiscussions && sessionDiscussions.length > 0
-      ? sessionDiscussions
-      : sessionDetail.discussions ?? discussions;
+    sessionDiscussions ?? sessionDetail.discussions ?? [];
 
   const querySeekSec = (() => {
     if (typeof window === 'undefined') return null;
@@ -308,11 +305,25 @@ export const SessionVideoRoomView: React.FC<{
     }
   }, [sessionDetail.aiChatHistory]);
 
-  const persistProgress = (sec: number, completed?: boolean) => {
+  const persistProgress = (sec: number, completed?: boolean, explicitDurSec?: number) => {
     const rounded = Math.max(0, Math.floor(sec));
+    const effectiveDur =
+      explicitDurSec && explicitDurSec > 0
+        ? Math.round(explicitDurSec)
+        : actualVideoDurationSec > 0
+        ? Math.round(actualVideoDurationSec)
+        : undefined;
     lastSyncedSecRef.current = rounded;
-    updateWatchSec(session.id, rounded);
-    void studentLearningApi.updateVideoProgress(session.id, rounded, completed);
+    if (completed !== undefined) {
+      void studentLearningApi.updateVideoProgress(
+        session.id,
+        rounded,
+        completed,
+        effectiveDur
+      );
+    } else {
+      updateWatchSec(session.id, rounded, effectiveDur);
+    }
   };
 
   const handleJumpToSecond = async (sec: number, labelInfo?: string) => {
@@ -577,7 +588,7 @@ export const SessionVideoRoomView: React.FC<{
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold cursor-pointer"
           >
             <Award className="w-3.5 h-3.5" />
-            <span>Làm bài kiểm tra buổi học (10 câu A, B, C, D)</span>
+            <span>Làm bài kiểm tra buổi học ({quizQuestionCount} câu A, B, C, D)</span>
           </button>
         </div>
       </div>
@@ -612,6 +623,9 @@ export const SessionVideoRoomView: React.FC<{
             onDurationChange={(dur) => {
               if (dur > 0) {
                 setActualVideoDurationSec(dur);
+                if (Math.abs((session.durationSeconds || 0) - dur) >= 2) {
+                  persistProgress(currentSec, undefined, dur);
+                }
               }
             }}
             onTimeUpdate={(sec, dur) => {
@@ -619,17 +633,18 @@ export const SessionVideoRoomView: React.FC<{
               if (dur > 0 && dur !== actualVideoDurationSec) {
                 setActualVideoDurationSec(dur);
               }
-              if (Math.abs(sec - lastSyncedSecRef.current) >= 10) {
-                persistProgress(sec);
+              if (Math.abs(sec - lastSyncedSecRef.current) >= 5) {
+                persistProgress(sec, undefined, dur > 0 ? dur : undefined);
               }
             }}
-            onPauseSave={(sec) => {
+            onPauseSave={(sec, dur) => {
               if (sec > 0 && sec !== lastSyncedSecRef.current) {
-                persistProgress(sec);
+                persistProgress(sec, undefined, dur > 0 ? dur : undefined);
               }
             }}
             onEnded={(dur) => {
-              persistProgress(dur > 0 ? dur : currentSec);
+              const endPos = dur > 0 ? dur : Math.max(currentSec, actualVideoDurationSec);
+              persistProgress(endPos, undefined, dur > 0 ? dur : undefined);
             }}
             onJumpChapter={(sec, labelTitle) => {
               setCurrentSec(sec);
@@ -639,18 +654,18 @@ export const SessionVideoRoomView: React.FC<{
             }}
           />
 
-          {/* 2. THẺ "BÀI TẬP MỞ KHÓA BUỔI HỌC" (ĐẶT NGAY DƯỚI VIDEO — 10 CÂU TRẮC NGHIỆM A, B, C, D) */}
+          {/* 2. THẺ "BÀI TẬP MỞ KHÓA BUỔI HỌC" */}
           <div className="rounded-2xl bg-white dark:bg-[#111A15] border-2 border-[#10B981] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-5 shadow-xs">
             <div className="space-y-2 max-w-xl">
               <div className="inline-flex items-center gap-2 text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
                 <Award className="w-4 h-4 text-[#10B981]" />
-                <span>BÀI TẬP MỞ KHÓA BUỔI HỌC · 10 CÂU TRẮC NGHIỆM 4 ĐÁP ÁN (A, B, C, D)</span>
+                <span>BÀI TẬP MỞ KHÓA BUỔI HỌC · {quizQuestionCount} CÂU TRẮC NGHIỆM (A, B, C, D)</span>
               </div>
               <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                Hoàn thành 10 câu trắc nghiệm ngắn để ghi nhận hoàn tất Buổi {session.sessionOrder}
+                Hoàn thành {quizQuestionCount} câu trắc nghiệm (&ge; 70%) để ghi nhận hoàn tất Buổi {session.sessionOrder}
               </h2>
               <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                Bạn hãy hoàn thành bài kiểm tra ngắn (10 câu) bên dưới để hệ thống ghi nhận bạn đã nắm vững và hoàn tất buổi học này nhé!
+                Bạn hãy hoàn thành bài kiểm tra ngắn ({quizQuestionCount} câu) bên dưới để hệ thống ghi nhận bạn đã nắm vững và hoàn tất buổi học này nhé!
               </p>
             </div>
 
@@ -660,7 +675,7 @@ export const SessionVideoRoomView: React.FC<{
                   <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 text-xs font-bold">
                     <CheckCircle2 className="w-4 h-4 text-[#10B981]" />
                     <span>
-                      Đã hoàn thành buổi học — Đạt {((session.quizScore ?? 80) / 10).toFixed(1)}/10 điểm
+                      Đã hoàn thành buổi học — Đạt {((session.quizScore ?? 100) / 10).toFixed(1)}/10 điểm
                     </span>
                   </span>
                   <div className="flex items-center gap-2">
@@ -678,7 +693,7 @@ export const SessionVideoRoomView: React.FC<{
                       onClick={() => navigate(`/app/assessments/${quizAssessmentId}`)}
                       className="px-3.5 py-2 rounded-lg bg-[#10B981] text-white text-xs font-semibold cursor-pointer"
                     >
-                      Làm lại bài kiểm tra (10 câu)
+                      Làm lại bài kiểm tra ({quizQuestionCount} câu)
                     </button>
                   </div>
                 </>
@@ -689,7 +704,7 @@ export const SessionVideoRoomView: React.FC<{
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
                 >
                   <Award className="w-4 h-4" />
-                  <span>Làm bài kiểm tra buổi học (10 câu)</span>
+                  <span>Làm bài kiểm tra buổi học ({quizQuestionCount} câu)</span>
                 </button>
               )}
             </div>

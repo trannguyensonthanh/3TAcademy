@@ -56,7 +56,8 @@ export const FloatingAdvisorChatWidget: React.FC = () => {
   if (
     currentPath === '/advisor' ||
     currentPath.startsWith('/live/') ||
-    currentPath.startsWith('/app/sessions/') ||
+    currentPath.includes('/sessions/') ||
+    currentPath.startsWith('/app/assessments/') ||
     currentPath.startsWith('/app/exams/') ||
     currentPath.startsWith('/app/quizzes/')
   ) {

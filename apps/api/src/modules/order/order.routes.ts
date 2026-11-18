@@ -9,6 +9,7 @@ import {
   cohorts,
   courses,
   notifications,
+  userProfiles,
 } from '../../db/schema/index.js';
 import { requireAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
@@ -37,6 +38,14 @@ const createOrderSchema = z.object({
   idempotencyKey: z.string().optional(),
   forceNew: z.boolean().optional(),
 });
+
+function extractBankNameFromTxn(rawPayload: unknown): string {
+  if (rawPayload && typeof rawPayload === 'object') {
+    const gw = (rawPayload as Record<string, unknown>).gateway;
+    if (typeof gw === 'string' && gw.trim()) return gw.trim();
+  }
+  return env.SEPAY_BANK_NAME;
+}
 
 function buildOrderQrResponse(
   order: {
@@ -76,22 +85,24 @@ function buildOrderQrResponse(
   };
 }
 
-// Helper function to fulfill order payment in an ACID transaction
-async function fulfillOrderPayment(
+/**
+ * Atomically fulfills an order payment in an ACID transaction with row-level locking (`FOR UPDATE`),
+ * rejects 0-VND or insufficient transfers (`AMOUNT_MISMATCH`), increments `cohorts.enrolledCount`
+ * only on genuinely new enrollment, and grants `+4` AI Mock Interview credits upon enrollment!
+ */
+export async function fulfillOrderPayment(
   orderCode: string,
   gatewayTxnId: string,
   transferAmount: number,
   rawPayload: Record<string, unknown>
 ) {
-  let [order] = await db
+  let [candidateOrder] = await db
     .select()
     .from(orders)
     .where(eq(orders.orderCode, orderCode))
     .limit(1);
 
-  if (!order) {
-    // Fallback: check if any existing orderCode is a prefix of extracted orderCode
-    // or appears in rawPayload content/description (handles bank-appended suffixes like -CHUYEN)
+  if (!candidateOrder) {
     const recentOrders = await db
       .select()
       .from(orders)
@@ -102,62 +113,64 @@ async function fulfillOrderPayment(
       rawPayload.content || rawPayload.description || rawPayload.code || orderCode || ''
     ).toUpperCase();
 
-    order = recentOrders.find((candidate) => {
+    candidateOrder = recentOrders.find((candidate) => {
       const candidateCode = candidate.orderCode.toUpperCase();
       return (
-        orderCode.toUpperCase().startsWith(candidateCode) ||
-        rawText.includes(candidateCode)
+        orderCode.toUpperCase().startsWith(candidateCode) || rawText.includes(candidateCode)
       );
     });
   }
 
-  if (!order) return null;
-  const matchedOrder = order;
+  if (!candidateOrder) return null;
 
   const [cohort] = await db
     .select()
     .from(cohorts)
-    .where(eq(cohorts.id, matchedOrder.cohortId))
+    .where(eq(cohorts.id, candidateOrder.cohortId))
     .limit(1);
 
   const [course] = cohort
     ? await db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1)
     : [];
 
-  const effectiveAmount = transferAmount > 0 ? transferAmount : matchedOrder.amountVnd;
-  if (effectiveAmount < matchedOrder.amountVnd) {
-    const [existingTxn] = await db
-      .select()
-      .from(paymentTransactions)
-      .where(eq(paymentTransactions.gatewayTxnId, gatewayTxnId))
-      .limit(1);
+  // CRITICAL FIX: Never substitute order.amountVnd when transferAmount <= 0!
+  const effectiveAmount = Math.max(0, Math.floor(Number(transferAmount) || 0));
 
-    if (existingTxn) {
-      await db
-        .update(paymentTransactions)
-        .set({
-          orderId: matchedOrder.id,
+  if (effectiveAmount <= 0 || effectiveAmount < candidateOrder.amountVnd) {
+    await db.transaction(async (tx) => {
+      const [existingTxn] = await tx
+        .select()
+        .from(paymentTransactions)
+        .where(eq(paymentTransactions.gatewayTxnId, gatewayTxnId))
+        .limit(1);
+
+      if (existingTxn) {
+        await tx
+          .update(paymentTransactions)
+          .set({
+            orderId: candidateOrder!.id,
+            amountVnd: effectiveAmount,
+            responseCode: 'AMOUNT_MISMATCH',
+            rawPayload,
+            matchStatus: 'AMOUNT_MISMATCH',
+          })
+          .where(eq(paymentTransactions.id, existingTxn.id));
+      } else {
+        await tx.insert(paymentTransactions).values({
+          orderId: candidateOrder!.id,
+          gateway: 'SEPAY_VIETQR',
+          gatewayTxnId,
           amountVnd: effectiveAmount,
           responseCode: 'AMOUNT_MISMATCH',
           rawPayload,
           matchStatus: 'AMOUNT_MISMATCH',
-        })
-        .where(eq(paymentTransactions.id, existingTxn.id));
-    } else {
-      await db.insert(paymentTransactions).values({
-        orderId: matchedOrder.id,
-        gateway: 'SEPAY_VIETQR',
-        gatewayTxnId,
-        amountVnd: effectiveAmount,
-        responseCode: 'AMOUNT_MISMATCH',
-        rawPayload,
-        matchStatus: 'AMOUNT_MISMATCH',
-      });
-    }
+        });
+      }
+    });
 
     return {
       matchStatus: 'AMOUNT_MISMATCH' as const,
-      order: matchedOrder,
+      order: candidateOrder,
       cohort,
       course,
       paidAt: null,
@@ -165,9 +178,28 @@ async function fulfillOrderPayment(
     };
   }
 
-  const paidAt = matchedOrder.paidAt || new Date();
+  let finalPaidAt = candidateOrder.paidAt || new Date();
+  let finalOrder = candidateOrder;
 
   await db.transaction(async (tx) => {
+    // Acquire pessimistic row lock on the order row inside transaction when supported
+    try {
+      if (typeof (tx as { execute?: unknown }).execute === 'function') {
+        await tx.execute(sql`SELECT id FROM orders WHERE id = ${candidateOrder!.id} FOR UPDATE`);
+      }
+    } catch {
+      // Ignore in lightweight unit test mocks
+    }
+
+    const [lockedOrder] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, candidateOrder!.id))
+      .limit(1);
+
+    const activeOrder = lockedOrder || candidateOrder!;
+    finalPaidAt = activeOrder.paidAt || new Date();
+
     const [existingTxn] = await tx
       .select()
       .from(paymentTransactions)
@@ -178,7 +210,7 @@ async function fulfillOrderPayment(
       await tx
         .update(paymentTransactions)
         .set({
-          orderId: matchedOrder.id,
+          orderId: activeOrder.id,
           amountVnd: effectiveAmount,
           responseCode: '00',
           rawPayload,
@@ -187,7 +219,7 @@ async function fulfillOrderPayment(
         .where(eq(paymentTransactions.id, existingTxn.id));
     } else {
       await tx.insert(paymentTransactions).values({
-        orderId: matchedOrder.id,
+        orderId: activeOrder.id,
         gateway: 'SEPAY_VIETQR',
         gatewayTxnId,
         amountVnd: effectiveAmount,
@@ -197,11 +229,12 @@ async function fulfillOrderPayment(
       });
     }
 
-    if (matchedOrder.status !== 'PAID') {
+    const wasAlreadyPaid = activeOrder.status === 'PAID';
+    if (!wasAlreadyPaid) {
       await tx
         .update(orders)
-        .set({ status: 'PAID', paidAt })
-        .where(eq(orders.id, matchedOrder.id));
+        .set({ status: 'PAID', paidAt: finalPaidAt })
+        .where(eq(orders.id, activeOrder.id));
     }
 
     const [existingEnrollment] = await tx
@@ -209,67 +242,75 @@ async function fulfillOrderPayment(
       .from(enrollments)
       .where(
         and(
-          eq(enrollments.accountId, matchedOrder.accountId),
-          eq(enrollments.cohortId, matchedOrder.cohortId)
+          eq(enrollments.accountId, activeOrder.accountId),
+          eq(enrollments.cohortId, activeOrder.cohortId)
         )
       )
       .limit(1);
 
+    const isNewlyActivated = !existingEnrollment || existingEnrollment.status === 'REVOKED';
+
     await tx
       .insert(enrollments)
       .values({
-        accountId: matchedOrder.accountId,
-        cohortId: matchedOrder.cohortId,
-        orderId: matchedOrder.id,
-        status: 'ACTIVE',
+        accountId: activeOrder.accountId,
+        cohortId: activeOrder.cohortId,
+        orderId: activeOrder.id,
+        status: existingEnrollment?.status === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE',
       })
       .onConflictDoUpdate({
         target: [enrollments.accountId, enrollments.cohortId],
-        set: { status: 'ACTIVE', orderId: matchedOrder.id },
+        set: {
+          status: existingEnrollment?.status === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE',
+          orderId: activeOrder.id,
+        },
       });
 
-    if (!existingEnrollment) {
+    if (isNewlyActivated) {
       await tx
         .update(cohorts)
         .set({
-          enrolledCount: sql`${cohorts.enrolledCount} + 1`,
+          enrolledCount: sql`(SELECT COUNT(*)::int FROM enrollments WHERE cohort_id = ${activeOrder.cohortId} AND status <> 'REVOKED')`,
           updatedAt: new Date(),
         })
-        .where(eq(cohorts.id, matchedOrder.cohortId));
+        .where(eq(cohorts.id, activeOrder.cohortId));
+
+      await tx
+        .update(userProfiles)
+        .set({
+          interviewCredits: sql`${userProfiles.interviewCredits} + 4`,
+          updatedAt: new Date(),
+        })
+        .where(eq(userProfiles.accountId, activeOrder.accountId));
     }
 
-    if (matchedOrder.status !== 'PAID') {
+    if (!wasAlreadyPaid) {
       await tx.insert(notifications).values({
-        recipientId: matchedOrder.accountId,
+        recipientId: activeOrder.accountId,
         type: 'PAYMENT_CONFIRMED',
-        title: `Thanh toán thành công đơn ${matchedOrder.orderCode}`,
-        body: `Hệ thống SePay đã xác nhận chuyển khoản ${matchedOrder.amountVnd.toLocaleString('vi-VN')}đ. Chào mừng bạn vào đợt học ${cohort?.code || ''}!`,
-        metadata: { orderCode: matchedOrder.orderCode, cohortId: matchedOrder.cohortId },
+        title: `Thanh toán thành công đơn ${activeOrder.orderCode}`,
+        body: `Hệ thống SePay đã xác nhận chuyển khoản ${activeOrder.amountVnd.toLocaleString('vi-VN')}đ. Chào mừng bạn vào đợt học ${cohort?.code || ''} (+4 lượt Luyện phỏng vấn AI)!`,
+        metadata: { orderCode: activeOrder.orderCode, cohortId: activeOrder.cohortId },
       });
     }
-  });
 
-  const paidOrder = {
-    ...matchedOrder,
-    status: 'PAID' as const,
-    paidAt,
-  };
+    finalOrder = {
+      ...activeOrder,
+      status: 'PAID',
+      paidAt: finalPaidAt,
+    };
+  });
 
   return {
     matchStatus: 'MATCHED' as const,
-    order: paidOrder,
+    order: finalOrder,
     cohort,
     course,
-    paidAt,
+    paidAt: finalPaidAt,
     gatewayTxnId,
   };
 }
 
-/**
- * Automatically reconciles any previously unmatched SePay webhook transactions
- * (e.g., where bank transfer descriptions had hyphenated suffixes like `3T436921255-CHUYEN`)
- * and transitions overdue PENDING orders to EXPIRED.
- */
 export async function reconcileUnmatchedSepayTransactions(): Promise<void> {
   try {
     const unmatchedTxns = await db
@@ -281,18 +322,9 @@ export async function reconcileUnmatchedSepayTransactions(): Promise<void> {
     for (const txn of unmatchedTxns) {
       const rawPayload = (txn.rawPayload || {}) as Record<string, unknown>;
       const extracted = extractOrderCodeFromSepayPayload(rawPayload);
-      const fallbackContent = String(
-        rawPayload.content || rawPayload.description || ''
-      ).trim();
-      const candidateCode = extracted || fallbackContent;
-      if (!candidateCode) continue;
+      if (!extracted) continue;
 
-      await fulfillOrderPayment(
-        candidateCode,
-        txn.gatewayTxnId,
-        txn.amountVnd,
-        rawPayload
-      );
+      await fulfillOrderPayment(extracted, txn.gatewayTxnId, txn.amountVnd, rawPayload);
     }
   } catch {
     // Ignore transient reconciliation errors in unit test mocks
@@ -367,7 +399,13 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
       .limit(1);
     const courseTitle = course?.title || cohort.name;
 
-    // Check if user already has a PAID order for this cohort
+    // Check existing enrollment first
+    const [existingEnrollment] = await db
+      .select()
+      .from(enrollments)
+      .where(and(eq(enrollments.accountId, accountId), eq(enrollments.cohortId, cohort.id)))
+      .limit(1);
+
     const userCohortOrders = await db
       .select()
       .from(orders)
@@ -377,30 +415,38 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
 
     const paidOrder = userCohortOrders.find((o) => o.status === 'PAID');
     if (paidOrder) {
-      // Ensure enrollment is active and return the PAID order so checkout UI can show receipt immediately
-      await db
-        .insert(enrollments)
-        .values({
-          accountId,
-          cohortId: cohort.id,
-          orderId: paidOrder.id,
-          status: 'ACTIVE',
-        })
-        .onConflictDoUpdate({
-          target: [enrollments.accountId, enrollments.cohortId],
-          set: { status: 'ACTIVE', orderId: paidOrder.id },
+      if (!existingEnrollment || existingEnrollment.status === 'REVOKED') {
+        await db.transaction(async (tx) => {
+          await tx
+            .insert(enrollments)
+            .values({
+              accountId,
+              cohortId: cohort.id,
+              orderId: paidOrder.id,
+              status: 'ACTIVE',
+            })
+            .onConflictDoUpdate({
+              target: [enrollments.accountId, enrollments.cohortId],
+              set: { status: 'ACTIVE', orderId: paidOrder.id },
+            });
+
+          await tx
+            .update(cohorts)
+            .set({
+              enrolledCount: sql`(SELECT COUNT(*)::int FROM enrollments WHERE cohort_id = ${cohort.id} AND status <> 'REVOKED')`,
+              updatedAt: new Date(),
+            })
+            .where(eq(cohorts.id, cohort.id));
         });
+      }
       res.status(200).json(buildOrderQrResponse(paidOrder, cohort, courseTitle));
       return;
     }
 
-    const [existingEnrollment] = await db
-      .select()
-      .from(enrollments)
-      .where(and(eq(enrollments.accountId, accountId), eq(enrollments.cohortId, cohort.id)))
-      .limit(1);
-
-    if (existingEnrollment && existingEnrollment.status === 'ACTIVE') {
+    if (
+      existingEnrollment &&
+      (existingEnrollment.status === 'ACTIVE' || existingEnrollment.status === 'COMPLETED')
+    ) {
       const message = 'Bạn đã đăng ký đợt học này rồi';
       res.status(409).json({
         success: false,
@@ -415,31 +461,46 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
       return;
     }
 
+    const maxSeats = cohort.maxSeats ?? 35;
+    if (maxSeats > 0 && cohort.enrolledCount >= maxSeats) {
+      const message = `Đợt học ${cohort.code} đã đủ sĩ số tối đa (${maxSeats} học viên). Vui lòng chọn đợt học kế tiếp.`;
+      res.status(409).json({
+        success: false,
+        status: 409,
+        code: 'COHORT_FULL',
+        message,
+        error: {
+          code: 'COHORT_FULL',
+          message,
+        },
+      });
+      return;
+    }
+
     const nowMs = Date.now();
     const ORDER_TTL_MS = 15 * 60 * 1000;
     const MIN_REMAINING_MS = 2 * 60 * 1000;
+    const scopedIdemKey =
+      idempotencyKey && idempotencyKey.trim()
+        ? `${accountId}:${idempotencyKey.trim()}`.slice(0, 100)
+        : null;
 
     if (forceNew) {
-      // Mark any existing PENDING orders for this cohort as EXPIRED before creating a fresh 15-minute order
       for (const ord of userCohortOrders) {
         if (ord.status === 'PENDING') {
-          await db
-            .update(orders)
-            .set({ status: 'EXPIRED' })
-            .where(eq(orders.id, ord.id));
+          await db.update(orders).set({ status: 'EXPIRED' }).where(eq(orders.id, ord.id));
         }
       }
     } else {
-      // Look for an active, non-expired PENDING order for this cohort or idempotencyKey
       let reusableOrder = userCohortOrders.find(
         (o) => o.status === 'PENDING' && o.expiresAt.getTime() > nowMs
       );
 
-      if (!reusableOrder && idempotencyKey) {
+      if (!reusableOrder && scopedIdemKey) {
         const [existingByIdem] = await db
           .select()
           .from(orders)
-          .where(and(eq(orders.accountId, accountId), eq(orders.idempotencyKey, idempotencyKey)))
+          .where(and(eq(orders.accountId, accountId), eq(orders.idempotencyKey, scopedIdemKey)))
           .limit(1);
 
         if (
@@ -453,7 +514,6 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
       }
 
       if (reusableOrder) {
-        // If less than 2 minutes left on the PENDING order, extend it to a fresh 15 minutes
         if (
           reusableOrder.status === 'PENDING' &&
           reusableOrder.expiresAt.getTime() - nowMs < MIN_REMAINING_MS
@@ -476,10 +536,7 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
 
     const orderCode = `3T${Date.now().toString().slice(-8)}${accountId}`;
     const expiresAt = new Date(nowMs + ORDER_TTL_MS);
-    const uniqueIdemKey =
-      idempotencyKey && !forceNew
-        ? `${idempotencyKey}_${orderCode}`
-        : `idem_${orderCode}`;
+    const finalIdemKey = scopedIdemKey && !forceNew ? scopedIdemKey : `idem_${orderCode}`;
 
     const [order] = await db
       .insert(orders)
@@ -489,8 +546,12 @@ orderRouter.post('/orders', requireAuth, validate(createOrderSchema), async (req
         cohortId: cohort.id,
         amountVnd: cohort.tuitionVnd,
         status: 'PENDING',
-        idempotencyKey: uniqueIdemKey,
+        idempotencyKey: finalIdemKey,
         expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: orders.idempotencyKey,
+        set: { expiresAt },
       })
       .returning();
 
@@ -519,7 +580,9 @@ orderRouter.get('/orders/my-history', requireAuth, async (req, res, next) => {
     const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
     const courseMap = new Map(allCourses.map((c) => [c.id, c]));
     const txnByOrderId = new Map(
-      allTxns.filter((t) => t.orderId !== null).map((t) => [t.orderId!, t])
+      allTxns
+        .filter((t) => t.orderId !== null && t.matchStatus === 'MATCHED')
+        .map((t) => [t.orderId!, t])
     );
 
     const receipts = userOrders.map((ord) => {
@@ -533,7 +596,7 @@ orderRouter.get('/orders/my-history', requireAuth, async (req, res, next) => {
         courseTitle: cr?.title || ch?.name || '',
         amountVnd: ord.amountVnd,
         paidAt: paidDate.toLocaleDateString('vi-VN'),
-        bankName: env.SEPAY_BANK_NAME,
+        bankName: extractBankNameFromTxn(tx?.rawPayload),
         transactionRef: tx?.gatewayTxnId || `SEPAY-${ord.orderCode}`,
       };
     });
@@ -544,7 +607,7 @@ orderRouter.get('/orders/my-history', requireAuth, async (req, res, next) => {
   }
 });
 
-// 6.3 GET /orders/:orderCode
+// 6.3 GET /orders/:orderCode (with strict Ownership / Admin check!)
 orderRouter.get('/orders/:orderCode', requireAuth, async (req, res, next) => {
   try {
     await reconcileUnmatchedSepayTransactions();
@@ -570,7 +633,20 @@ orderRouter.get('/orders/:orderCode', requireAuth, async (req, res, next) => {
       return;
     }
 
-    // If this order is not PAID yet, check if another order for the same user & cohort was PAID
+    if (req.user!.role !== 'ADMIN' && Number(order.accountId) !== Number(req.user!.id)) {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'FORBIDDEN_ORDER_ACCESS',
+        message: 'Bạn không có quyền xem đơn hàng của tài khoản khác',
+        error: {
+          code: 'FORBIDDEN_ORDER_ACCESS',
+          message: 'Bạn không có quyền xem đơn hàng của tài khoản khác',
+        },
+      });
+      return;
+    }
+
     if (order.status !== 'PAID') {
       const [paidCohortOrder] = await db
         .select()
@@ -603,6 +679,7 @@ orderRouter.get('/orders/:orderCode', requireAuth, async (req, res, next) => {
       .select()
       .from(paymentTransactions)
       .where(eq(paymentTransactions.orderId, order.id))
+      .orderBy(desc(paymentTransactions.createdAt))
       .limit(1);
 
     const [cohort] = await db
@@ -623,7 +700,7 @@ orderRouter.get('/orders/:orderCode', requireAuth, async (req, res, next) => {
             courseTitle: course?.title || cohort?.name || '',
             amountVnd: order.amountVnd,
             paidAt: (order.paidAt || order.createdAt).toLocaleDateString('vi-VN'),
-            bankName: env.SEPAY_BANK_NAME,
+            bankName: extractBankNameFromTxn(txn?.rawPayload),
             transactionRef: txn?.gatewayTxnId || `SEPAY-${order.orderCode}`,
           }
         : undefined;
@@ -678,7 +755,10 @@ async function handleSepayWebhook(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const transferAmount = Number(payload.transferAmount || payload.amount || 0);
+    const transferAmount = Math.max(
+      0,
+      Math.floor(Number(payload.transferAmount ?? payload.amount ?? 0) || 0)
+    );
     const gatewayTxnId = String(
       payload.id || payload.referenceCode || payload.referenceNumber || `SEPAY_${Date.now()}`
     );
@@ -782,7 +862,7 @@ async function handleSepayWebhook(req: Request, res: Response, next: NextFunctio
         courseTitle: fulfilled.course?.title || fulfilled.cohort?.name || '',
         amountVnd: fulfilled.order.amountVnd,
         paidAt: paidDate.toLocaleDateString('vi-VN'),
-        bankName: env.SEPAY_BANK_NAME,
+        bankName: extractBankNameFromTxn(payload),
         transactionRef: fulfilled.gatewayTxnId,
       },
     });
@@ -791,7 +871,7 @@ async function handleSepayWebhook(req: Request, res: Response, next: NextFunctio
   }
 }
 
-// 6.4 Primary + Backup SePay Webhook Endpoints
+// 6.4 Primary + Backup SePay Webhook Endpoints (works under /api/v1/*, /api/*, and /*)
 const SEPAY_WEBHOOK_PATHS = ['/webhooks/sepay', '/webhooks/sepay/backup', '/sepay/webhook'];
 for (const path of SEPAY_WEBHOOK_PATHS) {
   sepayWebhookRouter.get(path, handleSepayWebhookHealth);

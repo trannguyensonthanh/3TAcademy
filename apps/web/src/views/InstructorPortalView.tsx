@@ -378,14 +378,13 @@ export const InstructorPortalView: React.FC = () => {
       if (scheduleData.materials) {
         setLocalMaterials(scheduleData.materials);
       }
-      if (scheduleData.examReviews && scheduleData.examReviews.length > 0) {
+      if (scheduleData.examReviews) {
         setExamReviews(
           scheduleData.examReviews.map((r) => ({
             ...r,
             studentEmail: r.studentEmail ?? 'hocvien@3t.edu.vn',
-            examTitle:
-              r.examTitle ?? 'Thi cuối khóa Kỹ Sư AI Thực Chiến (25 câu trắc nghiệm)',
-            submittedAt: r.submittedAt ?? 'Hôm nay · 18:45',
+            examTitle: r.examTitle ?? 'Kỳ thi tốt nghiệp cuối khóa (25 câu trắc nghiệm)',
+            submittedAt: r.submittedAt ?? 'Đã nộp bài',
           }))
         );
       }
@@ -957,6 +956,20 @@ export const InstructorPortalView: React.FC = () => {
     setExamReviews((prev) =>
       prev.map((item) => (item.id === reviewId ? { ...item, decision } : item))
     );
+    await refetchSchedule();
+  };
+
+  const handleToggleVerifyThread = async (threadId: string, currentVerified: boolean) => {
+    const nextVerified = !currentVerified;
+    try {
+      await teachApi.verifyDiscussionThread(threadId, nextVerified);
+    } catch {
+      // Optimistic fallback if already updated
+    }
+    setVerifiedThreadIds((prev) => {
+      const cleaned = prev.filter((id) => id !== threadId && id !== `unverify:${threadId}`);
+      return nextVerified ? [...cleaned, threadId] : [...cleaned, `unverify:${threadId}`];
+    });
   };
 
   const combinedMaterials = (() => {
@@ -973,9 +986,12 @@ export const InstructorPortalView: React.FC = () => {
       (m.sessionId && String(m.sessionId) === String(activeSession.id))
   );
 
-  const filteredDiscussions = discussions.filter(
-    (d) => qaCohortFilter === 'ALL' || d.cohortId === qaCohortFilter
-  );
+  const filteredDiscussions = discussions.filter((d) => {
+    if (qaCohortFilter !== 'ALL') {
+      return String(d.cohortId) === String(qaCohortFilter);
+    }
+    return instructorCohortIds.size === 0 || instructorCohortIds.has(String(d.cohortId));
+  });
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row bg-[#F7FBF9] dark:bg-[#090F0C] text-[#0F172A] dark:text-[#ECFDF5]">
@@ -2092,12 +2108,15 @@ export const InstructorPortalView: React.FC = () => {
                       <SessionVideoPlayer
                         src={
                           sessionVideoUrlById[activeSession.id] ||
-                          '/videos/2759484-uhd_3840_2160_30fps.mp4'
+                          (activeSession.videoR2Key?.startsWith('http') ||
+                          activeSession.videoR2Key?.startsWith('/')
+                            ? activeSession.videoR2Key
+                            : '')
                         }
                         title={activeSession.title}
                         compact
                         emptyTitle="Bản ghi buổi học đã lưu trữ"
-                        emptyDescription="Bản ghi chính thức của buổi học đã được lưu trữ cố định."
+                        emptyDescription="Bản ghi chính thức của buổi học đã được khóa cố định (chưa gắn đường dẫn phát trực tiếp trên trình duyệt)."
                       />
 
                       <div className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-start justify-between gap-3 text-xs">
@@ -2236,7 +2255,7 @@ export const InstructorPortalView: React.FC = () => {
                         onChange={(e) => setNewMatUrl(e.target.value)}
                         placeholder={
                           newMatType === 'VIDEO'
-                            ? 'VD: /videos/2759484-uhd_3840_2160_30fps.mp4 hoặc https://.../video-huong-dan-bo-sung.mp4'
+                            ? 'VD: https://.../video-huong-dan-bo-sung.mp4'
                             : 'VD: https://.../tai-lieu-bo-sung.pdf (Để trống nếu tải lên kho lưu trữ mặc định)'
                         }
                         className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] text-xs font-mono"
@@ -2629,9 +2648,15 @@ export const InstructorPortalView: React.FC = () => {
             </div>
 
             <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
+              {filteredDiscussions.length === 0 ? (
+                <div className="p-6 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                  Chưa có câu hỏi thảo luận nào trong phạm vi lớp đang chọn.
+                </div>
+              ) : null}
               {filteredDiscussions.map((thread) => {
                 const isVerified =
-                  thread.verifiedByStaff || verifiedThreadIds.includes(thread.id);
+                  (thread.verifiedByStaff && !verifiedThreadIds.includes(`unverify:${thread.id}`)) ||
+                  verifiedThreadIds.includes(thread.id);
                 return (
                   <div
                     key={thread.id}
@@ -2650,11 +2675,7 @@ export const InstructorPortalView: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={() =>
-                          setVerifiedThreadIds((prev) =>
-                            prev.includes(thread.id) ? prev : [...prev, thread.id]
-                          )
-                        }
+                        onClick={() => void handleToggleVerifyThread(thread.id, isVerified)}
                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-md font-bold cursor-pointer ${
                           isVerified
                             ? 'bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300'
@@ -3716,6 +3737,11 @@ export const InstructorPortalView: React.FC = () => {
                 </span>
               </div>
 
+              {examReviews.length === 0 ? (
+                <div className="p-6 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                  Hiện không có ca thi cuối khóa nào có cảnh báo bất thường từ Camera giám sát.
+                </div>
+              ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {examReviews.map((rev) => (
                   <div
@@ -3785,6 +3811,7 @@ export const InstructorPortalView: React.FC = () => {
                   </div>
                 ))}
               </div>
+              )}
             </div>
           </div>
         )}

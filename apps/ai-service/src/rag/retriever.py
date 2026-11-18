@@ -2,43 +2,88 @@ from typing import Any, Dict, List, Optional
 from ..core.db import get_db_pool
 from .embedder import embed_query_1024, format_pgvector_literal
 
+RRF_K = 60
+
+
+def _fuse_rrf(
+    vector_rows: List[Dict[str, Any]],
+    fts_rows: List[Dict[str, Any]],
+    top_k: int,
+    boost_session_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    by_id: Dict[int, Dict[str, Any]] = {}
+    scores: Dict[int, float] = {}
+
+    for rank, row in enumerate(vector_rows):
+        cid = int(row["id"])
+        by_id[cid] = row
+        scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
+
+    for rank, row in enumerate(fts_rows):
+        cid = int(row["id"])
+        if cid not in by_id:
+            by_id[cid] = row
+        scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
+
+    if boost_session_id is not None:
+        for cid, row in by_id.items():
+            if row.get("session_id") == boost_session_id:
+                scores[cid] = scores.get(cid, 0.0) + 0.008
+
+    ranked_ids = sorted(scores.keys(), key=lambda cid: (-scores[cid], cid))[:top_k]
+    result: List[Dict[str, Any]] = []
+    for cid in ranked_ids:
+        item = dict(by_id[cid])
+        item["rrf_score"] = scores[cid]
+        result.append(item)
+    return result
+
 
 async def retrieve_public_advisor_context(
     question: str, top_k: int = 4
 ) -> Dict[str, Any]:
     """
-    Retrieves ONLY public catalog & FAQ chunks (`visibility = 'PUBLIC'`) using
-    PostgreSQL pgvector cosine distance (`<=>`).
-    Strictly excludes all `ENROLLED_ONLY` paid course lecture chunks.
+    Hybrid RRF retrieval (HNSW cosine index `<=>` + GIN `search_tsv` full-text index)
+    strictly restricted to `visibility = 'PUBLIC'` chunks.
+    Notice `ORDER BY kc.embedding <=> $1::vector ASC` is unwrapped so PostgreSQL uses `idx_chunks_embedding_hnsw`.
     """
     pool = await get_db_pool()
     query_vec = await embed_query_1024(question)
     vec_literal = format_pgvector_literal(query_vec)
 
     async with pool.acquire() as conn:
-        chunk_rows = await conn.fetch(
+        vec_rows = await conn.fetch(
             """
             SELECT
                 kc.id,
                 kc.source_type,
                 kc.course_id,
                 kc.content,
-                CASE
-                    WHEN kc.embedding IS NOT NULL THEN 1 - (kc.embedding <=> $1::vector)
-                    ELSE 0.0
-                END AS similarity
+                1 - (kc.embedding <=> $1::vector) AS similarity
             FROM knowledge_chunks kc
             WHERE kc.visibility = 'PUBLIC'
-            ORDER BY
-                CASE
-                    WHEN kc.embedding IS NOT NULL THEN (kc.embedding <=> $1::vector)
-                    ELSE 1.0
-                END ASC,
-                kc.id ASC
-            LIMIT $2
+              AND kc.embedding IS NOT NULL
+            ORDER BY kc.embedding <=> $1::vector ASC
+            LIMIT 12
             """,
             vec_literal,
-            top_k,
+        )
+
+        fts_rows = await conn.fetch(
+            """
+            SELECT
+                kc.id,
+                kc.source_type,
+                kc.course_id,
+                kc.content,
+                ts_rank_cd(kc.search_tsv, websearch_to_tsquery('simple', $1)) AS similarity
+            FROM knowledge_chunks kc
+            WHERE kc.visibility = 'PUBLIC'
+              AND kc.search_tsv @@ websearch_to_tsquery('simple', $1)
+            ORDER BY ts_rank_cd(kc.search_tsv, websearch_to_tsquery('simple', $1)) DESC
+            LIMIT 12
+            """,
+            question,
         )
 
         course_rows = await conn.fetch(
@@ -59,9 +104,11 @@ async def retrieve_public_advisor_context(
             FROM courses c
             LEFT JOIN cohorts ch ON ch.course_id = c.id AND ch.status IN ('OPENING', 'ONGOING')
             WHERE c.status = 'PUBLISHED'
-            ORDER BY c.id ASC
+            ORDER BY c.id ASC, ch.start_date ASC
             """
         )
+
+    fused = _fuse_rrf([dict(r) for r in vec_rows], [dict(r) for r in fts_rows], top_k)
 
     chunks = [
         {
@@ -69,10 +116,11 @@ async def retrieve_public_advisor_context(
             "sourceType": str(row["source_type"]),
             "courseId": int(row["course_id"]) if row["course_id"] is not None else None,
             "content": str(row["content"]),
-            "similarity": float(row["similarity"] or 0.0),
+            "similarity": float(row.get("similarity") or 0.0),
+            "rrfScore": float(row.get("rrf_score") or 0.0),
             "snippet": str(row["content"])[:160],
         }
-        for row in chunk_rows
+        for row in fused
     ]
 
     catalog_items = [
@@ -105,9 +153,8 @@ async def retrieve_course_scoped_tutor_context(
     top_k: int = 4,
 ) -> Optional[Dict[str, Any]]:
     """
-    Retrieves lecture knowledge chunks strictly isolated to a single paid course:
-      WHERE visibility = 'ENROLLED_ONLY' AND course_id = :current_course_id
-    Never accesses chunks from any other course (`course_id != :current_course_id`).
+    Hybrid RRF retrieval isolated strictly to the student's enrolled course (`visibility = 'ENROLLED_ONLY'`).
+    Uses unwrapped `ORDER BY kc.embedding <=> $3::vector ASC` so PostgreSQL leverages `idx_chunks_embedding_hnsw`.
     """
     pool = await get_db_pool()
     query_vec = await embed_query_1024(question)
@@ -165,7 +212,7 @@ async def retrieve_course_scoped_tutor_context(
             course_id,
         )
 
-        chunk_rows = await conn.fetch(
+        vec_rows = await conn.fetch(
             """
             SELECT
                 kc.id,
@@ -175,35 +222,50 @@ async def retrieve_course_scoped_tutor_context(
                 kc.end_sec,
                 kc.page_number,
                 kc.content,
-                CASE
-                    WHEN kc.embedding IS NOT NULL THEN 1 - (kc.embedding <=> $3::vector)
-                    ELSE 0.0
-                END AS vector_similarity,
-                CASE
-                    WHEN kc.session_id = $4 THEN 0.15
-                    ELSE 0.0
-                END AS session_boost
+                1 - (kc.embedding <=> $3::vector) AS vector_similarity
             FROM knowledge_chunks kc
             WHERE kc.visibility = 'ENROLLED_ONLY'
               AND kc.course_id = $1
               AND (kc.cohort_id = $2 OR kc.cohort_id IS NULL)
-            ORDER BY
-                (
-                    CASE
-                        WHEN kc.embedding IS NOT NULL THEN 1 - (kc.embedding <=> $3::vector)
-                        ELSE 0.0
-                    END
-                    + CASE WHEN kc.session_id = $4 THEN 0.15 ELSE 0.0 END
-                ) DESC,
-                kc.chunk_index ASC
-            LIMIT $5
+              AND kc.embedding IS NOT NULL
+            ORDER BY kc.embedding <=> $3::vector ASC
+            LIMIT 12
             """,
             course_id,
             resolved_cohort_id,
             vec_literal,
-            session_id,
-            top_k,
         )
+
+        fts_rows = await conn.fetch(
+            """
+            SELECT
+                kc.id,
+                kc.session_id,
+                kc.source_type,
+                kc.start_sec,
+                kc.end_sec,
+                kc.page_number,
+                kc.content,
+                ts_rank_cd(kc.search_tsv, websearch_to_tsquery('simple', $3)) AS vector_similarity
+            FROM knowledge_chunks kc
+            WHERE kc.visibility = 'ENROLLED_ONLY'
+              AND kc.course_id = $1
+              AND (kc.cohort_id = $2 OR kc.cohort_id IS NULL)
+              AND kc.search_tsv @@ websearch_to_tsquery('simple', $3)
+            ORDER BY ts_rank_cd(kc.search_tsv, websearch_to_tsquery('simple', $3)) DESC
+            LIMIT 12
+            """,
+            course_id,
+            resolved_cohort_id,
+            question,
+        )
+
+    fused = _fuse_rrf(
+        [dict(r) for r in vec_rows],
+        [dict(r) for r in fts_rows],
+        top_k,
+        boost_session_id=session_id,
+    )
 
     return {
         "courseId": course_id,
@@ -244,9 +306,10 @@ async def retrieve_course_scoped_tutor_context(
                 "endSec": int(r["end_sec"]) if r["end_sec"] is not None else 90,
                 "pageNumber": int(r["page_number"]) if r["page_number"] is not None else 8,
                 "content": str(r["content"]),
-                "similarity": float(r["vector_similarity"] or 0.0) + float(r["session_boost"] or 0.0),
+                "similarity": float(r.get("vector_similarity") or 0.0),
+                "rrfScore": float(r.get("rrf_score") or 0.0),
                 "snippet": str(r["content"])[:180],
             }
-            for r in chunk_rows
+            for r in fused
         ],
     }

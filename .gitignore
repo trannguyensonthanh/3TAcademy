@@ -1,11 +1,13 @@
 # ==============================================================================
 # Gitignore for 3T Academy / EduTech AI Platform Monorepo
+# Architecture: Node.js (Express/TS) + React (Vite/TS) + Python (FastAPI/AI)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
 # Dependencies & Package Managers
 # ------------------------------------------------------------------------------
 node_modules/
+**/node_modules/
 .pnpm-store/
 .yarn/cache/
 .yarn/unplugged/
@@ -14,22 +16,26 @@ node_modules/
 .pnp.*
 
 # ------------------------------------------------------------------------------
-# Logs & Debugging
+# Logs & Process Monitoring
 # ------------------------------------------------------------------------------
 logs/
+**/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+pip-log.txt
 
 # ------------------------------------------------------------------------------
-# Build outputs & Caches (Node / TypeScript / Vite / Next.js)
+# Build Outputs & Compilation Caches (Node / TypeScript / Vite / Next.js)
 # ------------------------------------------------------------------------------
 dist/
+**/dist/
 dist-ssr/
 build/
+**/build/
 out/
 .next/
 .turbo/
@@ -40,22 +46,33 @@ out/
 *.tsbuildinfo
 .eslintcache
 .stylelintcache
+.prettiercache
 .parcel-cache/
 
 # ------------------------------------------------------------------------------
-# Python & AI Service
+# Python & AI Microservice (apps/ai-service)
 # ------------------------------------------------------------------------------
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.dylib
+*.dll
 .Python
+
+# Virtual Environments
 env/
 venv/
 .venv/
 ENV/
 env.bak/
 venv.bak/
+.conda/
+conda/
+miniconda*/
+
+# Python Packaging & Distribution
 develop-eggs/
 downloads/
 eggs/
@@ -69,18 +86,32 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+pip-wheel-metadata/
+
+# Python Testing & Type Checking
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
 .ipynb_checkpoints/
 
 # ------------------------------------------------------------------------------
-# Heavy AI Model Weights, Checkpoints & Datasets (Do NOT commit to Git)
+# Heavy AI Model Weights, Checkpoints & Datasets (CRITICAL: NEVER COMMIT TO GIT)
 # ------------------------------------------------------------------------------
-models_onnx/*.onnx
-!models_onnx/.gitkeep
+# Preserve model directories with .gitkeep / README.md, but ignore all weight files
+apps/ai-service/models/**
+!apps/ai-service/models/**/
+!apps/ai-service/models/**/.gitkeep
+!apps/ai-service/models/**/README.md
+
+apps/ai-service/models_onnx/**
+!apps/ai-service/models_onnx/**/
+!apps/ai-service/models_onnx/**/.gitkeep
+
+# Binary & Serialized Weight Formats across the entire monorepo
 *.onnx
 *.bin
 *.pt
@@ -88,14 +119,22 @@ models_onnx/*.onnx
 *.safetensors
 *.ckpt
 *.h5
+*.hdf5
 *.pb
 *.tflite
-*.tar.gz
+*.engine
+*.npy
+*.npz
+
+# HuggingFace & FastEmbed local download caches
 huggingface/
 .cache/
+**/.cache/
+*.part
+*.crdownload
 
 # ------------------------------------------------------------------------------
-# Environment Variables & Secrets (CRITICAL: NEVER COMMIT)
+# Environment Variables & Secrets (CRITICAL: NEVER COMMIT SECRETS)
 # ------------------------------------------------------------------------------
 .env
 .env.*
@@ -103,6 +142,8 @@ huggingface/
 *.local
 !.env.example
 !**/.env.example
+
+# Cryptographic Keys & Service Accounts
 *.key
 *.pem
 *.cert
@@ -111,14 +152,62 @@ huggingface/
 *.p12
 id_rsa*
 id_ed25519*
+*serviceAccountKey*.json
+*firebase-adminsdk*.json
 
 # ------------------------------------------------------------------------------
-# AI Studio, Gemini & Temporary Agent Artifacts
+# Media, User Uploads, Proctoring Snapshots & Recordings
 # ------------------------------------------------------------------------------
-.aistudio/
-**/.aistudio/
-.gemini/
-.antigravity/
+uploads/
+**/uploads/
+storage/
+**/storage/
+tmp/
+temp/
+*.tmp
+
+# Proctoring camera captures & session recordings
+proctoring_captures/
+proctoring_snapshots/
+exam_snapshots/
+recordings/
+temp_audio/
+temp_video/
+
+# Large media binary files (raw recordings, video dumps)
+*.mov
+*.avi
+*.mkv
+*.flv
+*.wmv
+*.webm
+*.m4v
+*.mp4
+*.wav
+*.flac
+
+# Whitelist official curriculum sample lecture videos and assets
+!apps/web/public/videos/lectures/*.mp4
+!apps/web/public/videos/lectures/*.vtt
+!apps/web/public/videos/lectures/manifest.json
+
+# ------------------------------------------------------------------------------
+# Databases, Local Docker Volumes & Dumps
+# ------------------------------------------------------------------------------
+*.dump
+*.sql.bak
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+postgres_data/
+pgdata/
+redis_data/
+docker-compose.override.yml
+*.override.yml
 
 # ------------------------------------------------------------------------------
 # IDEs & Code Editors
@@ -130,6 +219,10 @@ id_ed25519*
 .idea/
 *.sublime-project
 *.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 *.swp
 *.swo
 *~
@@ -146,17 +239,21 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # ------------------------------------------------------------------------------
-# Testing, Coverage & Reports
+# Testing, Coverage & Browser Reports
 # ------------------------------------------------------------------------------
 coverage/
+**/coverage/
 .nyc_output/
 playwright-report/
 test-results/
 cypress/videos/
 cypress/screenshots/
+lcov.info
 
 # ------------------------------------------------------------------------------
-# Docker & Deployment Overrides
+# AI Agent Workspaces & Temporary Tool Caches
 # ------------------------------------------------------------------------------
-docker-compose.override.yml
-*.override.yml
+.aistudio/
+**/.aistudio/
+.gemini/
+.antigravity/

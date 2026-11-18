@@ -1,11 +1,12 @@
 import { Router } from 'express';
-import { eq, sql, desc } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import { z } from 'zod';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import argon2 from 'argon2';
 import { db } from '../../db/index.js';
 import {
   accounts,
+  accountIdentities,
   userProfiles,
   instructorProfiles,
   categories,
@@ -18,14 +19,17 @@ import {
   orders,
   paymentTransactions,
   enrollments,
+  courseReviews,
   certificates,
   chatSessions,
   chatMessages,
   notifications,
+  assessments,
   assessmentAttempts,
 } from '../../db/schema/index.js';
 import { requireAuth, requireRole } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
+import { computeSemanticEmbedding1024 } from '../../db/seedHelpers.js';
 import { env } from '../../config/env.js';
 import {
   resolveCohort,
@@ -33,10 +37,32 @@ import {
   buildInstructorStaffMap,
 } from '../../db/helpers.js';
 import { buildCertificateRecords } from '../catalog/catalog.routes.js';
+import { computeWeightedCohortScorePct } from '../assessment/skillMasteryModel.js';
 
 export const adminRouter = Router();
 
 adminRouter.use(requireAuth, requireRole(['ADMIN']));
+
+function normalizeAdminDateInput(rawDate?: string | null): string | null {
+  const trimmed = (rawDate || '').trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  // Handle DD/MM/YYYY or DD-MM-YYYY safely (prevents RangeError: Invalid time value!)
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const dd = dmyMatch[1]!.padStart(2, '0');
+    const mm = dmyMatch[2]!.padStart(2, '0');
+    const yyyy = dmyMatch[3]!;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const parsedMs = Date.parse(trimmed);
+  if (!Number.isNaN(parsedMs)) {
+    return new Date(parsedMs).toISOString().slice(0, 10);
+  }
+  return null;
+}
 
 // 8.1 GET /admin/overview
 adminRouter.get('/admin/overview', async (_req, res, next) => {
@@ -52,7 +78,9 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       allEnrollments,
       allSessions,
       allProgress,
+      allAssessments,
       allAttempts,
+      allReviews,
       allChatSessions,
       allChatMsgs,
       allNotifs,
@@ -69,7 +97,9 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       db.select().from(enrollments),
       db.select().from(classSessions),
       db.select().from(sessionProgress),
+      db.select().from(assessments),
       db.select().from(assessmentAttempts),
+      db.select().from(courseReviews).orderBy(desc(courseReviews.createdAt)),
       db.select().from(chatSessions),
       db.select().from(chatMessages).orderBy(desc(chatMessages.createdAt)),
       db.select().from(notifications).orderBy(desc(notifications.createdAt)),
@@ -126,6 +156,8 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       const acc = accountMap.get(enr.accountId);
       const cohort = cohortMap.get(enr.cohortId);
       const cSessions = allSessions.filter((s) => s.cohortId === enr.cohortId);
+      const cAssessments = allAssessments.filter((a) => a.cohortId === enr.cohortId);
+      const cAssIds = new Set(cAssessments.map((a) => a.id));
       const totalSessionsCount = cSessions.length || 1;
       const completedSessionsCount = allProgress.filter(
         (p) =>
@@ -134,13 +166,30 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
           cSessions.some((s) => s.id === p.sessionId)
       ).length;
       const progressPercent = Math.round((completedSessionsCount / totalSessionsCount) * 100);
-      const stuAttempts = allAttempts.filter((a) => a.accountId === enr.accountId && a.scorePct);
-      const avgScorePct =
-        stuAttempts.length > 0
-          ? Math.round(
-              stuAttempts.reduce((sum, a) => sum + Number(a.scorePct), 0) / stuAttempts.length
-            )
-          : 0;
+      const stuCohortAttempts = allAttempts.filter(
+        (a) => a.accountId === enr.accountId && cAssIds.has(a.assessmentId) && a.scorePct !== null
+      );
+      const avgScorePct = computeWeightedCohortScorePct(
+        stuCohortAttempts.map((a) => {
+          const ass = cAssessments.find((item) => item.id === a.assessmentId);
+          const sess = ass?.sessionId
+            ? cSessions.find((s) => s.id === ass.sessionId)
+            : undefined;
+          return {
+            scorePct: Number(a.scorePct),
+            sessionOrder: sess?.sessionOrder ?? null,
+            isFinalExam: ass?.purpose === 'FINAL_EXAM',
+          };
+        }),
+        totalSessionsCount
+      );
+
+      const finalExam = cAssessments.find((a) => a.purpose === 'FINAL_EXAM');
+      const finalExamAttempt = finalExam
+        ? stuCohortAttempts
+            .filter((a) => a.assessmentId === finalExam.id)
+            .sort((a, b) => Number(b.scorePct || 0) - Number(a.scorePct || 0))[0]
+        : undefined;
 
       return {
         id: String(enr.id),
@@ -157,6 +206,8 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
         totalSessionsCount,
         missingQuizzesCount: Math.max(0, totalSessionsCount - completedSessionsCount),
         avgScorePct,
+        finalExamScorePct: finalExamAttempt ? Math.round(Number(finalExamAttempt.scorePct)) : avgScorePct,
+        finalExamIntegrity: finalExamAttempt?.integrityStatus || 'CLEAN',
         finalExamPassed: enr.finalExamPassed,
         dropoutRiskScore: enr.dropoutRiskScore,
         riskLevel: enr.riskLevel as 'LOW' | 'MEDIUM' | 'HIGH',
@@ -175,7 +226,9 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
       const prof = profileMap.get(acc.id);
       const inst = instMap.get(acc.id);
       const cvData = (prof?.cvParsedData ?? {}) as Record<string, unknown>;
-      const phone = typeof cvData.phone === 'string' ? cvData.phone : '';
+      const phone =
+        (prof?.phone && prof.phone.trim()) ||
+        (typeof cvData.phone === 'string' ? cvData.phone : '');
 
       const assignedCohorts =
         acc.role === 'INSTRUCTOR'
@@ -223,13 +276,23 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
     });
 
     const certByEnrollmentId = new Map(allCerts.map((c) => [c.enrollmentId, c]));
+    // Strict Graduation Eligibility: ONLY students who actually passed Final Exam (not 80% progress!)
     const eligibleGraduates = formattedEnrollments
-      .filter((enr) => enr.finalExamPassed || enr.progressPercent >= 80)
+      .filter(
+        (enr) =>
+          enr.status !== 'REVOKED' &&
+          enr.finalExamPassed &&
+          enr.completedSessionsCount >= enr.totalSessionsCount
+      )
       .map((enr) => {
         const existingCert = certByEnrollmentId.get(Number(enr.id));
         const cohort = cohortMap.get(Number(enr.cohortId));
         const course = cohort ? courseMap.get(cohort.courseId) : undefined;
-        const scoreOutOf10 = Number((enr.avgScorePct / 10).toFixed(1));
+        const scoreOutOf10 = Number((enr.finalExamScorePct / 10).toFixed(1));
+        const proctoringStatus =
+          enr.finalExamIntegrity === 'FLAGGED' || enr.finalExamIntegrity === 'CONFIRMED_CHEAT'
+            ? ('FLAGGED' as const)
+            : ('CLEAN' as const);
         return {
           id: enr.id,
           enrollmentId: enr.id,
@@ -240,18 +303,91 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
           completedSessionsText: `${enr.completedSessionsCount}/${enr.totalSessionsCount} buổi`,
           completedSessions: `${enr.completedSessionsCount}/${enr.totalSessionsCount} buổi`,
           finalExamScore: scoreOutOf10,
-          proctoringStatus: 'CLEAN' as const,
-          isIssued: Boolean(existingCert),
+          proctoringStatus,
+          isIssued: Boolean(existingCert && !existingCert.revokedAt),
           issuedCertCode: existingCert?.certificateCode,
           certificateCode: existingCert?.certificateCode,
         };
       });
 
+    // Real Review Aggregation from DB (replaces hardcoded 398 fake reviews in AdminPortalView!)
+    const publicReviews = allReviews.filter((r) => r.isPublic);
+    const totalReviews = publicReviews.length;
+    const avgCourseRating =
+      totalReviews > 0
+        ? Number(
+            (publicReviews.reduce((acc, r) => acc + r.rating, 0) / totalReviews).toFixed(1)
+          )
+        : 0;
+    const ratingDistribution = [5, 4, 3, 2, 1].map((stars) => {
+      const count = publicReviews.filter((r) => r.rating === stars).length;
+      return {
+        stars,
+        count,
+        percent: totalReviews > 0 ? Math.round((count / totalReviews) * 100) : 0,
+      };
+    });
+
+    // Real Tonight Sessions (in Vietnam UTC+7 date)
+    const todayIctStr = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    const todayRawSessions = allSessions.filter((s) => {
+      if (s.status === 'LIVE') return true;
+      if (!s.scheduledStart) return false;
+      const sessIctStr = new Date(s.scheduledStart.getTime() + 7 * 3600 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      return sessIctStr === todayIctStr;
+    });
+    const todaySessions = todayRawSessions.map((s) => {
+      const staffInfo = getStaffForInstructor(s.instructorId);
+      return {
+        id: String(s.id),
+        cohortId: String(s.cohortId),
+        sessionOrder: s.sessionOrder,
+        title: s.title,
+        activityTags: (s.activityTags || []) as string[],
+        hostInstructorName: staffInfo.instructorName,
+        scheduledStart: s.scheduledStart ? s.scheduledStart.toISOString() : '',
+        scheduledEnd: s.scheduledEnd ? s.scheduledEnd.toISOString() : '',
+        status: s.status === 'CANCELED' ? 'SCHEDULED' : s.status,
+        videoR2Key: s.videoR2Key || '',
+        videoProvider: s.videoProvider || 'R2_HLS_AES128',
+        durationSeconds: s.durationSeconds || 7200,
+        isCompleted: false,
+        lastPositionSec: 0,
+        aiSummaryMd: s.aiSummaryMd || '',
+        attachmentsCount: 0,
+        quizStatus: 'NOT_STARTED',
+        quizScore: null,
+        quizQuestions: [],
+        aiCitations: [],
+      };
+    });
+    const fiveStarCount = publicReviews.filter((r) => r.rating === 5).length;
+
     res.json({
       totalRevenueVnd,
       activeCohortsCount: activeCohorts.length,
       totalStudentsCount: studentAccounts.length,
-      issuedCertificatesCount: allCerts.length,
+      issuedCertificatesCount: allCerts.filter((c) => !c.revokedAt).length,
+      todaySessionsCount: todaySessions.length,
+      todaySessions,
+      reviewSummary: {
+        totalReviews,
+        avgRating: avgCourseRating,
+        averageRating: avgCourseRating,
+        fiveStarCount,
+        ratingDistribution,
+        recentReviews: publicReviews.slice(0, 10).map((r) => ({
+          id: String(r.id),
+          courseTitle: courseMap.get(r.courseId)?.title || '',
+          cohortCode: cohortMap.get(r.cohortId)?.code || '',
+          studentName: profileMap.get(r.accountId)?.fullName || 'Học viên',
+          rating: r.rating,
+          comment: r.comment || '',
+          createdAt: r.createdAt.toLocaleDateString('vi-VN'),
+        })),
+      },
       cohorts: formattedCohorts,
       enrollments: formattedEnrollments,
       chatMessages: allChatMsgs.map((m) => {
@@ -313,27 +449,46 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
 // 8.1B GET /admin/sepay-transactions
 adminRouter.get('/admin/sepay-transactions', async (_req, res, next) => {
   try {
-    const [txs, allOrders] = await Promise.all([
+    const [txs, allOrders, allCohorts, allCourses, allProfiles] = await Promise.all([
       db.select().from(paymentTransactions).orderBy(desc(paymentTransactions.createdAt)),
       db.select().from(orders),
+      db.select().from(cohorts),
+      db.select().from(courses),
+      db.select().from(userProfiles),
     ]);
 
     const orderMap = new Map(allOrders.map((o) => [o.id, o]));
+    const cohortMap = new Map(allCohorts.map((c) => [c.id, c]));
+    const courseMap = new Map(allCourses.map((c) => [c.id, c]));
+    const profileMap = new Map(allProfiles.map((p) => [p.accountId, p]));
 
     res.json(
       txs.map((tx) => {
         const ord = tx.orderId ? orderMap.get(tx.orderId) : undefined;
+        const cohort = ord ? cohortMap.get(ord.cohortId) : undefined;
+        const course = cohort ? courseMap.get(cohort.courseId) : undefined;
+        const prof = ord ? profileMap.get(ord.accountId) : undefined;
         const payload = (tx.rawPayload ?? {}) as Record<string, unknown>;
+        const bankName =
+          typeof payload.gateway === 'string' && payload.gateway.trim()
+            ? payload.gateway.trim()
+            : env.SEPAY_BANK_NAME;
         return {
           id: String(tx.id),
           orderId: tx.orderId ? String(tx.orderId) : null,
           orderCode: ord?.orderCode || null,
+          cohortCode: cohort?.code || null,
+          courseTitle: course?.title || cohort?.name || null,
+          studentName: prof?.fullName || null,
+          bankName,
           gateway: 'SEPAY_VIETQR' as const,
           amountVnd: tx.amountVnd,
+          expectedAmountVnd: ord?.amountVnd ?? null,
           transferContent: String(payload.content || payload.transferContent || ord?.orderCode || ''),
           referenceNumber: String(payload.referenceCode || payload.referenceNumber || tx.gatewayTxnId),
           matchStatus: tx.matchStatus as 'MATCHED' | 'UNMATCHED_ORDER' | 'AMOUNT_MISMATCH',
           processedAt: tx.createdAt.toLocaleString('vi-VN'),
+          processedAtIso: tx.createdAt.toISOString(),
         };
       })
     );
@@ -431,14 +586,16 @@ adminRouter.post(
             c.slug.toLowerCase() === catLower ||
             (catLower.includes('ai') && c.slug === 'ai-llm-engineering') ||
             ((catLower.includes('backend') || catLower.includes('cloud') || catLower.includes('hệ thống')) &&
-              c.slug === 'backend-system-architecture') ||
+              (c.slug === 'software-system-architecture' || c.slug === 'backend-system-architecture')) ||
             ((catLower.includes('dữ liệu') || catLower.includes('data')) &&
               c.slug === 'data-engineering-analytics') ||
             ((catLower.includes('nền tảng') || catLower.includes('python')) &&
-              c.slug === 'foundational-programming')
+              (c.slug === 'core-programming-sql' || c.slug === 'foundational-programming'))
         );
         if (matchedCat) {
           resolvedCategoryId = matchedCat.id;
+        } else if (allCats[0]) {
+          resolvedCategoryId = allCats[0].id;
         }
       }
 
@@ -466,6 +623,9 @@ adminRouter.post(
           difficultyLevel,
           syllabusTemplate,
           status: 'PUBLISHED',
+          embedding: computeSemanticEmbedding1024(
+            `${courseTitle} ${shortDescription || ''} ${descriptionMd || ''}`
+          ),
         })
         .returning();
 
@@ -531,6 +691,7 @@ const createCohortSchema = z.object({
   curriculumVersion: z.string().default('v1.0'),
   techStackNotes: z.string().optional(),
   tuitionVnd: z.number().int().min(0),
+  maxSeats: z.number().int().min(1).default(35),
   enrollmentOpenAt: z.string().optional(),
   startDate: z.string(),
   endDate: z.string().optional(),
@@ -550,20 +711,55 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
     const body = req.body;
     const instructorIdNum = Number(body.instructorId) || req.user!.id;
 
+    const normalizedStartDate = normalizeAdminDateInput(body.startDate);
+    if (!normalizedStartDate) {
+      res.status(400).json({
+        success: false,
+        status: 400,
+        code: 'INVALID_START_DATE',
+        message: 'Ngày khai giảng không hợp lệ (hỗ trợ YYYY-MM-DD hoặc DD/MM/YYYY).',
+      });
+      return;
+    }
+
+    const normalizedEndDate =
+      normalizeAdminDateInput(body.endDate) ||
+      new Date(Date.parse(`${normalizedStartDate}T00:00:00Z`) + 28 * 86400000)
+        .toISOString()
+        .slice(0, 10);
+
+    if (normalizedEndDate < normalizedStartDate) {
+      res.status(400).json({
+        success: false,
+        status: 400,
+        code: 'INVALID_DATE_RANGE',
+        message: 'Ngày kết thúc phải sau hoặc bằng ngày khai giảng.',
+      });
+      return;
+    }
+
+    const editingCohort = body.cohortId ? await resolveCohort(body.cohortId) : undefined;
+
     let courseIdNum = Number(body.courseId);
-    let [course] = !Number.isNaN(courseIdNum)
+    let [course] = !Number.isNaN(courseIdNum) && courseIdNum > 0
       ? await db.select().from(courses).where(eq(courses.id, courseIdNum)).limit(1)
       : await db.select().from(courses).where(eq(courses.slug, String(body.courseId))).limit(1);
 
-    if (!course) {
-      const allCourses = await db.select().from(courses).limit(1);
-      course = allCourses[0];
+    if (!course && editingCohort) {
+      [course] = await db
+        .select()
+        .from(courses)
+        .where(eq(courses.id, editingCohort.courseId))
+        .limit(1);
     }
-    courseIdNum = course?.id ?? 1;
-
-    const effectiveEndDate =
-      body.endDate ||
-      new Date(Date.parse(body.startDate) + 42 * 86400000).toISOString().slice(0, 10);
+    if (!course) {
+      res.status(404).json({
+        code: 'COURSE_NOT_FOUND',
+        message: 'Không tìm thấy khóa học để mở lớp.',
+      });
+      return;
+    }
+    courseIdNum = course.id;
 
     const instructorCohorts = await db
       .select()
@@ -571,12 +767,17 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
       .where(eq(cohorts.instructorId, instructorIdNum));
 
     for (const existing of instructorCohorts) {
+      if (editingCohort && existing.id === editingCohort.id) continue;
       if (existing.status === 'COMPLETED' || existing.status === 'ARCHIVED') continue;
       for (const newSlot of body.scheduleSlots) {
         const conflict = (existing.scheduleSlots || []).some(
           (s) => s.dayOfWeek === newSlot.dayOfWeek && s.startTime === newSlot.startTime
         );
-        if (conflict && existing.endDate >= body.startDate && existing.startDate <= effectiveEndDate) {
+        if (
+          conflict &&
+          existing.endDate >= normalizedStartDate &&
+          existing.startDate <= normalizedEndDate
+        ) {
           const message = `Giảng viên đã có lịch dạy trùng vào khung giờ ${newSlot.startTime} - ${newSlot.endTime} tại lớp ${existing.code}`;
           res.status(409).json({
             success: false,
@@ -593,50 +794,190 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
       }
     }
 
+    const typedSlots = body.scheduleSlots as Array<{
+      dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+      startTime: string;
+      endTime: string;
+    }>;
+
+    // If editing an existing cohort, update it cleanly without colliding on unique code!
+    if (editingCohort) {
+      const [updatedCohort] = await db
+        .update(cohorts)
+        .set({
+          courseId: courseIdNum,
+          name: body.name,
+          instructorId: instructorIdNum,
+          curriculumVersion: body.curriculumVersion,
+          techStackNotes: body.techStackNotes,
+          tuitionVnd: body.tuitionVnd,
+          maxSeats: body.maxSeats ?? editingCohort.maxSeats,
+          startDate: normalizedStartDate,
+          endDate: normalizedEndDate,
+          scheduleSlots: typedSlots,
+          updatedAt: new Date(),
+        })
+        .where(eq(cohorts.id, editingCohort.id))
+        .returning();
+
+      const getStaffForInstructor = await buildInstructorStaffMap();
+      const staffInfo = getStaffForInstructor(instructorIdNum);
+      const labels = formatScheduleLabels(updatedCohort!.scheduleSlots || []);
+
+      res.status(200).json({
+        cohortId: String(updatedCohort!.id),
+        code: updatedCohort!.code,
+        status: 'UPDATED',
+        instructorId: String(updatedCohort!.instructorId),
+        curriculumVersion: updatedCohort!.curriculumVersion,
+        scheduleSlots: updatedCohort!.scheduleSlots,
+        cohort: {
+          id: String(updatedCohort!.id),
+          courseId: String(updatedCohort!.courseId),
+          instructorId: String(updatedCohort!.instructorId),
+          courseSlug: course.slug,
+          courseTitle: course.title,
+          code: updatedCohort!.code,
+          name: updatedCohort!.name,
+          status: updatedCohort!.status,
+          curriculumVersion: updatedCohort!.curriculumVersion,
+          techStackNotes: updatedCohort!.techStackNotes,
+          tuitionVnd: updatedCohort!.tuitionVnd,
+          maxSeats: updatedCohort!.maxSeats,
+          enrolledCount: updatedCohort!.enrolledCount,
+          enrollmentOpenAt: updatedCohort!.enrollmentOpenAt.toISOString(),
+          startDate: updatedCohort!.startDate,
+          endDate: updatedCohort!.endDate,
+          scheduleLabel: labels.scheduleLabel,
+          timeRangeLabel: labels.timeRangeLabel,
+          scheduleSlots: updatedCohort!.scheduleSlots || [],
+          instructorName: staffInfo.instructorName,
+          instructorHeadline: staffInfo.instructorHeadline,
+          instructorAvatarUrl: staffInfo.instructorAvatarUrl,
+          staff: staffInfo.staff,
+        },
+      });
+      return;
+    }
+
+    // Check duplicate cohort code
+    const [existingByCode] = await db
+      .select()
+      .from(cohorts)
+      .where(eq(cohorts.code, body.code.trim()))
+      .limit(1);
+    if (existingByCode) {
+      res.status(409).json({
+        code: 'COHORT_CODE_EXISTS',
+        message: `Mã đợt học ${body.code} đã tồn tại trên hệ thống.`,
+      });
+      return;
+    }
+
     const [created] = await db
       .insert(cohorts)
       .values({
         courseId: courseIdNum,
-        code: body.code,
+        code: body.code.trim(),
         name: body.name,
         instructorId: instructorIdNum,
         curriculumVersion: body.curriculumVersion,
         techStackNotes: body.techStackNotes,
         tuitionVnd: body.tuitionVnd,
+        maxSeats: body.maxSeats ?? 35,
         enrollmentOpenAt: body.enrollmentOpenAt ? new Date(body.enrollmentOpenAt) : new Date(),
-        startDate: body.startDate,
-        endDate: effectiveEndDate,
-        scheduleSlots: body.scheduleSlots as Array<{
-          dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
-          startTime: string;
-          endTime: string;
-        }>,
+        startDate: normalizedStartDate,
+        endDate: normalizedEndDate,
+        scheduleSlots: typedSlots,
         status: 'OPENING',
       })
       .returning();
 
-    const syllabus = Array.isArray(course?.syllabusTemplate) ? course.syllabusTemplate : [];
-    for (let idx = 0; idx < syllabus.length; idx++) {
-      const mod = syllabus[idx] as {
+    const syllabus = Array.isArray(course.syllabusTemplate) ? course.syllabusTemplate : [];
+    const sessionCount = syllabus.length > 0 ? syllabus.length : 6;
+    const baseStartMs = Date.parse(`${normalizedStartDate}T00:00:00Z`);
+
+    // Generate concrete scheduledStart/scheduledEnd timestamps aligned with scheduleSlots (ICT UTC+7)
+    const generatedDates: Array<{ start: Date; end: Date }> = [];
+    let cursorDayOffset = 0;
+    while (generatedDates.length < sessionCount && cursorDayOffset < 180) {
+      const dayMs = baseStartMs + cursorDayOffset * 86400000;
+      const d = new Date(dayMs);
+      const dayOfWeek = d.getUTCDay();
+      const slot =
+        typedSlots.find((s) => s.dayOfWeek === dayOfWeek) ||
+        (typedSlots.length === 0 && (dayOfWeek === 2 || dayOfWeek === 5)
+          ? { dayOfWeek, startTime: '19:30', endTime: '21:30' }
+          : undefined);
+      if (slot) {
+        const dateStr = d.toISOString().slice(0, 10);
+        const startDt = new Date(`${dateStr}T${slot.startTime}:00+07:00`);
+        const endDt = new Date(`${dateStr}T${slot.endTime}:00+07:00`);
+        generatedDates.push({ start: startDt, end: endDt });
+      }
+      cursorDayOffset += 1;
+    }
+
+    const insertedSessions = [];
+    for (let idx = 0; idx < sessionCount; idx++) {
+      const mod = (syllabus[idx] || {}) as {
         order?: number;
         title?: string;
         description?: string;
         summary?: string;
         topics?: string[];
       };
-      await db.insert(classSessions).values({
-        cohortId: created!.id,
-        instructorId: instructorIdNum,
-        sessionOrder: mod.order ?? idx + 1,
-        title: mod.title || `Buổi ${idx + 1}`,
-        descriptionMd:
-          mod.summary ||
-          mod.description ||
-          (Array.isArray(mod.topics) ? mod.topics.join(', ') : ''),
-        activityTags: ['THEORY', 'LIVE_CODING'],
-        status: 'SCHEDULED',
-        durationSeconds: 5400,
-      });
+      const ordNum = mod.order ?? idx + 1;
+      const ordPad = String(ordNum).padStart(2, '0');
+      const dtPair = generatedDates[idx];
+      const [sess] = await db
+        .insert(classSessions)
+        .values({
+          cohortId: created!.id,
+          instructorId: instructorIdNum,
+          sessionOrder: ordNum,
+          title: mod.title || `Buổi ${ordNum}: Chuyên đề thực hành`,
+          descriptionMd:
+            mod.summary ||
+            mod.description ||
+            (Array.isArray(mod.topics) ? mod.topics.join(', ') : ''),
+          scheduledStart: dtPair?.start ?? null,
+          scheduledEnd: dtPair?.end ?? null,
+          livekitRoomName: `${created!.code.toLowerCase()}-s${ordPad}`,
+          activityTags: ['THEORY', 'LIVE_CODING'],
+          status: 'SCHEDULED',
+          durationSeconds: null,
+        })
+        .returning();
+      if (sess) insertedSessions.push(sess);
+    }
+
+    // Create DRAFT session quizzes + DRAFT Final Exam so the new cohort is 100% assessment-ready!
+    if (insertedSessions.length > 0) {
+      await db.insert(assessments).values([
+        ...insertedSessions.map((sess) => ({
+          cohortId: created!.id,
+          sessionId: sess.id,
+          purpose: 'SESSION_ASSIGNMENT' as const,
+          gradingMode: 'AUTO' as const,
+          title: `Bài kiểm tra Buổi ${sess.sessionOrder}: ${sess.title}`,
+          durationMinutes: 15,
+          passScorePct: 70,
+          maxAttempts: 5,
+          status: 'DRAFT' as const,
+        })),
+        {
+          cohortId: created!.id,
+          sessionId: null,
+          purpose: 'FINAL_EXAM' as const,
+          gradingMode: 'AUTO' as const,
+          title: `Kỳ thi Sát hạch Tốt nghiệp: ${course.title} (${created!.code})`,
+          durationMinutes: 45,
+          passScorePct: 70,
+          maxAttempts: 3,
+          status: 'DRAFT' as const,
+        },
+      ]);
     }
 
     const getStaffForInstructor = await buildInstructorStaffMap();
@@ -834,7 +1175,7 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
     }
 
     const passwordHash = await argon2.hash(password);
-    const defaultCredits = interviewCredits ?? (role === 'STUDENT' ? 2 : 0);
+    const defaultCredits = interviewCredits ?? 0;
     const expYears = instructorYearsOfExperience ?? yearsOfExperience ?? 5;
     const expSummary = instructorExpertiseSummaryMd || expertiseSummaryMd || '';
 
@@ -850,9 +1191,17 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
         })
         .returning();
 
+      await tx.insert(accountIdentities).values({
+        accountId: acc!.id,
+        provider: 'LOCAL',
+        providerUid: `local-${normalizedEmail}`,
+        providerEmail: normalizedEmail,
+      });
+
       await tx.insert(userProfiles).values({
         accountId: acc!.id,
         fullName,
+        phone: phone || null,
         avatarUrl: reqAvatarUrl || null,
         bio:
           bio ||
@@ -985,11 +1334,18 @@ adminRouter.post(
             })
             .returning();
 
+          await tx.insert(accountIdentities).values({
+            accountId: createdAcc!.id,
+            provider: 'LOCAL',
+            providerUid: `local-${normalizedEmail}`,
+            providerEmail: normalizedEmail,
+          });
+
           await tx.insert(userProfiles).values({
             accountId: createdAcc!.id,
             fullName: studentName,
             bio: 'Học viên tại 3T AI Academy',
-            interviewCredits: 2,
+            interviewCredits: 0,
             cvParsedData: {
               fullName: studentName,
               email: normalizedEmail,
@@ -1007,27 +1363,53 @@ adminRouter.post(
       }
 
       const [enrollment] = await db.transaction(async (tx) => {
+        const [existingEnr] = await tx
+          .select()
+          .from(enrollments)
+          .where(
+            and(
+              eq(enrollments.accountId, account!.id),
+              eq(enrollments.cohortId, cohort.id)
+            )
+          )
+          .limit(1);
+
+        const isNewlyEnrolled = !existingEnr || existingEnr.status === 'REVOKED';
+
         const [enr] = await tx
           .insert(enrollments)
           .values({
             accountId: account!.id,
             cohortId: cohort.id,
             enrolledByAdmin: req.user!.id,
-            status: 'ACTIVE',
+            status: existingEnr?.status === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE',
           })
           .onConflictDoUpdate({
             target: [enrollments.accountId, enrollments.cohortId],
-            set: { status: 'ACTIVE', enrolledByAdmin: req.user!.id },
+            set: {
+              status: existingEnr?.status === 'COMPLETED' ? 'COMPLETED' : 'ACTIVE',
+              enrolledByAdmin: req.user!.id,
+            },
           })
           .returning();
 
         await tx
           .update(cohorts)
           .set({
-            enrolledCount: sql`${cohorts.enrolledCount} + 1`,
+            enrolledCount: sql`(SELECT COUNT(*)::int FROM enrollments WHERE cohort_id = ${cohort.id} AND status <> 'REVOKED')`,
             updatedAt: new Date(),
           })
           .where(eq(cohorts.id, cohort.id));
+
+        if (isNewlyEnrolled) {
+          await tx
+            .update(userProfiles)
+            .set({
+              interviewCredits: sql`${userProfiles.interviewCredits} + 4`,
+              updatedAt: new Date(),
+            })
+            .where(eq(userProfiles.accountId, account!.id));
+        }
 
         return [enr!];
       });
@@ -1071,9 +1453,10 @@ adminRouter.post(
   }
 );
 
-// 8.7 POST /admin/certificates/issue (+4 interview credits per graduate)
+// 8.7 POST /admin/certificates/issue
 const issueCertificatesSchema = z.object({
   enrollmentIds: z.array(z.union([z.number(), z.string()])).min(1),
+  cohortCode: z.string().optional(),
 });
 
 adminRouter.post(
@@ -1081,19 +1464,39 @@ adminRouter.post(
   validate(issueCertificatesSchema),
   async (req, res, next) => {
     try {
-      const { enrollmentIds } = req.body;
+      const { enrollmentIds, cohortCode } = req.body;
       const issuedCodes: string[] = [];
+      const targetCohort = cohortCode ? await resolveCohort(cohortCode) : undefined;
 
       await db.transaction(async (tx) => {
         for (const rawEnrId of enrollmentIds) {
           const numId = Number(rawEnrId);
-          if (Number.isNaN(numId)) continue;
+          let enr: typeof enrollments.$inferSelect | undefined;
 
-          const [enr] = await tx
-            .select()
-            .from(enrollments)
-            .where(eq(enrollments.id, numId))
-            .limit(1);
+          if (Number.isInteger(numId) && numId > 0) {
+            [enr] = await tx
+              .select()
+              .from(enrollments)
+              .where(eq(enrollments.id, numId))
+              .limit(1);
+          } else if (typeof rawEnrId === 'string' && rawEnrId.includes('@')) {
+            // Support email fallback if UI passes studentEmail
+            const [acc] = await tx
+              .select()
+              .from(accounts)
+              .where(eq(accounts.email, rawEnrId.trim().toLowerCase()))
+              .limit(1);
+            if (acc) {
+              const userEnrs = await tx
+                .select()
+                .from(enrollments)
+                .where(eq(enrollments.accountId, acc.id));
+              enr = targetCohort
+                ? userEnrs.find((e) => e.cohortId === targetCohort.id)
+                : userEnrs[0];
+            }
+          }
+
           if (!enr) continue;
 
           const [existingCert] = await tx
@@ -1102,9 +1505,10 @@ adminRouter.post(
             .where(eq(certificates.enrollmentId, enr.id))
             .limit(1);
 
+          const now = new Date();
           let certRecord = existingCert;
           if (!certRecord) {
-            const certCode = `3T-CERT-${new Date().getFullYear()}-00${enr.id}`;
+            const certCode = `3T-CERT-${now.getFullYear()}-${enr.id}-${enr.accountId}`;
             const hmacSig = crypto
               .createHmac('sha256', env.HMAC_CERTIFICATE_SECRET)
               .update(`${enr.id}:${enr.accountId}:${certCode}`)
@@ -1117,6 +1521,7 @@ adminRouter.post(
                 accountId: enr.accountId,
                 certificateCode: certCode,
                 hmacSignature: hmacSig,
+                issuedAt: now,
               })
               .returning();
             certRecord = createdCert!;
@@ -1126,17 +1531,16 @@ adminRouter.post(
               .set({
                 status: 'COMPLETED',
                 finalExamPassed: true,
-                completedAt: new Date(),
+                completedAt: now,
               })
               .where(eq(enrollments.id, enr.id));
-
-            await tx
-              .update(userProfiles)
-              .set({
-                interviewCredits: sql`${userProfiles.interviewCredits} + 4`,
-                updatedAt: new Date(),
-              })
-              .where(eq(userProfiles.accountId, enr.accountId));
+          } else if (certRecord.revokedAt) {
+            const [restoredCert] = await tx
+              .update(certificates)
+              .set({ revokedAt: null, revokeReason: null })
+              .where(eq(certificates.id, certRecord.id))
+              .returning();
+            certRecord = restoredCert!;
           }
 
           issuedCodes.push(certRecord.certificateCode);
@@ -1155,7 +1559,7 @@ adminRouter.post(
         issuedCount: issuedCodes.length,
         certificateCodes: issuedCodes,
         issuedCertificates,
-        bonusInterviewCreditsAdded: 4,
+        bonusInterviewCreditsAdded: 0,
       });
     } catch (err) {
       next(err);

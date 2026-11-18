@@ -69,6 +69,9 @@ export const StudentDashboardView: React.FC = () => {
     courses,
     enrolledCohortIds,
     upcomingTasks,
+    notifications,
+    markNotificationRead,
+    markAllNotificationsRead,
     receipts,
     certificates,
     navigate,
@@ -77,6 +80,7 @@ export const StudentDashboardView: React.FC = () => {
     toggleTheme,
     setCommandPaletteOpen,
     currentUser,
+    setCurrentUser,
     role,
   } = useAcademy();
 
@@ -91,10 +95,40 @@ export const StudentDashboardView: React.FC = () => {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
-  const [autoPlayNextVideo, setAutoPlayNextVideo] = useState(true);
-  const [autoShowSubtitles, setAutoShowSubtitles] = useState(true);
-  const [notifyBeforeLive15m, setNotifyBeforeLive15m] = useState(true);
-  const [notifyQuizAndCert, setNotifyQuizAndCert] = useState(true);
+  const [autoPlayNextVideo, setAutoPlayNextVideo] = useState<boolean>(
+    () => (currentUser?.preferences?.autoPlayNextVideo as boolean | undefined) ?? true
+  );
+  const [autoShowSubtitles, setAutoShowSubtitles] = useState<boolean>(
+    () => (currentUser?.preferences?.autoShowSubtitles as boolean | undefined) ?? true
+  );
+  const [notifyBeforeLive15m, setNotifyBeforeLive15m] = useState<boolean>(
+    () => (currentUser?.preferences?.notifyBeforeLive15m as boolean | undefined) ?? true
+  );
+  const [notifyQuizAndCert, setNotifyQuizAndCert] = useState<boolean>(
+    () => (currentUser?.preferences?.notifyQuizAndCert as boolean | undefined) ?? true
+  );
+
+  const persistPreferencePatch = (patch: Record<string, boolean>) => {
+    const mergedPrefs = {
+      ...(currentUser?.preferences || {}),
+      autoPlayNextVideo,
+      autoShowSubtitles,
+      notifyBeforeLive15m,
+      notifyQuizAndCert,
+      ...patch,
+    };
+    setCurrentUser((prev) => (prev ? { ...prev, preferences: mergedPrefs } : prev));
+    void profileAndInterviewApi
+      .updateMyProfile({
+        fullName: currentUser?.fullName || 'Học viên',
+        bio: currentUser?.bio || '',
+        careerGoal: currentUser?.careerGoal || '',
+        phone: currentUser?.phone,
+        avatarUrl: currentUser?.avatarUrl,
+        preferences: mergedPrefs,
+      })
+      .catch(() => undefined);
+  };
 
   const passwordStrength = evaluatePasswordStrength(newPassword);
 
@@ -401,31 +435,71 @@ export const StudentDashboardView: React.FC = () => {
               className="relative p-2 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] cursor-pointer"
             >
               <Bell className="w-4 h-4 text-[#0F172A] dark:text-[#ECFDF5]" />
-              <span className="w-2 h-2 rounded-full bg-[#10B981] absolute top-1.5 right-1.5" />
+              {(notifications.some((n) => !n.isRead) || Boolean(liveSession)) && (
+                <span className="w-2 h-2 rounded-full bg-[#10B981] absolute top-1.5 right-1.5" />
+              )}
             </button>
 
             {showNotifPopover && (
-              <div className="absolute right-0 top-12 w-80 rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] shadow-xl p-4 space-y-2.5 text-xs z-30">
-                <div className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                  Thông báo học tập của bạn
+              <div className="absolute right-0 top-12 w-88 max-w-[90vw] rounded-xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] shadow-xl p-4 space-y-2.5 text-xs z-30">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+                    Thông báo học tập ({notifications.filter((n) => !n.isRead).length} chưa đọc)
+                  </span>
+                  {notifications.some((n) => !n.isRead) && (
+                    <button
+                      type="button"
+                      onClick={() => void markAllNotificationsRead()}
+                      className="text-[11px] font-semibold text-[#059669] dark:text-[#34D399] hover:underline cursor-pointer"
+                    >
+                      Đọc tất cả
+                    </button>
+                  )}
                 </div>
                 {liveSession && liveSession.status === 'LIVE' && liveCohort && (
-                  <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-300 font-medium">
-                    • Lớp {liveCohort.code} đang diễn ra ca học trực tuyến: {liveSession.title}.
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNotifPopover(false);
+                      navigate(`/live/${liveSession.id}`);
+                    }}
+                    className="w-full text-left p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-300 font-medium cursor-pointer"
+                  >
+                    • Lớp {liveCohort.code} đang diễn ra trực tuyến: {liveSession.title} →
+                  </button>
                 )}
-                {myEnrolledCohorts.length > 0 ? (
-                  <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
-                    • Bạn đang theo học <strong>{myEnrolledCohorts.length} lớp</strong> ({myEnrolledCohorts.map((c) => c.code).join(', ')}).
+                {notifications.length > 0 ? (
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {notifications.slice(0, 8).map((n) => (
+                      <button
+                        key={n.id}
+                        type="button"
+                        onClick={() => {
+                          if (!n.isRead) void markNotificationRead(n.id);
+                          setShowNotifPopover(false);
+                          if (n.cohortId) navigate(`/app/cohorts/${n.cohortId}`);
+                        }}
+                        className={`w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer space-y-1 ${
+                          n.isRead
+                            ? 'bg-[#F7FBF9] dark:bg-[#090F0C] border-[#E2ECE7] dark:border-[#1E2D24] text-[#475569] dark:text-[#94A3B8]'
+                            : 'bg-[#D1FAE5]/40 dark:bg-emerald-950/50 border-[#10B981]/50 text-[#0F172A] dark:text-[#ECFDF5]'
+                        }`}
+                      >
+                        <div className="font-semibold flex items-center justify-between gap-2">
+                          <span className="truncate">{n.title}</span>
+                          {!n.isRead && (
+                            <span className="w-2 h-2 rounded-full bg-[#10B981] shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-[11px] leading-snug line-clamp-2">{n.message}</p>
+                      </button>
+                    ))}
                   </div>
                 ) : (
                   <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
-                    • Hiện có <strong>{cohorts.filter((c) => c.status === 'OPENING').length} đợt học</strong> đang mở đăng ký trong học kỳ này.
+                    • Chưa có thông báo mới. Bạn hiện có <strong>{interviewCredits} lượt</strong> phỏng vấn thử 1-1 cùng AI.
                   </div>
                 )}
-                <div className="p-2.5 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] text-[#334155] dark:text-[#CBD5E1]">
-                  • Bạn hiện có <strong>{interviewCredits} lượt</strong> Luyện phỏng vấn giọng nói 1-1 cùng AI.
-                </div>
               </div>
             )}
           </div>
@@ -999,7 +1073,13 @@ export const StudentDashboardView: React.FC = () => {
 
                             <button
                               type="button"
-                              onClick={() => navigate(`/app/assessments/${task.sessionId}`)}
+                              onClick={() =>
+                                navigate(
+                                  task.type === 'PROJECT_MILESTONE'
+                                    ? `/app/exams/${task.id}/proctored`
+                                    : `/app/assessments/${task.id || task.sessionId}`
+                                )
+                              }
                               className="px-3.5 py-2 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer whitespace-nowrap"
                             >
                               Làm bài ngay
@@ -1431,7 +1511,11 @@ export const StudentDashboardView: React.FC = () => {
                             {resumeSession && (
                               <button
                                 type="button"
-                                onClick={() => navigate(`/app/assessments/${resumeSession.id}`)}
+                                onClick={() =>
+                                  navigate(
+                                    `/app/assessments/${resumeSession.assessmentId || resumeSession.id}`
+                                  )
+                                }
                                 className="px-3.5 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5] cursor-pointer"
                               >
                                 Làm lại bài kiểm tra
@@ -2030,7 +2114,11 @@ export const StudentDashboardView: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={autoPlayNextVideo}
-                          onChange={(e) => setAutoPlayNextVideo(e.target.checked)}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setAutoPlayNextVideo(val);
+                            persistPreferencePatch({ autoPlayNextVideo: val });
+                          }}
                           className="w-4 h-4 accent-[#10B981] rounded cursor-pointer"
                         />
                       </label>
@@ -2047,7 +2135,11 @@ export const StudentDashboardView: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={autoShowSubtitles}
-                          onChange={(e) => setAutoShowSubtitles(e.target.checked)}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setAutoShowSubtitles(val);
+                            persistPreferencePatch({ autoShowSubtitles: val });
+                          }}
                           className="w-4 h-4 accent-[#10B981] rounded cursor-pointer"
                         />
                       </label>
@@ -2086,7 +2178,11 @@ export const StudentDashboardView: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={notifyBeforeLive15m}
-                          onChange={(e) => setNotifyBeforeLive15m(e.target.checked)}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setNotifyBeforeLive15m(val);
+                            persistPreferencePatch({ notifyBeforeLive15m: val });
+                          }}
                           className="w-4 h-4 accent-[#10B981] rounded cursor-pointer"
                         />
                       </label>
@@ -2103,7 +2199,11 @@ export const StudentDashboardView: React.FC = () => {
                         <input
                           type="checkbox"
                           checked={notifyQuizAndCert}
-                          onChange={(e) => setNotifyQuizAndCert(e.target.checked)}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setNotifyQuizAndCert(val);
+                            persistPreferencePatch({ notifyQuizAndCert: val });
+                          }}
                           className="w-4 h-4 accent-[#10B981] rounded cursor-pointer"
                         />
                       </label>

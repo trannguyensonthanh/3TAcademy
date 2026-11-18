@@ -24,11 +24,9 @@ const FALLBACK_SINGLE_QUESTION: StudentSafePromptConfigItem = {
 
 export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessmentId }) => {
   const {
-    cohorts,
     sessions,
-    currentUser,
-    submitSessionQuiz,
-    issueNewCertificate,
+    refreshEnrollments,
+    refreshCertificates,
     setInterviewCredits,
     navigate,
   } = useAcademy();
@@ -37,52 +35,50 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
     assessmentId.toLowerCase().includes('final') ||
     assessmentId.toLowerCase().includes('exam');
 
-  const { data: assessmentPayload } = useAsyncQuery(
-    () => assessmentApi.getAssessmentForStudent(assessmentId),
-    {
-      assessmentId,
-      isFinalExam: isFinalExamFallback,
-      title: isFinalExamFallback
-        ? 'Bài Thi Tốt Nghiệp Cuối Khóa Kỹ Sư AI Thực Chiến — Khóa K01 (25 câu A, B, C, D)'
-        : 'Bài Kiểm Tra Mở Khóa Cuối Buổi Học (10 câu Trắc nghiệm A, B, C, D)',
-      questionCount: isFinalExamFallback ? 25 : 10,
-      timeLimitMinutes: isFinalExamFallback ? 45 : 15,
-      isRetakeLocked: false,
-      promptConfig: [FALLBACK_SINGLE_QUESTION],
-    },
-    [assessmentId]
-  );
+  const { data: assessmentPayload, isLoading: isAssessmentLoading, error: assessmentError } =
+    useAsyncQuery(
+      () => assessmentApi.getAssessmentForStudent(assessmentId),
+      {
+        assessmentId,
+        isFinalExam: isFinalExamFallback,
+        title: 'Đang tải đề kiểm tra trắc nghiệm...',
+        questionCount: 0,
+        timeLimitMinutes: 15,
+        isRetakeLocked: false,
+        promptConfig: [],
+      },
+      [assessmentId]
+    );
 
   const isFinalExam = assessmentPayload.isFinalExam;
-  const questions =
-    assessmentPayload.promptConfig.length > 0
-      ? assessmentPayload.promptConfig
-      : [FALLBACK_SINGLE_QUESTION];
+  const questions = assessmentPayload.promptConfig;
 
   const normalizedSessionId =
     assessmentPayload.sessionId || assessmentId.replace(/^quiz-/, '');
-  const session =
-    sessions.find(
-      (s) => s.id === normalizedSessionId || s.assessmentId === assessmentId
-    ) ??
-    sessions.find((s) => s.sessionOrder === 4) ??
-    sessions[3];
-  const matchedCohort =
-    cohorts.find(
-      (c) =>
-        c.id === (assessmentPayload.cohortId || session?.cohortId)
-    ) ?? cohorts[0];
+  const session = sessions.find(
+    (s) => s.id === normalizedSessionId || s.assessmentId === assessmentId
+  );
 
   const [currentIdx, setCurrentIdx] = useState<number>(0);
 
   // Selected option index (0=A, 1=B, 2=C, 3=D) per question number — starts empty so student genuinely answers
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
 
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(
-    isFinalExam ? 45 * 60 : 15 * 60
-  );
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(15 * 60);
   const [autoSaveText, setAutoSaveText] = useState<string>('Chưa chọn đáp án — Hệ thống tự động lưu khi bạn tích chọn');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (assessmentPayload.timeLimitMinutes > 0) {
+      setRemainingSeconds(assessmentPayload.timeLimitMinutes * 60);
+    }
+  }, [assessmentPayload.timeLimitMinutes]);
+
+  useEffect(() => {
+    if (!assessmentId || assessmentPayload.isRetakeLocked) return;
+    void assessmentApi.startAssessmentAttempt(assessmentId).catch(() => undefined);
+  }, [assessmentId, assessmentPayload.isRetakeLocked]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -109,45 +105,57 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
   };
 
   const handleSubmitInstantMcq = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || questions.length === 0) return;
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
-      const alreadyPassedFinal = assessmentPayload.isRetakeLocked;
       const result = await assessmentApi.submitAssessmentAttempt(
         assessmentId,
         selectedAnswers
       );
 
-      // Update session completion state when passing a session quiz
-      if (!isFinalExam && result.passed && session) {
-        const orderedChoices = questions.map((q) => selectedAnswers[q.number] ?? 0);
-        submitSessionQuiz(session.id, orderedChoices);
+      if (typeof result.updatedInterviewCredits === 'number') {
+        setInterviewCredits(result.updatedInterviewCredits);
       }
 
-      // If final exam is passed for the FIRST time, refresh graduation certificate & add +4 interview credits
-      if (isFinalExam && result.passed && !alreadyPassedFinal) {
-        if (currentUser) {
-          issueNewCertificate(
-            currentUser.fullName,
-            currentUser.email,
-            matchedCohort?.code || '',
-            Math.round(result.scoreOutOf10 * 10)
-          );
-        }
-        if (typeof result.updatedInterviewCredits === 'number') {
-          setInterviewCredits(result.updatedInterviewCredits);
-        } else {
-          setInterviewCredits((prev) => prev + (result.bonusInterviewCreditsAdded ?? 4));
-        }
-      }
-
+      await Promise.all([refreshEnrollments(), refreshCertificates()]);
       navigate(`/app/assessments/${assessmentId}/results`);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Không thể nộp bài kiểm tra lúc này.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const currentQuestion = questions[currentIdx] ?? questions[0];
+  if (isAssessmentLoading && questions.length === 0) {
+    return (
+      <div className="max-w-xl mx-auto px-6 py-20 text-center space-y-3">
+        <div className="w-8 h-8 rounded-full border-2 border-[#10B981] border-t-transparent animate-spin mx-auto" />
+        <p className="text-sm font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+          Đang tải đề kiểm tra...
+        </p>
+      </div>
+    );
+  }
+
+  if (assessmentError && questions.length === 0) {
+    return (
+      <div className="max-w-xl mx-auto px-6 py-16 text-center space-y-4">
+        <h1 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
+          {assessmentError}
+        </h1>
+        <button
+          type="button"
+          onClick={() => navigate('/app')}
+          className="px-5 py-2.5 rounded-xl bg-[#10B981] text-white text-xs font-semibold cursor-pointer"
+        >
+          Quay lại Góc học tập
+        </button>
+      </div>
+    );
+  }
+
+  const currentQuestion = questions[currentIdx] ?? FALLBACK_SINGLE_QUESTION;
   const answeredCount = Object.keys(selectedAnswers).length;
   const isLockedFinalRetake = isFinalExam && assessmentPayload.isRetakeLocked;
 
@@ -173,8 +181,8 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
             <div className="min-w-0">
               <div className="text-[11px] font-bold uppercase tracking-wider text-[#10B981]">
                 {isFinalExam
-                  ? 'BÀI THI TỐT NGHIỆP CUỐI KHÓA (25 CÂU TRẮC NGHIỆM A, B, C, D)'
-                  : `BÀI KIỂM TRA MỞ KHÓA BUỔI ${session?.sessionOrder || ''} (10 CÂU TRẮC NGHIỆM A, B, C, D)`}
+                  ? `BÀI THI TỐT NGHIỆP CUỐI KHÓA (${questions.length} CÂU TRẮC NGHIỆM)`
+                  : `BÀI KIỂM TRA MỞ KHÓA BUỔI ${session?.sessionOrder || ''} (${questions.length} CÂU TRẮC NGHIỆM)`}
               </div>
               <h1 className="text-sm sm:text-base font-bold truncate">
                 {assessmentPayload.title ||
@@ -288,6 +296,11 @@ export const AssessmentRoomView: React.FC<{ assessmentId: string }> = ({ assessm
 
           {/* Right Question Workspace */}
           <div className="lg:col-span-9 space-y-6">
+            {submitError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/40 text-xs font-semibold text-rose-600 dark:text-rose-300">
+                {submitError}
+              </div>
+            )}
             <article className="rounded-2xl bg-white dark:bg-[#111A15] border border-[#E2ECE7] dark:border-[#1E2D24] p-6 sm:p-8 space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-[#E2ECE7] dark:border-[#1E2D24]">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 font-mono text-xs font-bold">

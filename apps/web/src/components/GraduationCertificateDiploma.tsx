@@ -1,15 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Award,
   CheckCircle2,
   Download,
   FileCheck2,
-  QrCode,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import { CertificateRecord } from '../types/domain';
 import { exportCertificateToPdf, getAcademicClassification } from '../utils/certificatePdfExport';
+import { buildCertificateVerifyUrl, encodeQrMatrix } from '../utils/qrMatrix';
 
 interface GraduationCertificateDiplomaProps {
   certificate: CertificateRecord;
@@ -27,6 +27,18 @@ export const GraduationCertificateDiploma: React.FC<GraduationCertificateDiploma
   const [exportError, setExportError] = useState<string | null>(null);
 
   const classification = getAcademicClassification(certificate.finalScore);
+  const verifyUrl = useMemo(
+    () => buildCertificateVerifyUrl(certificate.certificateCode),
+    [certificate.certificateCode]
+  );
+  const qrModules = useMemo(() => encodeQrMatrix(verifyUrl), [verifyUrl]);
+  const qrViewSize = qrModules.length + 4; // 2-module quiet zone
+  const resolvedInstructorName = certificate.instructorName || 'TS. Lê Minh Khoa';
+  const cursiveInstructorName = resolvedInstructorName
+    .replace(/^(PGS\.TS\.|TS\.|ThS\.|CN\.|KS\.)\s*/i, '')
+    .trim();
+  const resolvedInstructorTitle =
+    certificate.instructorTitle || 'Giảng viên Trưởng bộ môn Chuyên môn';
 
   const handleDownloadPdf = async () => {
     setIsExporting(true);
@@ -250,11 +262,36 @@ export const GraduationCertificateDiploma: React.FC<GraduationCertificateDiploma
 
             {/* Official Signatures, Red Stamp Seal & Cryptographic Verification */}
             <div className="mt-8 pt-6 border-t-2 border-amber-700/30 grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-              {/* Column 1: QR & Cryptographic Hash */}
+              {/* Column 1: Scannable QR & Cryptographic Hash */}
               <div className="bg-white/90 p-3.5 rounded-lg border border-amber-700/30 flex items-start gap-3">
-                <div className="w-16 h-16 rounded border-2 border-amber-700 bg-white flex flex-col items-center justify-center shrink-0">
-                  <QrCode className="w-11 h-11 text-slate-900" />
-                </div>
+                <a
+                  href={`/certificates/verify/${encodeURIComponent(certificate.certificateCode)}`}
+                  title={`Quét mã hoặc bấm để đối chiếu văn bằng: ${verifyUrl}`}
+                  className="w-16 h-16 rounded border-2 border-amber-700 bg-white flex flex-col items-center justify-center shrink-0 p-0.5"
+                >
+                  <svg
+                    viewBox={`0 0 ${qrViewSize} ${qrViewSize}`}
+                    shapeRendering="crispEdges"
+                    className="w-full h-full"
+                    aria-label={`Mã QR xác thực văn bằng ${certificate.certificateCode}`}
+                  >
+                    <rect width={qrViewSize} height={qrViewSize} fill="#FFFFFF" />
+                    {qrModules.map((row, rIdx) =>
+                      row.map((dark, cIdx) =>
+                        dark ? (
+                          <rect
+                            key={`${rIdx}-${cIdx}`}
+                            x={cIdx + 2}
+                            y={rIdx + 2}
+                            width={1}
+                            height={1}
+                            fill="#0F172A"
+                          />
+                        ) : null
+                      )
+                    )}
+                  </svg>
+                </a>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1 text-[11px] font-extrabold text-emerald-900 uppercase">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
@@ -282,10 +319,10 @@ export const GraduationCertificateDiploma: React.FC<GraduationCertificateDiploma
                 </p>
                 <p className="text-[11px] italic text-slate-500 font-serif">(Chữ ký điện tử đã xác thực)</p>
                 <div className="my-3 text-xl font-serif italic font-bold text-blue-900 select-none">
-                  Trần Minh Khoa
+                  {cursiveInstructorName}
                 </div>
-                <p className="text-xs font-extrabold text-slate-900">TS. Trần Minh Khoa</p>
-                <p className="text-[11px] text-slate-600">Giảng viên Trưởng bộ môn AI & Data</p>
+                <p className="text-xs font-extrabold text-slate-900">{resolvedInstructorName}</p>
+                <p className="text-[11px] text-slate-600">{resolvedInstructorTitle}</p>
               </div>
 
               {/* Column 3: Official Academy Seal Stamp & Director Signature */}

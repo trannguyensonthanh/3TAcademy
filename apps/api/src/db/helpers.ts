@@ -10,28 +10,26 @@ import {
 } from './schema/index.js';
 
 /**
- * Normalizes a mastery score from DB (which may be stored on a 0..1 scale or 0..100 scale)
- * into a 0..100 integer for Frontend consumption.
+ * Normalizes a mastery score from PostgreSQL (canonical scale: 0..100).
+ * Strictly fractional legacy values (0 < num < 1.0) are scaled to 0..100,
+ * while 1..100 values are preserved directly so 1% never becomes 100%.
  */
 export function normalizeMasteryScore(raw: number | null | undefined): number {
   if (raw === null || raw === undefined || Number.isNaN(Number(raw))) return 0;
   const num = Number(raw);
-  if (num > 0 && num <= 1.0) {
+  if (num > 0 && num < 1.0) {
     return Math.min(100, Math.max(0, Math.round(num * 100)));
   }
   return Math.min(100, Math.max(0, Math.round(num)));
 }
 
 /**
- * Converts a 0..100 score into a 0..1 float for safe storage in PostgreSQL
- * regardless of whether the DB check constraint is 0..1 or 0..100.
+ * Converts a 0..100 score for canonical storage in PostgreSQL
+ * (`student_skill_states.mastery_score` CHECK BETWEEN 0.0 AND 100.0).
  */
 export function toDbMasteryScore(score0to100: number): number {
-  const clamped = Math.min(100, Math.max(0, score0to100));
-  if (clamped > 1.0) {
-    return Number((clamped / 100).toFixed(4));
-  }
-  return Number(clamped.toFixed(4));
+  const clamped = Math.min(100, Math.max(0, Number(score0to100) || 0));
+  return Number(clamped.toFixed(2));
 }
 
 /**
@@ -83,7 +81,7 @@ export async function resolveSession(
     if (byId) return byId;
   }
 
-  const kMatch = raw.match(/sess(?:ion)?-(?:([a-z0-9]+)-)?0*(\d+)$/i);
+  const kMatch = raw.match(/sess(?:ion)?-(?:([a-z0-9-]+)-)?0*(\d+)$/i);
   if (kMatch) {
     const cohortAlias = kMatch[1];
     const orderNum = Number(kMatch[2]);
@@ -116,13 +114,6 @@ export async function resolveSession(
         .where(eq(classSessions.id, orderNum))
         .limit(1);
       if (byIdFallback) return byIdFallback;
-
-      const [byOrderFallback] = await db
-        .select()
-        .from(classSessions)
-        .where(eq(classSessions.sessionOrder, orderNum))
-        .limit(1);
-      if (byOrderFallback) return byOrderFallback;
     }
   }
 
@@ -135,7 +126,7 @@ export async function resolveSession(
 export async function resolveAssessment(idOrCode: string | string[] | number | undefined | null) {
   const firstVal = Array.isArray(idOrCode) ? idOrCode[0] : idOrCode;
   if (firstVal === undefined || firstVal === null || firstVal === '') return undefined;
-  const raw = String(firstVal).trim();
+  const raw = String(firstVal).trim().replace(/\/proctored$/i, '');
   const numId = Number(raw);
 
   if (Number.isInteger(numId) && numId > 0) {
@@ -159,12 +150,6 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
         .limit(1);
       return finalExam;
     }
-    const [anyFinalExam] = await db
-      .select()
-      .from(assessments)
-      .where(eq(assessments.purpose, 'FINAL_EXAM'))
-      .limit(1);
-    if (anyFinalExam) return anyFinalExam;
   }
 
   if (lower.startsWith('quiz-')) {
@@ -180,7 +165,7 @@ export async function resolveAssessment(idOrCode: string | string[] | number | u
     }
   }
 
-  const trailingDigits = raw.match(/(\d+)$/);
+  const trailingDigits = raw.match(/^(\d+)$/);
   if (trailingDigits) {
     const fallbackId = Number(trailingDigits[1]);
     const [byId] = await db.select().from(assessments).where(eq(assessments.id, fallbackId)).limit(1);

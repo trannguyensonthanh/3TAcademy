@@ -40,6 +40,9 @@ export interface UpdateMyProfilePayload {
   fullName: string;
   avatarUrl?: string;
   phone?: string;
+  githubUrl?: string;
+  linkedinUrl?: string;
+  preferences?: Record<string, unknown>;
   bio: string;
   careerGoal: string;
 }
@@ -69,7 +72,8 @@ export const profileInterviewApi = {
 
   uploadAndParseCv: (
     fileOrNameOrPayload: File | string | Partial<StudentResumeData>,
-    resumeData?: Partial<StudentResumeData>
+    resumeData?: Partial<StudentResumeData>,
+    options?: { overwriteProfile?: boolean; previewOnly?: boolean }
   ) => {
     const isFile =
       typeof File !== 'undefined' && fileOrNameOrPayload instanceof File
@@ -103,10 +107,17 @@ export const profileInterviewApi = {
       formData.append('fileName', fileName);
       formData.append('size', String(size));
       formData.append('mode', 'PARSE_PDF');
+      if (options?.overwriteProfile !== undefined) {
+        formData.append('overwriteProfile', String(options.overwriteProfile));
+      }
+      if (options?.previewOnly !== undefined) {
+        formData.append('previewOnly', String(options.previewOnly));
+      }
       return httpRequest<{
         fileName: string;
         updatedAt: string;
         cvParsedData: CvParsedData;
+        profileUpdated?: boolean;
       }>('/me/cv/upload', {
         method: 'POST',
         body: formData,
@@ -117,6 +128,7 @@ export const profileInterviewApi = {
       fileName: string;
       updatedAt: string;
       cvParsedData: CvParsedData;
+      profileUpdated?: boolean;
     }>('/me/cv/upload', {
       method: 'POST',
       body: JSON.stringify({
@@ -124,6 +136,8 @@ export const profileInterviewApi = {
         size,
         mode: effectiveResumeData ? 'SAVE_RESUME' : 'PARSE_PDF',
         resumeData: effectiveResumeData,
+        overwriteProfile: options?.overwriteProfile ?? Boolean(effectiveResumeData),
+        previewOnly: options?.previewOnly ?? false,
       }),
     });
   },

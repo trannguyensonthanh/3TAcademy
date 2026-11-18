@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
@@ -21,20 +20,58 @@ function formatSecondsToMmSs(sec: number): string {
   return `${mm}:${ss}`;
 }
 
-let geminiClientInstance: GoogleGenAI | null = null;
-
-function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'your-gemini-api-key') {
+export async function generateGeminiText(params: {
+  systemInstruction: string;
+  prompt: string;
+  temperature?: number;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'your-gemini-api-key' || apiKey.startsWith('placeholder')) {
     return null;
   }
-  if (!geminiClientInstance) {
-    geminiClientInstance = new GoogleGenAI({
-      apiKey,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-    });
+
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: params.systemInstruction }],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: params.prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: params.temperature ?? 0.2,
+      },
+    }),
+    signal: AbortSignal.timeout(params.timeoutMs ?? 8000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gemini REST API returned HTTP ${res.status}`);
   }
-  return geminiClientInstance;
+
+  const payload = (await res.json()) as {
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: string }> };
+    }>;
+  };
+
+  const text =
+    payload.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text ?? '')
+      .join('')
+      .trim() ?? '';
+  return text.length > 0 ? text : null;
 }
 
 export function cosineSimilarity1024(vecA: number[], vecB: number[] | null | undefined): number {
@@ -73,6 +110,40 @@ function lexicalOverlapScore(query: string, content: string): number {
     if (cSet.has(qt)) hits++;
   }
   return hits / qTokens.length;
+}
+
+/**
+ * Hybrid Dense + Lexical ranking using Reciprocal Rank Fusion (RRF, k = 60).
+ */
+function rankChunksHybridRrf<
+  T extends { id: number; content: string; embedding: number[] | null; sessionId?: number | null }
+>(query: string, chunks: T[], currentSessionId?: number): T[] {
+  if (chunks.length === 0) return [];
+  const queryVec = computeSemanticEmbedding1024(query, 1024);
+
+  const denseSorted = [...chunks]
+    .map((c) => ({ chunk: c, sim: cosineSimilarity1024(queryVec, c.embedding) }))
+    .sort((a, b) => b.sim - a.sim);
+
+  const lexSorted = [...chunks]
+    .map((c) => ({ chunk: c, lex: lexicalOverlapScore(query, c.content) }))
+    .sort((a, b) => b.lex - a.lex);
+
+  const denseRankMap = new Map(denseSorted.map((item, idx) => [item.chunk.id, idx + 1]));
+  const lexRankMap = new Map(lexSorted.map((item, idx) => [item.chunk.id, idx + 1]));
+
+  const RRF_K = 60;
+  return [...chunks]
+    .map((chunk) => {
+      const rDense = denseRankMap.get(chunk.id) ?? chunks.length;
+      const rLex = lexRankMap.get(chunk.id) ?? chunks.length;
+      const sessionBoost =
+        currentSessionId && chunk.sessionId === currentSessionId ? 0.004 : 0;
+      const rrfScore = 1 / (RRF_K + rDense) + 1 / (RRF_K + rLex) + sessionBoost;
+      return { chunk, rrfScore };
+    })
+    .sort((a, b) => b.rrfScore - a.rrfScore)
+    .map((item) => item.chunk);
 }
 
 const UNRELATED_SYSTEM_PATTERNS: RegExp[] = [
@@ -156,8 +227,29 @@ export function classifyAdvisorIntent(question: string): AdvisorIntent {
   return 'VALID_ADVISOR_QUERY';
 }
 
+export const CANONICAL_COURSE_SLUGS = {
+  AI: 'ky-su-ai-thuc-chien-rag-agents-llmops',
+  SWE: 'kien-truc-backend-chuyen-sau-typescript-postgresql-distributed-systems',
+  DATA: 'ky-su-du-lieu-hien-dai-streaming-kafka-pyspark-lakehouse',
+  PYTHON: 'lap-trinh-python-sql-thuc-chien-cho-ky-su-du-lieu-ai',
+} as const;
+
+export function normalizeCourseSlugAlias(slug: string): string {
+  const clean = (slug || '').trim().toLowerCase();
+  if (clean.startsWith('ky-su-ai-thuc-chien')) return CANONICAL_COURSE_SLUGS.AI;
+  if (clean.startsWith('kien-truc-backend-chuyen-sau')) return CANONICAL_COURSE_SLUGS.SWE;
+  if (
+    clean.startsWith('ky-su-du-lieu-hien-dai') ||
+    clean.startsWith('ky-thuat-du-lieu-streaming')
+  ) {
+    return CANONICAL_COURSE_SLUGS.DATA;
+  }
+  if (clean.startsWith('lap-trinh-python-sql-thuc-chien')) return CANONICAL_COURSE_SLUGS.PYTHON;
+  return clean;
+}
+
 const COURSE_EXCLUSIVE_KEYWORDS: Record<string, { label: string; patterns: RegExp[] }> = {
-  'ky-su-ai-thuc-chien-rag-agents-llmops': {
+  [CANONICAL_COURSE_SLUGS.AI]: {
     label: 'Kỹ sư AI Thực chiến: RAG, Agents & LLMOps',
     patterns: [
       /\brag\b/i,
@@ -175,7 +267,7 @@ const COURSE_EXCLUSIVE_KEYWORDS: Record<string, { label: string; patterns: RegEx
       /\bsemantic cache\b/i,
     ],
   },
-  'kien-truc-backend-chuyen-sau-typescript-postgresql': {
+  [CANONICAL_COURSE_SLUGS.SWE]: {
     label: 'Kiến trúc Backend Chuyên sâu: TypeScript, PostgreSQL & Distributed Systems',
     patterns: [
       /\bnestjs\b/i,
@@ -188,10 +280,11 @@ const COURSE_EXCLUSIVE_KEYWORDS: Record<string, { label: string; patterns: RegEx
       /\bpessimistic lock\b/i,
       /\boptimistic lock\b/i,
       /\bmicroservices\b/i,
+      /\bidempotent webhook\b/i,
     ],
   },
-  'ky-thuat-du-lieu-streaming-pipeline-lakehouse': {
-    label: 'Kỹ thuật Dữ liệu: Streaming Pipeline & Lakehouse',
+  [CANONICAL_COURSE_SLUGS.DATA]: {
+    label: 'Kỹ sư Dữ liệu Hiện đại: Streaming Kafka, PySpark & Lakehouse',
     patterns: [
       /\bkafka\b/i,
       /\bapache spark\b/i,
@@ -204,14 +297,16 @@ const COURSE_EXCLUSIVE_KEYWORDS: Record<string, { label: string; patterns: RegEx
       /\bflink\b/i,
     ],
   },
-  'lap-trinh-python-sql-thuc-chien': {
+  [CANONICAL_COURSE_SLUGS.PYTHON]: {
     label: 'Lập trình Python & SQL Thực chiến cho Kỹ sư Dữ liệu & AI',
     patterns: [
       /\bwindow function\b/i,
       /\brecursive cte\b/i,
+      /\bdense_rank\b/i,
       /\bpytest\b/i,
       /\bpandas\b/i,
       /\bpolars\b/i,
+      /\basyncio\b/i,
     ],
   },
 };
@@ -230,16 +325,15 @@ export function classifyCourseTutorIntent(
     return { type: 'OUT_OF_DOMAIN' };
   }
 
-  // Check if the question explicitly asks about another course's exclusive topic
-  // and does NOT match any pattern of the current course
-  const currentEntry = COURSE_EXCLUSIVE_KEYWORDS[currentCourseSlug];
+  const normalizedSlug = normalizeCourseSlugAlias(currentCourseSlug);
+  const currentEntry = COURSE_EXCLUSIVE_KEYWORDS[normalizedSlug];
   const matchesCurrent = currentEntry
     ? currentEntry.patterns.some((rx) => rx.test(trimmed))
     : false;
 
   if (!matchesCurrent) {
     for (const [slug, info] of Object.entries(COURSE_EXCLUSIVE_KEYWORDS)) {
-      if (slug === currentCourseSlug) continue;
+      if (slug === normalizedSlug) continue;
       if (info.patterns.some((rx) => rx.test(trimmed))) {
         return {
           type: 'OTHER_COURSE_TOPIC',
@@ -259,50 +353,40 @@ export async function askCareerAdvisorRag(question: string) {
   const [allCourses, openCohorts, publicChunks] = await Promise.all([
     db.select().from(courses).where(eq(courses.status, 'PUBLISHED')).orderBy(asc(courses.id)),
     db.select().from(cohorts).orderBy(desc(cohorts.startDate)),
-    // STRICT SQL ISOLATION: ONLY PUBLIC CHUNKS, NEVER ENROLLED_ONLY
-    db
-      .select()
-      .from(knowledgeChunks)
-      .where(eq(knowledgeChunks.visibility, 'PUBLIC')),
+    db.select().from(knowledgeChunks).where(eq(knowledgeChunks.visibility, 'PUBLIC')),
   ]);
 
-  const courseMap = new Map(allCourses.map((c) => [c.id, c]));
   const activeCohorts = openCohorts.filter(
     (ch) => ch.status === 'OPENING' || ch.status === 'ONGOING'
   );
   const recommendedCohortCodes = activeCohorts.map((ch) => ch.code);
 
-  // Rank PUBLIC chunks by 1024-dim Embedding Vector Cosine Similarity + Lexical Overlap
+  const topChunks = rankChunksHybridRrf(cleanQuestion, publicChunks).slice(0, 3);
+
+  // Match best recommended course via semantic + keyword similarity against courses
   const queryVec = computeSemanticEmbedding1024(cleanQuestion, 1024);
-  const scoredChunks = publicChunks
-    .map((chunk) => {
-      const vecSim = cosineSimilarity1024(queryVec, chunk.embedding);
-      const lexSim = lexicalOverlapScore(cleanQuestion, chunk.content);
-      return {
-        chunk,
-        score: vecSim * 0.7 + lexSim * 0.3,
-      };
+  const rankedCourses = [...allCourses]
+    .map((c) => {
+      const vecSim = cosineSimilarity1024(queryVec, c.embedding);
+      const lexSim = lexicalOverlapScore(
+        cleanQuestion,
+        `${c.title} ${c.shortDescription} ${c.slug}`
+      );
+      return { course: c, score: vecSim * 0.65 + lexSim * 0.35 };
     })
     .sort((a, b) => b.score - a.score);
 
-  const topChunks = scoredChunks.slice(0, 3).map((item) => item.chunk);
-
-  // Match best recommended course based on top chunk courseId or query keywords
-  const matchedCourseId =
-    topChunks.find((c) => c.courseId !== null)?.courseId ||
-    allCourses[0]?.id;
-  const recommendedCourse =
-    (matchedCourseId ? courseMap.get(matchedCourseId) : undefined) || allCourses[0];
+  const recommendedCourse = rankedCourses[0]?.course || allCourses[0];
   const recommendedCohort =
+    activeCohorts.find((ch) => ch.courseId === recommendedCourse?.id && ch.status === 'OPENING') ||
     activeCohorts.find((ch) => ch.courseId === recommendedCourse?.id) ||
     activeCohorts[0] ||
     openCohorts[0];
 
-  // Guardrail 1: Out-of-system / unrelated questions
   if (intent === 'OUT_OF_SYSTEM') {
     const replyText =
-      'Mình xin lỗi nha, câu hỏi này nằm ngoài phạm vi hệ thống đào tạo của **3T Academy** nên mình không biết thông tin để giải đáp cho bạn.\n\n' +
-      'Mình chỉ phụ trách tư vấn lộ trình học tập, lịch khai giảng và thông tin các khóa học công nghệ tại học viện (gồm **Trí tuệ nhân tạo & AI**, **Lập trình Backend & Hệ thống**, **Kỹ thuật Dữ liệu**, và **Lập trình Nền tảng Python & SQL**). Nếu bạn đang muốn tìm hiểu lộ trình học lập trình nào thì cứ nhắn mình tư vấn nhé!';
+      'Mình xin lỗi nha, câu hỏi này nằm ngoài phạm vi hệ thống đào tạo của **3T Academy** nên mình không có thông tin để giải đáp cho bạn.\n\n' +
+      'Mình phụ trách tư vấn lộ trình học tập, lịch khai giảng và thông tin 4 hướng đào tạo tại học viện (**Trí tuệ nhân tạo & AI**, **Lập trình Backend & Hệ thống**, **Kỹ thuật Dữ liệu**, và **Lập trình Nền tảng Python & SQL**). Bạn đang quan tâm hướng nào thì nhắn mình tư vấn nhé!';
     return {
       replyText,
       answerMd: replyText,
@@ -313,16 +397,14 @@ export async function askCareerAdvisorRag(question: string) {
     };
   }
 
-  // Guardrail 2: Asking for deep internal lecture knowledge inside paid courses
   if (intent === 'PAID_LECTURE_DEEP_DIVE') {
     const courseSuggestion = recommendedCourse
-      ? `Nếu bạn muốn tìm hiểu bài bản về chủ đề này, bạn có thể tham khảo khóa **${recommendedCourse.title}** (Mã lớp: \`${recommendedCohort?.code || 'AI-ENG-2026-K01'}\`, học phí: **${(recommendedCohort?.tuitionVnd || 10000).toLocaleString('vi-VN')} đ**).`
+      ? `Nếu bạn muốn học bài bản chủ đề này, bạn có thể tham khảo khóa **${recommendedCourse.title}** (Mã lớp: \`${recommendedCohort?.code || ''}\`, học phí: **${(recommendedCohort?.tuitionVnd || 10000).toLocaleString('vi-VN')} đ**).`
       : '';
     const replyText =
-      'Mình không biết chi tiết nội dung bài giảng, công thức hay cách viết code chuyên sâu bên trong các khóa học đâu bạn ơi, vì mục tiêu của mình chỉ là lắng nghe nhu cầu và tư vấn lộ trình học tập phù hợp cho bạn thôi.\n\n' +
-      'Toàn bộ kiến thức chuyên môn, slide bài giảng, mã nguồn thực hành và **Trợ giảng AI riêng của từng môn** chỉ được mở bên trong không gian lớp học sau khi bạn đăng ký khóa học.\n\n' +
-      courseSuggestion +
-      '\n\nBạn có muốn mình chia sẻ thêm về lịch học và điều kiện đầu vào của lớp này không?';
+      'Mình chưa thể chia sẻ chi tiết nội dung bài giảng, công thức hay mã nguồn thực hành bên trong khóa học vì vai trò của mình là tư vấn chọn lộ trình phù hợp cho bạn.\n\n' +
+      'Toàn bộ slide, bản ghi bài giảng và **Trợ giảng AI riêng của từng môn** sẽ mở ngay trong không gian lớp học sau khi bạn đăng ký đợt học.\n\n' +
+      courseSuggestion;
     return {
       replyText,
       answerMd: replyText,
@@ -337,12 +419,13 @@ export async function askCareerAdvisorRag(question: string) {
     };
   }
 
-  // Valid Advisor Query: Use Gemini with strict anti-hallucination prompt on PUBLIC context
   const catalogSummary = allCourses
     .map((c) => {
-      const ch = activeCohorts.find((item) => item.courseId === c.id);
-      const sched = ch ? formatScheduleLabels(ch.scheduleSlots || []).scheduleLabel : '';
-      return `- **${c.title}** (Mã lớp: \`${ch?.code || ''}\`, Học phí: **${(ch?.tuitionVnd || 10000).toLocaleString('vi-VN')} đ**, Khai giảng: ${ch?.startDate || ''}, Lịch học: ${sched}): ${c.shortDescription}`;
+      const ch =
+        activeCohorts.find((item) => item.courseId === c.id && item.status === 'OPENING') ||
+        activeCohorts.find((item) => item.courseId === c.id);
+      const sched = ch ? formatScheduleLabels(ch.scheduleSlots || []).scheduleLabel : 'Linh hoạt';
+      return `- **${c.title}** (Mã lớp: \`${ch?.code || 'Đang mở'}\`, Học phí: **${(ch?.tuitionVnd || 10000).toLocaleString('vi-VN')} đ**, Khai giảng: ${ch?.startDate || ''}, Lịch học: ${sched}): ${c.shortDescription}`;
     })
     .join('\n');
 
@@ -350,56 +433,45 @@ export async function askCareerAdvisorRag(question: string) {
     .map((c) => `[Nguồn ${c.sourceType} #${c.id}]: ${c.content}`)
     .join('\n\n');
 
-  const gemini = getGeminiClient();
-  if (gemini) {
-    try {
-      const response = await gemini.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents:
-          `=== DANH MỤC KHÓA HỌC ĐANG MỞ TẠI 3T ACADEMY ===\n${catalogSummary}\n\n` +
-          `=== TÀI LIỆU TƯ VẤN CÔNG KHAI (PUBLIC RAG) ===\n${retrievedPublicContext}\n\n` +
-          `=== CÂU HỎI CỦA BẠN HỌC VIÊN ===\n${cleanQuestion}\n\n` +
-          `Hãy tư vấn lộ trình phù hợp nhất một cách gần gũi, nhẹ nhàng.`,
-        config: {
-          systemInstruction:
-            'Bạn là Trợ lý Tư vấn Lộ trình học tập của 3T Academy.\n' +
-            'QUY TẮC BẮT BUỘC:\n' +
-            '1. Văn phong gần gũi, nhẹ nhàng, ấm áp, tự nhiên như con người (xưng "mình", gọi "bạn").\n' +
-            '2. KHÔNG ĐƯỢC ẢO GIÁC, KHÔNG NÓI BỪA: Chỉ trả lời dựa trên thông tin Danh mục khóa học và Tài liệu PUBLIC được cung cấp.\n' +
-            '3. KHÔNG ĐƯỢC tiết lộ hay giải thích kiến thức chuyên sâu trong bài giảng có thu phí. Nếu câu hỏi hỏi sâu vào kiến thức bài học, hãy nói mình không biết vì mục tiêu của mình chỉ là tư vấn lộ trình học tập.\n' +
-            '4. Nếu câu hỏi không liên quan đến hệ thống 3T Academy, hãy lịch sự nói mình không biết.',
-          temperature: 0.2,
-        },
-      });
+  try {
+    const geminiReply = await generateGeminiText({
+      systemInstruction:
+        'Bạn là Trợ lý Tư vấn Lộ trình học tập của 3T Academy.\n' +
+        '1. Văn phong gần gũi, thân thiện (xưng "mình", gọi "bạn").\n' +
+        '2. Chỉ trả lời dựa trên Danh mục khóa học và Tài liệu PUBLIC được cung cấp, không bịa thông tin.\n' +
+        '3. Không giải thích sâu kiến thức bài giảng trả phí.',
+      prompt:
+        `=== DANH MỤC KHÓA HỌC ĐANG MỞ TẠI 3T ACADEMY ===\n${catalogSummary}\n\n` +
+        `=== TÀI LIỆU TƯ VẤN CÔNG KHAI (PUBLIC RAG) ===\n${retrievedPublicContext}\n\n` +
+        `=== CÂU HỎI CỦA HỌC VIÊN ===\n${cleanQuestion}`,
+      temperature: 0.2,
+    });
 
-      if (response.text && response.text.trim().length > 0) {
-        const answerMd = response.text.trim();
-        return {
-          replyText: answerMd,
-          answerMd,
-          recommendedCourseSlug: recommendedCourse?.slug || '',
-          recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
-          recommendedCohortCodes,
-          citations: topChunks.map((c) => ({
-            chunkId: c.id,
-            sourceType: c.sourceType,
-            snippet: c.content.slice(0, 140),
-          })),
-        };
-      }
-    } catch (err) {
-      logger.warn({ err }, 'Gemini Advisor call failed, using deterministic RAG response');
+    if (geminiReply) {
+      return {
+        replyText: geminiReply,
+        answerMd: geminiReply,
+        recommendedCourseSlug: recommendedCourse?.slug || '',
+        recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
+        recommendedCohortCodes,
+        citations: topChunks.map((c) => ({
+          chunkId: c.id,
+          sourceType: c.sourceType,
+          snippet: c.content.slice(0, 140),
+        })),
+      };
     }
+  } catch (err) {
+    logger.warn({ err }, 'Gemini Advisor call failed, falling back to deterministic RAG response');
   }
 
-  // Deterministic, warm human response grounded in PUBLIC vector chunks
   const bestChunkContent = topChunks[0]?.content || '';
   const replyText =
     `Chào bạn nha! Mình rất vui được đồng hành tư vấn lộ trình học tập cho bạn tại **3T Academy**.\n\n` +
     (bestChunkContent ? `${bestChunkContent}\n\n` : '') +
-    `Hiện tại học viện đang mở ghi danh 4 lộ trình đào tạo thực chiến:\n${catalogSummary}\n\n` +
+    `Hiện tại học viện đang mở ghi danh các lộ trình đào tạo thực chiến:\n${catalogSummary}\n\n` +
     (recommendedCourse
-      ? `👉 Gợi ý phù hợp nhất cho bạn lúc này là khóa **${recommendedCourse.title}** (\`${recommendedCohort?.code || ''}\`). Bạn có muốn mình hỗ trợ thông tin lịch học hoặc cách đăng ký lớp này không?`
+      ? `Gợi ý phù hợp nhất cho nhu cầu của bạn lúc này là khóa **${recommendedCourse.title}** (\`${recommendedCohort?.code || ''}\`). Bạn có muốn xem chi tiết đề cương 6 buổi hoặc đăng ký ngay lớp này không?`
       : 'Bạn chia sẻ thêm mục tiêu công việc hiện tại để mình chọn lớp phù hợp nhất cho bạn nhé!');
 
   return {
@@ -427,7 +499,6 @@ export async function askCourseTutorRag(params: {
   const { accountId, userRole, cohortId, sessionId, question, currentVideoSec } = params;
   const cleanQuestion = question.trim();
 
-  // 1. Load session, cohort, and course metadata
   const [session] = await db
     .select()
     .from(classSessions)
@@ -455,6 +526,13 @@ export async function askCourseTutorRag(params: {
     });
   }
 
+  if (userRole === 'INSTRUCTOR' && cohort.instructorId !== accountId) {
+    throw Object.assign(new Error('Bạn không phụ trách giảng dạy đợt học này'), {
+      statusCode: 403,
+      code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+    });
+  }
+
   const [course] = await db
     .select()
     .from(courses)
@@ -468,7 +546,6 @@ export async function askCourseTutorRag(params: {
     });
   }
 
-  // 2. PAID ENROLLMENT GATE: Students must have purchased / enrolled in this course
   if (userRole === 'STUDENT') {
     const [enrollment] = await db
       .select()
@@ -485,7 +562,7 @@ export async function askCourseTutorRag(params: {
     if (!enrollment) {
       throw Object.assign(
         new Error(
-          `Bạn cần đăng ký và hoàn tất học phí khóa "${course.title}" để sử dụng Trợ giảng AI và truy cập kiến thức bài giảng của khóa học này.`
+          `Bạn cần đăng ký và hoàn tất học phí khóa "${course.title}" để sử dụng Trợ giảng AI của khóa học này.`
         ),
         {
           statusCode: 403,
@@ -495,7 +572,6 @@ export async function askCourseTutorRag(params: {
     }
   }
 
-  // 3. Load ONLY this course's skills/topics
   const currentCourseSkills = await db
     .select({
       code: skills.code,
@@ -510,14 +586,13 @@ export async function askCourseTutorRag(params: {
   const allowedTopicsText =
     allowedSkillNames.length > 0 ? allowedSkillNames.join(', ') : course.title;
 
-  // 4. TOPIC & CROSS-COURSE BOUNDARY CHECK
   const tutorIntent = classifyCourseTutorIntent(cleanQuestion, course.slug);
 
   if (tutorIntent.type === 'OUT_OF_DOMAIN') {
     return {
       answerMd:
-        `Mình xin lỗi nha, câu hỏi này nằm ngoài phạm vi kiến thức của khóa **${course.title}** nên mình không biết thông tin để giải đáp cho bạn.\n\n` +
-        `Trong không gian học tập này, mình chỉ được phép hỗ trợ các chủ đề chuyên môn thuộc giáo trình của khóa học (bao gồm: **${allowedTopicsText}**). Bạn có chỗ nào chưa rõ trong buổi học **${session.title}** thì cứ hỏi mình nhé!`,
+        `Mình xin lỗi nha, câu hỏi này nằm ngoài phạm vi kiến thức của khóa **${course.title}**.\n\n` +
+        `Trong không gian học tập này, mình chỉ hỗ trợ các chủ đề chuyên môn thuộc giáo trình của khóa học (**${allowedTopicsText}**). Bạn có chỗ nào chưa rõ trong buổi **${session.title}** thì hỏi mình nhé!`,
       detectedTopic: 'Ngoài phạm vi khóa học',
       citations: [],
     };
@@ -526,15 +601,13 @@ export async function askCourseTutorRag(params: {
   if (tutorIntent.type === 'OTHER_COURSE_TOPIC') {
     return {
       answerMd:
-        `Mình xin phép không trả lời câu hỏi này nha bạn ơi, vì chủ đề bạn hỏi thuộc phạm vi của khóa **${tutorIntent.otherCourseTitle}**, không nằm trong chương trình của khóa **${course.title}** mà bạn đang theo học.\n\n` +
-        `Mình là Trợ giảng AI chuyên trách riêng cho khóa **${course.title}**, nên mình chỉ nắm vững và được phép khai thác các kiến thức trong khóa học này thôi (gồm: **${allowedTopicsText}**). Bạn cần mình giải thích phần nào trong bài **${session.title}** thì nhắn mình nhé!`,
+        `Chủ đề bạn hỏi thuộc phạm vi của khóa **${tutorIntent.otherCourseTitle}**, không nằm trong chương trình của khóa **${course.title}** mà bạn đang mở.\n\n` +
+        `Mình là Trợ giảng AI chuyên trách riêng cho khóa **${course.title}** (**${allowedTopicsText}**). Bạn cần mình giải thích phần nào trong bài **${session.title}** thì nhắn mình nhé!`,
       detectedTopic: 'Khóa học khác (Đã chặn)',
       citations: [],
     };
   }
 
-  // 5. STRICT COURSE-SCOPED VECTOR RETRIEVAL:
-  // Query ONLY `ENROLLED_ONLY` chunks belonging to `course.id` (NEVER other courses)
   const courseChunks = await db
     .select()
     .from(knowledgeChunks)
@@ -546,27 +619,14 @@ export async function askCourseTutorRag(params: {
     )
     .orderBy(asc(knowledgeChunks.chunkIndex));
 
-  const queryVec = computeSemanticEmbedding1024(cleanQuestion, 1024);
-  const rankedChunks = courseChunks
-    .map((chunk) => {
-      const vecSim = cosineSimilarity1024(queryVec, chunk.embedding);
-      const lexSim = lexicalOverlapScore(cleanQuestion, chunk.content);
-      const sessionBoost = chunk.sessionId === session.id ? 0.15 : 0;
-      return {
-        chunk,
-        score: vecSim * 0.65 + lexSim * 0.35 + sessionBoost,
-      };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  const topChunks = rankedChunks.slice(0, 3).map((r) => r.chunk);
+  const topChunks = rankChunksHybridRrf(cleanQuestion, courseChunks, session.id).slice(0, 3);
 
   const citations = topChunks.map((ch, idx) => {
-    const sec = ch.startSec ?? (idx + 1) * 15;
+    const sec = ch.startSec ?? (idx + 1) * 180;
     return {
       label: `[${formatSecondsToMmSs(sec)}]`,
       jumpSec: sec,
-      slideLabel: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Slide Trang ${idx * 4 + 8}`,
+      slideLabel: ch.pageNumber ? `Slide Trang ${ch.pageNumber}` : `Slide Trang ${idx * 3 + 6}`,
     };
   });
 
@@ -577,65 +637,51 @@ export async function askCourseTutorRag(params: {
       ? topChunks
           .map(
             (c) =>
-              `[Mốc video ${formatSecondsToMmSs(c.startSec ?? 15)} | Slide Trang ${c.pageNumber ?? 8}]: ${c.content}`
+              `[Mốc video ${formatSecondsToMmSs(c.startSec ?? 180)} | Slide Trang ${c.pageNumber ?? 6}]: ${c.content}`
           )
           .join('\n\n')
       : session.aiSummaryMd || session.descriptionMd || course.shortDescription;
 
-  const gemini = getGeminiClient();
-  if (gemini) {
-    try {
-      const response = await gemini.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents:
-          `=== KHÓA HỌC HIỆN TẠI (CÔ LẬP NGHIÊM NGẶT) ===\n` +
-          `Tên khóa học: ${course.title}\n` +
-          `Buổi học hiện tại: Buổi ${session.sessionOrder} - ${session.title}\n` +
-          `Các chủ đề/kỹ năng được phép giải đáp trong khóa học này: ${allowedTopicsText}\n\n` +
-          `=== HỌC LIỆU TRÍCH XUẤT TỪ VECTOR EMBEDDING CỦA RIÊNG KHÓA HỌC NÀY ===\n` +
-          `${chunksContextText}\n\n` +
-          `=== CÂU HỎI CỦA HỌC VIÊN (Tại mốc video ${formatSecondsToMmSs(currentVideoSec)}) ===\n` +
-          `${cleanQuestion}\n\n` +
-          `Hãy giải đáp tận tình, dễ hiểu, gần gũi và trích dẫn mốc thời gian bài giảng nếu có.`,
-        config: {
-          systemInstruction:
-            `Bạn là Trợ giảng AI đồng hành riêng của khóa học "${course.title}".\n` +
-            'QUY TẮC BẮT BUỘC:\n' +
-            '1. Văn phong gần gũi, nhẹ nhàng, thân thiện như một người bạn học cùng lớp (xưng "mình", gọi "bạn").\n' +
-            `2. CÔ LẬP KIẾN THỨC KHÓA HỌC: Bạn CHỈ được phép trả lời các chủ đề thuộc khóa học "${course.title}" (${allowedTopicsText}). Tuyệt đối KHÔNG trả lời kiến thức của khóa học khác hoặc các lĩnh vực ngoài lề (như kế toán, thương mại điện tử, nấu ăn...).\n` +
-            '3. KHÔNG ĐƯỢC ẢO GIÁC, KHÔNG NÓI BỪA: Chỉ dựa vào Học liệu của khóa học được cung cấp bên dưới. Nếu câu hỏi không có trong nội dung khóa học này, hãy nhẹ nhàng nói rằng mình không biết vì nội dung đó nằm ngoài phạm vi bài học.',
-          temperature: 0.2,
-        },
-      });
+  try {
+    const geminiAnswer = await generateGeminiText({
+      systemInstruction:
+        `Bạn là Trợ giảng AI đồng hành riêng của khóa học "${course.title}".\n` +
+        '1. Giải thích gần gũi, rõ ràng, bám sát học liệu trích xuất bên dưới.\n' +
+        `2. Chỉ trả lời kiến thức thuộc khóa "${course.title}" (${allowedTopicsText}), không bịa đặt ngoài tài liệu.`,
+      prompt:
+        `=== KHÓA HỌC & BUỔI HỌC HIỆN TẠI ===\n` +
+        `Khóa học: ${course.title} | Buổi ${session.sessionOrder}: ${session.title}\n\n` +
+        `=== HỌC LIỆU TRÍCH XUẤT (HYBRID RRF) ===\n${chunksContextText}\n\n` +
+        `=== CÂU HỎI HỌC VIÊN (Tại mốc ${formatSecondsToMmSs(currentVideoSec)}) ===\n${cleanQuestion}`,
+      temperature: 0.2,
+    });
 
-      if (response.text && response.text.trim().length > 0) {
-        return {
-          answerMd: response.text.trim(),
-          detectedTopic,
-          citations,
-        };
-      }
-    } catch (err) {
-      logger.warn({ err }, 'Gemini Course Tutor call failed, using deterministic course-scoped RAG');
+    if (geminiAnswer) {
+      return {
+        answerMd: geminiAnswer,
+        detectedTopic,
+        citations,
+      };
     }
+  } catch (err) {
+    logger.warn({ err }, 'Gemini Course Tutor call failed, using deterministic course-scoped RAG');
   }
 
-  // Deterministic course-scoped RAG answer
   const primaryContent =
     topChunks.length > 0
       ? topChunks
           .slice(0, 2)
           .map(
             (c) =>
-              `- Tại mốc **[${formatSecondsToMmSs(c.startSec ?? 15)}]** (${c.pageNumber ? `Slide Trang ${c.pageNumber}` : 'Slide bài giảng'}): ${c.content}`
+              `- Tại mốc **[${formatSecondsToMmSs(c.startSec ?? 180)}]** (${c.pageNumber ? `Slide Trang ${c.pageNumber}` : 'Slide bài giảng'}): ${c.content}`
           )
           .join('\n\n')
       : session.aiSummaryMd || session.descriptionMd || course.shortDescription;
 
   const answerMd =
-    `Chào bạn nha! Dựa trên học liệu của khóa **${course.title}** (Buổi ${session.sessionOrder}: *${session.title}*), mình giải thích chi tiết điểm bạn đang thắc mắc như sau nhé:\n\n` +
+    `Chào bạn! Dựa trên học liệu khóa **${course.title}** (Buổi ${session.sessionOrder}: *${session.title}*), mình giải thích chi tiết điểm bạn đang hỏi như sau:\n\n` +
     `${primaryContent}\n\n` +
-    `Bạn có thể bấm vào mốc thời gian đính kèm bên dưới để xem lại đúng đoạn giảng viên giải thích trên video nha!`;
+    `Bạn có thể nhấn trực tiếp vào mốc thời gian đính kèm bên dưới để tua tới đúng đoạn giảng viên phân tích trên video nhé!`;
 
   return {
     answerMd,

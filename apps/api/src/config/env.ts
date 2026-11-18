@@ -28,6 +28,9 @@ const PLACEHOLDER_ENV_VALUES = new Set([
   'your-r2-account-id',
   'your-r2-access-key',
   'your-r2-secret-key',
+  'your_cloudflare_account_id',
+  'your_r2_access_key_id',
+  'your_r2_secret_access_key',
   'devkey',
   'secret',
 ]);
@@ -47,7 +50,7 @@ const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .min(1, 'DATABASE_URL is required')
-    .default('postgres://edutech_user:edutech_secret_2026@localhost:5432/edutech_db'),
+    .default('postgres://edutech_user:edutech_secret_2026@localhost:54320/edutech_db'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   INTERNAL_API_KEY: z
     .string()
@@ -65,35 +68,32 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   HMAC_CERTIFICATE_SECRET: z.string().default('3t-academy-hmac-certificate-secret-key-2026'),
   AI_SERVICE_URL: z.string().default('http://localhost:8000'),
+  GEMINI_API_KEY: z.preprocess(emptyToUndefined, z.string().trim().optional()),
+  GEMINI_MODEL: z.string().trim().default('gemini-2.5-flash'),
+  GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().trim().optional()),
   LIVEKIT_API_URL: z.preprocess(
     mediaEnvPreprocess,
-    z
-      .string()
-      .trim()
-      .default('wss://project-3t-academy-live-3vunmpp5.livekit.cloud')
+    z.string().trim().default('')
   ),
   LIVEKIT_API_KEY: z.preprocess(
     mediaEnvPreprocess,
-    z.string().trim().default('APIAK2UGEYhMadd')
+    z.string().trim().default('')
   ),
   LIVEKIT_API_SECRET: z.preprocess(
     mediaEnvPreprocess,
-    z.string().trim().default('KVR8YFo2c2FwZEwCAOMhP2sFzQlwZ7ylmgTdPeRKavV')
+    z.string().trim().default('')
   ),
   R2_ACCOUNT_ID: z.preprocess(
     mediaEnvPreprocess,
-    z.string().trim().default('e3075f23d1126bc8bfb3bb679a533e58')
+    z.string().trim().default('')
   ),
   R2_ACCESS_KEY_ID: z.preprocess(
     mediaEnvPreprocess,
-    z.string().trim().default('371c3ac7558bb2bb64f62df8aca59deb')
+    z.string().trim().default('')
   ),
   R2_SECRET_ACCESS_KEY: z.preprocess(
     mediaEnvPreprocess,
-    z
-      .string()
-      .trim()
-      .default('12c612ace0b0fc2ad6a41d062695cb0cf419938bc5eeb1cc5ae9fc994dc58114')
+    z.string().trim().default('')
   ),
   R2_BUCKET_NAME: z.preprocess(
     mediaEnvPreprocess,
@@ -104,7 +104,7 @@ const envSchema = z.object({
     z
       .string()
       .trim()
-      .default('https://pub-7ab9c21bfa214570bd20463f8f4522c2.r2.dev')
+      .default('')
       .transform((val) => val.replace(/\/+$/, ''))
   ),
   SEPAY_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -114,7 +114,7 @@ const envSchema = z.object({
     z
       .string()
       .trim()
-      .default('https://guided-wallaby-measured.ngrok-free.app')
+      .default('http://localhost:4000')
       .transform((val) => val.replace(/\/+$/, ''))
   ),
   SEPAY_WEBHOOK_URL: z.preprocess(emptyToUndefined, z.string().trim().optional()),

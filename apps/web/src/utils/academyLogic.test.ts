@@ -12,6 +12,7 @@ import {
   calculatePathRecommendation,
   isEligibleToEnroll,
 } from './academyLogic';
+import { buildCertificateVerifyUrl, encodeQrMatrix } from './qrMatrix';
 import { ClassSession, Cohort } from '../types/domain';
 
 const sampleSession: ClassSession = {
@@ -20,7 +21,7 @@ const sampleSession: ClassSession = {
   sessionOrder: 4,
   title: 'Buổi 4: Kỹ thuật Chunking & Parsing chống Zip-bomb',
   activityTags: ['THEORY', 'LIVE_CODING'],
-  hostInstructorName: 'TS. Trần Minh Khoa',
+  hostInstructorName: 'TS. Lê Minh Khoa',
   scheduledStart: '2026-11-05T19:30:00+07:00',
   scheduledEnd: '2026-11-05T21:30:00+07:00',
   status: 'REPLAY_READY',
@@ -87,11 +88,11 @@ test('passive video watching to 100% NEVER unlocks session completion without pa
   assert.equal(watchedToEnd.isCompleted, false);
 });
 
-test('evaluateSessionQuizAndUnlock unlocks session completion ONLY when score >= 67%', () => {
-  // Fail case: only 1/3 correct (33%)
-  const failedAttempt = evaluateSessionQuizAndUnlock(sampleSession, [1, 0, 2]);
+test('evaluateSessionQuizAndUnlock unlocks session completion ONLY when score >= 70%', () => {
+  // Fail case: 2/3 correct (67% < 70%)
+  const failedAttempt = evaluateSessionQuizAndUnlock(sampleSession, [1, 1, 2]);
   assert.equal(failedAttempt.passed, false);
-  assert.equal(failedAttempt.scorePercent, 33);
+  assert.equal(failedAttempt.scorePercent, 67);
   assert.equal(failedAttempt.updatedSession.isCompleted, false);
   assert.equal(failedAttempt.updatedSession.quizStatus, 'PENDING');
 
@@ -180,10 +181,15 @@ test('checkCohortScheduleConflict detects overlapping weekly study slots by dayO
   assert.equal(checkCohortScheduleConflict(sameDayDifferentHoursTarget, [enrolled]), null);
 });
 
-test('calculatePathRecommendation maps career goal and diagnostic answers to cohort', () => {
+test('calculatePathRecommendation maps career goal and diagnostic answers to canonical DB course slug & cohort', () => {
   const rec = calculatePathRecommendation('AI_ENGINEER', [1, 0, 2]);
+  assert.equal(rec.recommendedCourseSlug, 'ai-engineering-rag-agents-llmops');
   assert.equal(rec.recommendedCohortCode, 'AI-ENG-2026-K01');
   assert.equal(rec.diagnosticScore, 100);
+
+  const backendRec = calculatePathRecommendation('CLOUD_BACKEND', [1, 0, 2]);
+  assert.equal(backendRec.recommendedCourseSlug, 'backend-architecture-distributed-systems');
+  assert.equal(backendRec.recommendedCohortCode, 'SWE-ARCH-2026-K01');
 });
 
 test('isEligibleToEnroll blocks GUEST and non-student roles, allows STUDENT only', () => {
@@ -203,4 +209,17 @@ test('isEligibleToEnroll blocks GUEST and non-student roles, allows STUDENT only
   const studentCheck = isEligibleToEnroll('STUDENT');
   assert.equal(studentCheck.eligible, true);
   assert.equal(studentCheck.reason, undefined);
+});
+
+test('encodeQrMatrix encodes certificate verification URL into a valid square ISO/IEC 18004 QR matrix with finder patterns', () => {
+  const verifyUrl = buildCertificateVerifyUrl('CERT-3T-2026-0001');
+  assert.match(verifyUrl, /\/certificates\/verify\/CERT-3T-2026-0001$/);
+
+  const matrix = encodeQrMatrix(verifyUrl);
+  assert.ok(matrix.length >= 25 && matrix.length % 4 === 1);
+  assert.equal(matrix[0].length, matrix.length);
+  // Top-left, top-right, bottom-left finder centers must be dark
+  assert.equal(matrix[3][3], true);
+  assert.equal(matrix[3][matrix.length - 4], true);
+  assert.equal(matrix[matrix.length - 4][3], true);
 });

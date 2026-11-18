@@ -297,6 +297,17 @@ export const teachApi = {
       body: JSON.stringify({ content }),
     }),
 
+  verifyDiscussionThread: (threadId: string, verified = true) =>
+    httpRequest<{
+      threadId: string;
+      verifiedByStaff: boolean;
+      isResolved: boolean;
+      updatedAt: string;
+    }>(`/teach/discussions/${encodeURIComponent(threadId)}/verify`, {
+      method: 'PATCH',
+      body: JSON.stringify({ verified }),
+    }),
+
   reviewExamProctoring: (
     reviewId: string,
     decision: 'APPROVED' | 'RETAKE_REQUIRED'

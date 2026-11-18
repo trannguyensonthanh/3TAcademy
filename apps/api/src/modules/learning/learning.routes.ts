@@ -27,7 +27,9 @@ import {
   chatMessages,
   orders,
   paymentTransactions,
+  courseReviews,
 } from '../../db/schema/index.js';
+import { sql } from 'drizzle-orm';
 import { requireAuth, optionalAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { askCourseTutorRag } from '../../integrations/ragAi.service.js';
@@ -42,6 +44,7 @@ import {
 import {
   createLiveKitToken,
   createGuestSpeakerToken,
+  getWebhookReceiver,
 } from '../../integrations/livekit.service.js';
 import {
   resolvePlayableVideoSource,
@@ -57,8 +60,13 @@ import {
   relayWebRtcSignal,
   relayLiveAudioChunk,
 } from './liveRoom.helpers.js';
-import { getR2PublicObjectUrl } from '../../integrations/r2.service.js';
+import {
+  getR2PublicObjectUrl,
+  isR2Configured,
+  createR2PresignedPutUrl,
+} from '../../integrations/r2.service.js';
 import { reconcileUnmatchedSepayTransactions } from '../order/order.routes.js';
+import { gradeAndRecordAssessmentSubmission } from '../assessment/assessment.routes.js';
 
 export const learningRouter = Router();
 
@@ -91,13 +99,54 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
-function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
+export function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
   const raw = (r2ObjectKey || '').trim();
   if (!raw) return '';
   if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/')) {
     return raw;
   }
-  return `https://cdn.3t.edu.vn/${raw}`;
+  const cleanKey = raw.replace(/^\/+/, '');
+  const r2Domain = (env.R2_PUBLIC_DOMAIN || '').replace(/\/+$/, '');
+  const isRealR2Domain =
+    Boolean(r2Domain) &&
+    !r2Domain.includes('media.yourdomain.com') &&
+    !r2Domain.includes('cdn.3t.edu.vn') &&
+    !/^materials\/(ai|py|swe|data)-k0/i.test(cleanKey);
+
+  if (isRealR2Domain) {
+    return `${r2Domain}/${cleanKey}`;
+  }
+  return `/api/v1/sessions/attachments/download?key=${encodeURIComponent(cleanKey)}`;
+}
+
+async function assertSessionCohortAccess(params: {
+  cohortId: number;
+  userId: number;
+  userRole: string;
+}): Promise<boolean> {
+  const role = String(params.userRole || '').trim().toUpperCase();
+  if (role === 'ADMIN') return true;
+  if (role === 'INSTRUCTOR') {
+    const [cohort] = await db
+      .select()
+      .from(cohorts)
+      .where(eq(cohorts.id, params.cohortId))
+      .limit(1);
+    return Boolean(cohort && cohort.instructorId === params.userId);
+  }
+  await ensureEnrollmentsForPaidOrders(params.userId);
+  const [enr] = await db
+    .select()
+    .from(enrollments)
+    .where(
+      and(
+        eq(enrollments.accountId, params.userId),
+        eq(enrollments.cohortId, params.cohortId),
+        inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+      )
+    )
+    .limit(1);
+  return Boolean(enr);
 }
 
 export async function buildFormattedDiscussions(
@@ -191,6 +240,7 @@ function mapClassSessionDto(
     hostInstructorName?: string;
     isCompleted?: boolean;
     lastPositionSec?: number;
+    maxWatchedSec?: number;
     attachmentsCount?: number;
     assessmentId?: string;
     quizScore?: number | null;
@@ -198,8 +248,8 @@ function mapClassSessionDto(
       id: string;
       question: string;
       options: string[];
-      correctIndex: number;
-      explanation: string;
+      correctIndex?: number;
+      explanation?: string;
     }>;
     aiCitations?: Array<{
       timestampSec: number;
@@ -249,9 +299,10 @@ function mapClassSessionDto(
     videoProvider: (s.videoProvider || 'R2_HLS_AES128') as 'R2_HLS_AES128' | 'BUNNY_STREAM',
     livekitRoomName: s.livekitRoomName,
     durationSeconds: s.durationSeconds || 5400,
-    durationMinutes: Math.round((s.durationSeconds || 5400) / 60),
+    durationMinutes: Math.max(1, Math.round((s.durationSeconds || 5400) / 60)),
     isCompleted,
     lastPositionSec: opts.lastPositionSec ?? 0,
+    maxWatchedSec: Math.max(opts.maxWatchedSec ?? 0, opts.lastPositionSec ?? 0),
     aiSummaryMd: s.aiSummaryMd || '',
     attachmentsCount: opts.attachmentsCount ?? 0,
     assessmentId: opts.assessmentId,
@@ -303,11 +354,200 @@ async function ensureEnrollmentsForPaidOrders(accountId: number) {
           enrolledAt: ord.paidAt || ord.createdAt || new Date(),
         })
         .onConflictDoNothing();
+
+      await db
+        .update(cohorts)
+        .set({
+          enrolledCount: sql`(SELECT COUNT(*)::int FROM enrollments WHERE cohort_id = ${ord.cohortId} AND status <> 'REVOKED')`,
+          updatedAt: new Date(),
+        })
+        .where(eq(cohorts.id, ord.cohortId));
     }
   }
 
   return paidOrders;
 }
+
+// 3.0 GET /sessions/attachments/download — Serves R2 redirect or real lecture handout Markdown/Text
+learningRouter.get('/sessions/attachments/download', requireAuth, async (req, res, next) => {
+  try {
+    const key = String(req.query.key || '').trim();
+    if (!key) {
+      res.status(400).json({ message: 'Thiếu đường dẫn tài liệu (key)' });
+      return;
+    }
+
+    const [att] = await db
+      .select()
+      .from(sessionAttachments)
+      .where(eq(sessionAttachments.r2ObjectKey, key))
+      .limit(1);
+
+    if (att) {
+      const [sess] = await db
+        .select()
+        .from(classSessions)
+        .where(eq(classSessions.id, att.sessionId))
+        .limit(1);
+
+      if (sess) {
+        const allowed = await assertSessionCohortAccess({
+          cohortId: sess.cohortId,
+          userId: req.user!.id,
+          userRole: req.user!.role,
+        });
+        if (!allowed) {
+          res.status(403).json({
+            code: 'NOT_ENROLLED_IN_COHORT',
+            message: 'Bạn cần ghi danh vào khóa học để tải tài liệu này.',
+          });
+          return;
+        }
+
+        const chunks = await db
+          .select()
+          .from(knowledgeChunks)
+          .where(eq(knowledgeChunks.sessionId, sess.id))
+          .orderBy(asc(knowledgeChunks.chunkIndex));
+
+        const docText = [
+          `===================================================================`,
+          `3T AI ACADEMY — TÀI LIỆU HỌC TẬP CHÍNH THỨC`,
+          `Buổi ${sess.sessionOrder}: ${sess.title}`,
+          `Tệp: ${att.fileName}`,
+          `===================================================================`,
+          ``,
+          `1. MỤC TIÊU & MÔ TẢ TRỌNG TÂM:`,
+          sess.descriptionMd || 'Tài liệu thực hành chuyên sâu theo buổi học.',
+          ``,
+          `2. TÓM TẮT KIẾN THỨC CỐT LÕI:`,
+          ...(chunks.length > 0
+            ? chunks.map((c, idx) => `--- Phần ${idx + 1} ---\n${c.content}`)
+            : [sess.aiSummaryMd || 'Nội dung slide giảng dạy trực tiếp tại lớp.']),
+          ``,
+        ].join('\n');
+
+        const safeDownloadName = att.fileName.replace(/\.pdf$/i, '') + '_Handout.txt';
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${encodeURIComponent(safeDownloadName)}"`
+        );
+        res.send(docText);
+        return;
+      }
+    }
+
+    if (isR2Configured()) {
+      res.redirect(getR2PublicObjectUrl(key));
+      return;
+    }
+
+    res.status(404).json({ message: 'Không tìm thấy tệp tài liệu yêu cầu' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3.0B Notification Read State Endpoints
+learningRouter.patch('/me/notifications/:notificationId/read', requireAuth, async (req, res, next) => {
+  try {
+    const notifId = Number(req.params.notificationId);
+    const now = new Date();
+    await db
+      .update(notifications)
+      .set({ isRead: true, readAt: now })
+      .where(
+        and(eq(notifications.id, notifId), eq(notifications.recipientId, req.user!.id))
+      );
+    res.json({ id: String(notifId), isRead: true, readAt: now.toISOString() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+learningRouter.post('/me/notifications/read-all', requireAuth, async (req, res, next) => {
+  try {
+    const now = new Date();
+    await db
+      .update(notifications)
+      .set({ isRead: true, readAt: now })
+      .where(eq(notifications.recipientId, req.user!.id));
+    res.json({ success: true, readAt: now.toISOString() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 3.0C Course Review Submission (Enrolled Students Only)
+const submitCourseReviewSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().min(5).max(2000),
+});
+
+learningRouter.post(
+  '/cohorts/:cohortId/reviews',
+  requireAuth,
+  validate(submitCourseReviewSchema),
+  async (req, res, next) => {
+    try {
+      const cohort = await resolveCohort(req.params.cohortId);
+      if (!cohort) {
+        res.status(404).json({ code: 'COHORT_NOT_FOUND', message: 'Không tìm thấy đợt học' });
+        return;
+      }
+
+      const [enr] = await db
+        .select()
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.accountId, req.user!.id),
+            eq(enrollments.cohortId, cohort.id),
+            inArray(enrollments.status, ['ACTIVE', 'COMPLETED'])
+          )
+        )
+        .limit(1);
+
+      if (!enr) {
+        res.status(403).json({
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message: 'Chỉ học viên đã ghi danh vào đợt học mới được gửi đánh giá.',
+        });
+        return;
+      }
+
+      const [saved] = await db
+        .insert(courseReviews)
+        .values({
+          courseId: cohort.courseId,
+          cohortId: cohort.id,
+          accountId: req.user!.id,
+          rating: req.body.rating,
+          comment: req.body.comment.trim(),
+          isPublic: true,
+        })
+        .onConflictDoUpdate({
+          target: [courseReviews.cohortId, courseReviews.accountId],
+          set: {
+            rating: req.body.rating,
+            comment: req.body.comment.trim(),
+            isPublic: true,
+          },
+        })
+        .returning();
+
+      res.status(201).json({
+        id: String(saved!.id),
+        rating: saved!.rating,
+        comment: saved!.comment,
+        createdAt: saved!.createdAt.toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // 3.1 GET /me/dashboard
 learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
@@ -403,6 +643,7 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
         hostInstructorName: staffInfo?.instructorName,
         isCompleted,
         lastPositionSec: prog?.lastPositionSec ?? 0,
+        maxWatchedSec: prog?.maxWatchedSec ?? prog?.lastPositionSec ?? 0,
         assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
         quizScore,
       });
@@ -425,9 +666,10 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
       if (a.sessionId) {
         return sessionStatusById.get(String(a.sessionId)) === 'REPLAY_READY';
       }
-      return mappedSessions.some(
-        (s) => String(s.cohortId) === String(a.cohortId) && s.status === 'REPLAY_READY'
+      const cohortSess = mappedSessions.filter(
+        (s) => String(s.cohortId) === String(a.cohortId)
       );
+      return cohortSess.length > 0 && cohortSess.every((s) => s.isCompleted);
     });
 
     const upcomingTasks = activeAssessments.map((a) => {
@@ -480,10 +722,15 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
     res.json({
       liveSession,
       resumeSession,
+      sessions: mappedSessions,
       upcomingTasks,
       streakDays: completedSessionsCount,
       skillMastery: skillStates.map((s) => {
         const score = normalizeMasteryScore(s.masteryScore);
+        const rawTrend = Number(s.trend || 0);
+        const pctDelta = Math.abs(rawTrend) <= 1 && rawTrend !== 0
+          ? Math.round(rawTrend * 100)
+          : Math.round(rawTrend);
         return {
           skillId: String(s.skillId),
           code: s.code,
@@ -491,7 +738,7 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
           score,
           masteryScore: score,
           evidenceCount: s.evidenceCount,
-          trend: s.trend > 0 ? `+${Math.round(s.trend * 100)}%` : 'Ổn định',
+          trend: pctDelta > 0 ? `+${pctDelta}%` : pctDelta < 0 ? `${pctDelta}%` : 'Ổn định',
           lastUpdated: s.updatedAt.toLocaleDateString('vi-VN'),
         };
       }),
@@ -864,6 +1111,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
         : [];
       const sessChunks = allChunks.filter((ch) => ch.sessionId === s.id);
 
+      const canRevealAnswerKey = isCompleted || userRole !== 'STUDENT';
       const quizQuestions = quizItems.map((item) => {
         const pCfg = (item.promptConfig || {}) as { prompt?: string; question?: string; options?: string[] };
         const gCfg = (item.gradingConfig || {}) as { correctIndex?: number };
@@ -871,8 +1119,12 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
           id: String(item.id),
           question: pCfg.prompt || pCfg.question || '',
           options: Array.isArray(pCfg.options) ? pCfg.options : [],
-          correctIndex: gCfg.correctIndex ?? 0,
-          explanation: item.explanationMd || '',
+          ...(canRevealAnswerKey
+            ? {
+                correctIndex: gCfg.correctIndex ?? 0,
+                explanation: item.explanationMd || '',
+              }
+            : {}),
         };
       });
 
@@ -890,6 +1142,7 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
         hostInstructorName: staffInfo.instructorName,
         isCompleted,
         lastPositionSec: prog?.lastPositionSec ?? 0,
+        maxWatchedSec: prog?.maxWatchedSec ?? prog?.lastPositionSec ?? 0,
         attachmentsCount: sessAttachments.length,
         assessmentId: sessQuiz ? String(sessQuiz.id) : undefined,
         quizScore,
@@ -1125,6 +1378,7 @@ learningRouter.get(
           ? 100
           : null;
 
+      const canRevealAnswerKey = isCompleted || userRole !== 'STUDENT';
       const quizQuestions = quizItems.map((item) => {
         const pCfg = (item.promptConfig || {}) as { prompt?: string; question?: string; options?: string[] };
         const gCfg = (item.gradingConfig || {}) as { correctIndex?: number };
@@ -1132,8 +1386,12 @@ learningRouter.get(
           id: String(item.id),
           question: pCfg.prompt || pCfg.question || '',
           options: Array.isArray(pCfg.options) ? pCfg.options : [],
-          correctIndex: gCfg.correctIndex ?? 0,
-          explanation: item.explanationMd || '',
+          ...(canRevealAnswerKey
+            ? {
+                correctIndex: gCfg.correctIndex ?? 0,
+                explanation: item.explanationMd || '',
+              }
+            : {}),
         };
       });
 
@@ -1225,6 +1483,7 @@ learningRouter.get(
           hostInstructorName: staffInfo.instructorName,
           isCompleted,
           lastPositionSec: prog?.lastPositionSec ?? 0,
+          maxWatchedSec: prog?.maxWatchedSec ?? prog?.lastPositionSec ?? 0,
           attachmentsCount: attachments.length,
           assessmentId: quiz ? String(quiz.id) : undefined,
           quizScore,
@@ -1295,9 +1554,41 @@ learningRouter.put(
   async (req, res, next) => {
     try {
       const session = await resolveSession(req.params.sessionId);
-      const sessionId = session?.id ?? Number(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({ code: 'SESSION_NOT_FOUND', message: 'Không tìm thấy buổi học' });
+        return;
+      }
+
+      const allowed = await assertSessionCohortAccess({
+        cohortId: session.cohortId,
+        userId: req.user!.id,
+        userRole: req.user!.role,
+      });
+      if (!allowed) {
+        res.status(403).json({
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message: 'Bạn chưa ghi danh vào đợt học của buổi này.',
+        });
+        return;
+      }
+
+      const sessionId = session.id;
       const accountId = req.user!.id;
-      const { lastPositionSec, completed } = req.body;
+      const { lastPositionSec, durationSeconds, completed } = req.body;
+
+      // Auto-sync real HTML5 <video> metadata duration back into class_sessions.duration_seconds
+      // so short or variable-length videos (e.g. 10s, 90s, 3600s) compute exact watch % instead of 0%!
+      if (
+        typeof durationSeconds === 'number' &&
+        durationSeconds > 0 &&
+        Math.abs((session.durationSeconds || 0) - durationSeconds) >= 2
+      ) {
+        await db
+          .update(classSessions)
+          .set({ durationSeconds, updatedAt: new Date() })
+          .where(eq(classSessions.id, sessionId));
+        session.durationSeconds = durationSeconds;
+      }
 
       const [existingProg] = await db
         .select()
@@ -1311,6 +1602,7 @@ learningRouter.put(
         .limit(1);
 
       const isCompleted = Boolean(existingProg?.isCompleted || completed);
+      const maxWatchedSec = Math.max(existingProg?.maxWatchedSec ?? 0, lastPositionSec);
       const now = new Date();
       const completedAt = existingProg?.completedAt ?? (completed ? now : null);
 
@@ -1320,6 +1612,7 @@ learningRouter.put(
           accountId,
           sessionId,
           lastPositionSec,
+          maxWatchedSec,
           isCompleted,
           completedAt,
           lastActivityAt: now,
@@ -1328,6 +1621,7 @@ learningRouter.put(
           target: [sessionProgress.accountId, sessionProgress.sessionId],
           set: {
             lastPositionSec,
+            maxWatchedSec,
             isCompleted,
             completedAt,
             lastActivityAt: now,
@@ -1337,11 +1631,15 @@ learningRouter.put(
       res.json({
         sessionId: String(sessionId),
         lastPositionSec,
+        maxWatchedSec,
+        durationSeconds: session.durationSeconds,
         isCompleted,
         savedAt: now.toISOString(),
-        updatedSession: session
-          ? mapClassSessionDto(session, { isCompleted, lastPositionSec })
-          : undefined,
+        updatedSession: mapClassSessionDto(session, {
+          isCompleted,
+          lastPositionSec,
+          maxWatchedSec,
+        }),
       });
     } catch (err) {
       next(err);
@@ -1349,7 +1647,7 @@ learningRouter.put(
   }
 );
 
-// 3.6 POST /sessions/:sessionId/quiz-submit
+// 3.6 POST /sessions/:sessionId/quiz-submit — Unified with gradeAndRecordAssessmentSubmission!
 const quickQuizSubmitSchema = z.object({
   answers: z.array(z.number().int()),
 });
@@ -1375,84 +1673,37 @@ learningRouter.post(
         return;
       }
 
-      const accountId = req.user!.id;
-      const { answers } = req.body;
-
       const [quiz] = await db
         .select()
         .from(assessments)
         .where(eq(assessments.sessionId, session.id))
         .limit(1);
 
-      let correctCount = 0;
-      let totalQuestions = answers.length;
-      const passThreshold = quiz?.passScorePct ?? 70;
-
-      if (quiz) {
-        const items = await db
-          .select()
-          .from(assessmentItems)
-          .where(eq(assessmentItems.assessmentId, quiz.id))
-          .orderBy(asc(assessmentItems.itemOrder));
-
-        if (items.length > 0) {
-          totalQuestions = items.length;
-          items.forEach((item, idx) => {
-            const gCfg = item.gradingConfig as { correctIndex?: number };
-            const pCfg = item.promptConfig as { correctIndex?: number };
-            const expectedIdx = gCfg?.correctIndex ?? pCfg?.correctIndex ?? 0;
-            if (answers[idx] === expectedIdx) {
-              correctCount += 1;
-            }
-          });
-        }
-      }
-
-      const scorePercent =
-        totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-      const passed = scorePercent >= passThreshold;
-      const now = new Date();
-
-      if (passed) {
-        await db
-          .insert(sessionProgress)
-          .values({
-            accountId,
-            sessionId: session.id,
-            lastPositionSec: session.durationSeconds || 0,
-            isCompleted: true,
-            completedAt: now,
-            lastActivityAt: now,
-          })
-          .onConflictDoUpdate({
-            target: [sessionProgress.accountId, sessionProgress.sessionId],
-            set: {
-              isCompleted: true,
-              completedAt: now,
-              lastActivityAt: now,
-            },
-          });
-      }
-
-      if (quiz) {
-        await db.insert(assessmentAttempts).values({
-          assessmentId: quiz.id,
-          accountId,
-          attemptNumber: 1,
-          startedAt: now,
-          submittedAt: now,
-          gradingCompletedAt: now,
-          totalScore: String(correctCount),
-          maxPossibleScore: String(totalQuestions),
-          scorePct: String(scorePercent),
-          isPassed: passed,
-          remedialRecommendations: [],
-          totalRiskScore: '0.00',
-          integrityStatus: 'CLEAN',
+      if (!quiz) {
+        res.status(404).json({
+          success: false,
+          status: 404,
+          code: 'ASSESSMENT_NOT_FOUND',
+          message: 'Buổi học này chưa có đề kiểm tra năng lực.',
         });
+        return;
       }
+
+      const graded = await gradeAndRecordAssessmentSubmission({
+        assessment: quiz,
+        accountId: req.user!.id,
+        userRole: req.user!.role,
+        rawAnswers: req.body.answers,
+      });
+
+      const passThreshold = quiz.passScorePct ?? 70;
+      const passed = graded.isPassed;
+      const scorePercent = graded.scorePercent;
+      const correctCount = graded.correctCount;
+      const totalQuestions = graded.totalQuestions;
 
       res.json({
+        ...graded,
         scorePercent,
         correctCount,
         totalQuestions,
@@ -1594,7 +1845,7 @@ learningRouter.post(
             content: answerMd,
             citations,
             llmProvider: 'gemini',
-            llmModel: 'gemini-4-hydrogen',
+            llmModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
           },
         ]);
       }
@@ -1611,11 +1862,23 @@ learningRouter.post(
 );
 
 // 3.8 GET /sessions/:sessionId/discussions
-learningRouter.get('/sessions/:sessionId/discussions', async (req, res, next) => {
+learningRouter.get('/sessions/:sessionId/discussions', requireAuth, async (req, res, next) => {
   try {
     const session = await resolveSession(req.params.sessionId);
     if (!session) {
       res.json([]);
+      return;
+    }
+    const allowed = await assertSessionCohortAccess({
+      cohortId: session.cohortId,
+      userId: req.user!.id,
+      userRole: req.user!.role,
+    });
+    if (!allowed) {
+      res.status(403).json({
+        code: 'NOT_ENROLLED_IN_COHORT',
+        message: 'Bạn chưa ghi danh vào đợt học này',
+      });
       return;
     }
     const formatted = await buildFormattedDiscussions(
@@ -1654,6 +1917,19 @@ learningRouter.post(
             code: 'SESSION_NOT_FOUND',
             message: 'Không tìm thấy buổi học',
           },
+        });
+        return;
+      }
+
+      const allowed = await assertSessionCohortAccess({
+        cohortId: session.cohortId,
+        userId: req.user!.id,
+        userRole: req.user!.role,
+      });
+      if (!allowed) {
+        res.status(403).json({
+          code: 'NOT_ENROLLED_IN_COHORT',
+          message: 'Bạn chưa ghi danh vào đợt học này',
         });
         return;
       }
@@ -1994,7 +2270,41 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
     const currentProfile = profileRows[0];
     const staffInfo = getStaffForInstructor(session.instructorId);
     const roomState = getLiveRoomState(session.id);
-    const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+    const isHost =
+      userRole === 'ADMIN' ||
+      (userRole === 'INSTRUCTOR' &&
+        (cohort ? cohort.instructorId === accountId : session.instructorId === accountId));
+
+    if (userRole === 'INSTRUCTOR' && !isHost) {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+        message: 'Bạn không phải Giảng viên phụ trách đợt học này.',
+      });
+      return;
+    }
+
+    if (userRole === 'STUDENT' && session.status === 'LIVE') {
+      await db
+        .insert(sessionProgress)
+        .values({
+          accountId,
+          sessionId: session.id,
+          lastPositionSec: 0,
+          maxWatchedSec: 0,
+          attendedLive: true,
+          isCompleted: false,
+          lastActivityAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [sessionProgress.accountId, sessionProgress.sessionId],
+          set: {
+            attendedLive: true,
+            lastActivityAt: new Date(),
+          },
+        });
+    }
 
     if (
       !isHost &&
@@ -2140,7 +2450,7 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
           fileSize: sizeStr,
           sizeLabel: sizeStr,
           fileSizeBytes: att.fileSizeBytes,
-          downloadUrl: `https://cdn.3t.edu.vn/${att.r2ObjectKey}`,
+          downloadUrl: buildAttachmentDownloadUrl(att.r2ObjectKey),
           updatedAt: att.createdAt.toLocaleDateString('vi-VN'),
         };
       }),
@@ -2229,7 +2539,18 @@ learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req,
         .limit(1),
       buildInstructorStaffMap(),
     ]);
-    const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+    const isHost =
+      userRole === 'ADMIN' ||
+      (userRole === 'INSTRUCTOR' && session.instructorId === authUser.id);
+    if (userRole === 'INSTRUCTOR' && !isHost) {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+        message: 'Bạn không phải Giảng viên phụ trách buổi học này',
+      });
+      return;
+    }
     const staffInfo = getStaffForInstructor(session.instructorId);
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -2382,7 +2703,7 @@ learningRouter.post('/live/discussions/:threadId/upvote', requireAuth, async (re
   }
 });
 
-// 3.17 POST /live/guest/verify
+// 3.17 POST /live/guest/verify — Requires cryptographically signed JWT invite token!
 const verifyGuestSchema = z.object({
   token: z.string().optional(),
   inviteToken: z.string().optional(),
@@ -2396,42 +2717,53 @@ learningRouter.post(
   validate(verifyGuestSchema),
   async (req, res, next) => {
     try {
-      const rawToken = req.body.token || req.body.inviteToken || '';
-      const rawSessionId = req.body.sessionId;
-      const guestDisplayName = req.body.guestDisplayName || 'Diễn giả Khách mời';
-      const guestRoleHeadline = req.body.guestRoleHeadline || 'Diễn giả Khách mời Doanh nghiệp';
+      const rawToken = (req.body.token || req.body.inviteToken || '').trim();
+      if (!rawToken) {
+        res.status(401).json({
+          valid: false,
+          verified: false,
+          code: 'MISSING_GUEST_INVITE_TOKEN',
+          message: 'Thiếu mã mời Diễn giả Khách mời hợp lệ.',
+        });
+        return;
+      }
 
-      let decodedSessionId: string | number | undefined = rawSessionId;
-      let decodedRoleLabel = guestRoleHeadline;
+      let decodedSessionId: string | number | undefined;
+      let decodedRoleLabel = req.body.guestRoleHeadline || 'Diễn giả Khách mời Doanh nghiệp';
+      let decodedGuestName = req.body.guestDisplayName || 'Diễn giả Khách mời';
 
-      if (rawToken) {
-        try {
-          const decoded = jwt.verify(rawToken, env.JWT_ACCESS_SECRET) as {
-            sessionId?: number | string;
-            guestRoleHeadline?: string;
-          };
-          if (decoded.sessionId) decodedSessionId = decoded.sessionId;
-          if (decoded.guestRoleHeadline) decodedRoleLabel = decoded.guestRoleHeadline;
-        } catch {
+      try {
+        const decoded = jwt.verify(rawToken, env.JWT_ACCESS_SECRET) as {
+          sessionId?: number | string;
+          guestRoleHeadline?: string;
+          guestDisplayName?: string;
+          role?: string;
+        };
+        if (!decoded.sessionId) {
           res.status(401).json({
             valid: false,
             verified: false,
-            message: 'Mã mời Khách mời không hợp lệ hoặc đã hết hạn.',
+            code: 'INVALID_GUEST_INVITE_TOKEN',
+            message: 'Mã mời không chứa thông tin buổi học hợp lệ.',
           });
           return;
         }
+        decodedSessionId = decoded.sessionId;
+        if (decoded.guestRoleHeadline) decodedRoleLabel = decoded.guestRoleHeadline;
+        if (decoded.guestDisplayName && !req.body.guestDisplayName) {
+          decodedGuestName = decoded.guestDisplayName;
+        }
+      } catch {
+        res.status(401).json({
+          valid: false,
+          verified: false,
+          code: 'INVALID_GUEST_INVITE_TOKEN',
+          message: 'Mã mời Khách mời không hợp lệ hoặc đã hết hạn.',
+        });
+        return;
       }
 
-      const session = decodedSessionId
-        ? await resolveSession(decodedSessionId)
-        : (
-            await db
-              .select()
-              .from(classSessions)
-              .where(eq(classSessions.status, 'LIVE'))
-              .limit(1)
-          )[0];
-
+      const session = await resolveSession(decodedSessionId);
       if (!session) {
         res.status(404).json({
           valid: false,
@@ -2450,7 +2782,7 @@ learningRouter.post(
       const livekitServerUrl = (env.LIVEKIT_API_URL || '').trim();
       const guestLivekitToken = await createGuestSpeakerToken({
         roomName,
-        guestName: guestDisplayName,
+        guestName: decodedGuestName,
       });
 
       res.json({
@@ -2462,7 +2794,7 @@ learningRouter.post(
         cohortCode: cohort?.code || '',
         sessionTitle: session.title,
         hostInstructorName: staffInfo.instructorName,
-        guestDisplayName,
+        guestDisplayName: decodedGuestName,
         guestRoleLabel: decodedRoleLabel,
         guestRoleHeadline: decodedRoleLabel,
         livekit: {
@@ -2482,6 +2814,27 @@ learningRouter.post(
 // 3.18 POST /webhooks/livekit (LiveKit Cloud room & egress webhook receiver)
 learningRouter.post('/webhooks/livekit', async (req, res, next) => {
   try {
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    const authStr = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+
+    if (env.NODE_ENV === 'production' || authStr) {
+      if (!authStr) {
+        res.status(401).json({ code: 'MISSING_LIVEKIT_SIGNATURE', message: 'Missing Authorization' });
+        return;
+      }
+      try {
+        const receiver = getWebhookReceiver();
+        if (receiver) {
+          await receiver.receive(JSON.stringify(req.body || {}), authStr);
+        }
+      } catch {
+        if (env.NODE_ENV === 'production') {
+          res.status(401).json({ code: 'INVALID_LIVEKIT_SIGNATURE', message: 'Invalid signature' });
+          return;
+        }
+      }
+    }
+
     const body = (req.body || {}) as {
       event?: string;
       room?: { name?: string };
@@ -2575,7 +2928,9 @@ learningRouter.post(
         .limit(1);
 
       const userRole = String(req.user!.role || '').trim().toUpperCase();
-      const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+      const isHost =
+        userRole === 'ADMIN' ||
+        (userRole === 'INSTRUCTOR' && session.instructorId === req.user!.id);
 
       relayWebRtcSignal(session.id, {
         fromAccountId: String(req.user!.id),
@@ -2634,7 +2989,9 @@ learningRouter.post(
         .limit(1);
 
       const userRole = String(req.user!.role || '').trim().toUpperCase();
-      const isHost = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
+      const isHost =
+        userRole === 'ADMIN' ||
+        (userRole === 'INSTRUCTOR' && session.instructorId === req.user!.id);
       const senderName = profile?.fullName || req.user!.email;
 
       if (
@@ -2645,6 +3002,24 @@ learningRouter.post(
           req.body.cameraFrameDataUrl !== undefined ||
           req.body.screenFrameDataUrl !== undefined)
       ) {
+        // CRITICAL SYNC FIX: If host turns on camera/mic/screen while session is still SCHEDULED,
+        // automatically transition DB session.status -> 'LIVE' and broadcast SSE so students see it immediately!
+        const isBroadcastingMedia = Boolean(
+          req.body.camOn || req.body.micOn || req.body.screenSharing
+        );
+        if (isBroadcastingMedia && session.status === 'SCHEDULED') {
+          await db
+            .update(classSessions)
+            .set({ status: 'LIVE', updatedAt: new Date() })
+            .where(eq(classSessions.id, session.id));
+
+          broadcastLiveRoomEvent(session.id, 'session_status', {
+            sessionId: String(session.id),
+            status: 'LIVE',
+            hostBroadcast: getLiveRoomState(session.id).hostBroadcast,
+          });
+        }
+
         updateHostMediaState(session.id, {
           camOn: req.body.camOn,
           micOn: req.body.micOn,
@@ -2670,7 +3045,72 @@ learningRouter.post(
 
       res.json({
         synced: true,
+        sessionStatus:
+          isHost &&
+          Boolean(req.body.camOn || req.body.micOn || req.body.screenSharing) &&
+          session.status === 'SCHEDULED'
+            ? 'LIVE'
+            : session.status,
         hostMedia: getLiveRoomState(session.id).hostMedia,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// 3.21 POST /live/sessions/:sessionId/recording/presign — Direct browser-to-R2 PUT presign (no 15mb JSON limit!)
+const presignRecordingSchema = z.object({
+  fileName: z.string().optional(),
+  contentType: z.string().default('video/mp4'),
+});
+
+learningRouter.post(
+  '/live/sessions/:sessionId/recording/presign',
+  requireAuth,
+  validate(presignRecordingSchema),
+  async (req, res, next) => {
+    try {
+      const session = await resolveSession(req.params.sessionId);
+      if (!session) {
+        res.status(404).json({ code: 'SESSION_NOT_FOUND', message: 'Không tìm thấy buổi học' });
+        return;
+      }
+
+      const userRole = String(req.user!.role || '').trim().toUpperCase();
+      const isHost =
+        userRole === 'ADMIN' ||
+        (userRole === 'INSTRUCTOR' && session.instructorId === req.user!.id);
+      if (!isHost) {
+        res.status(403).json({
+          code: 'FORBIDDEN_NOT_COHORT_INSTRUCTOR',
+          message: 'Chỉ giảng viên phụ trách mới được tải bản ghi buổi học',
+        });
+        return;
+      }
+
+      if (!isR2Configured()) {
+        res.status(503).json({
+          code: 'R2_NOT_CONFIGURED',
+          message: 'Chưa cấu hình kho lưu trữ Cloudflare R2 trên máy chủ.',
+        });
+        return;
+      }
+
+      const ext = req.body.contentType.includes('webm') ? 'webm' : 'mp4';
+      const objectKey = `recordings/session-${session.id}/replay-${Date.now()}.${ext}`;
+      const presigned = createR2PresignedPutUrl({
+        objectKey,
+        contentType: req.body.contentType,
+        expiresInSeconds: 3600,
+      });
+
+      res.json({
+        sessionId: String(session.id),
+        objectKey: presigned.objectKey,
+        presignedUploadUrl: presigned.uploadUrl,
+        uploadUrl: presigned.uploadUrl,
+        publicUrl: presigned.publicUrl,
       });
     } catch (err) {
       next(err);

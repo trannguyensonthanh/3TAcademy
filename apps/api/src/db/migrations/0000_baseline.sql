@@ -8,40 +8,40 @@ CREATE EXTENSION IF NOT EXISTS vector;      -- Vector similarity search (pgvecto
 CREATE EXTENSION IF NOT EXISTS btree_gist;  -- Exclusion constraints on time ranges (tstzrange)
 
 -- -----------------------------------------------------------------------------
--- 1. ENUM TYPES
+-- 1. ENUM TYPES (Idempotent)
 -- -----------------------------------------------------------------------------
-CREATE TYPE account_role          AS ENUM ('STUDENT', 'INSTRUCTOR', 'ADMIN');
-CREATE TYPE account_status        AS ENUM ('ACTIVE', 'LOCKED');
-CREATE TYPE auth_provider         AS ENUM ('LOCAL', 'GOOGLE');
+DO $$ BEGIN CREATE TYPE account_role AS ENUM ('STUDENT', 'INSTRUCTOR', 'ADMIN'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE account_status AS ENUM ('ACTIVE', 'LOCKED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE auth_provider AS ENUM ('LOCAL', 'GOOGLE'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+DO $$ BEGIN CREATE TYPE course_status AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE skill_relation_role AS ENUM ('PREREQUISITE', 'LEARNING_OUTCOME'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE cohort_status AS ENUM ('DRAFT', 'OPENING', 'ONGOING', 'COMPLETED', 'ARCHIVED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE session_status AS ENUM ('SCHEDULED', 'LIVE', 'PROCESSING_REPLAY', 'REPLAY_READY', 'CANCELED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE video_source_provider AS ENUM ('R2_MP4', 'R2_HLS_AES128', 'BUNNY_STREAM'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE course_status         AS ENUM ('DRAFT', 'PUBLISHED', 'ARCHIVED');
-CREATE TYPE skill_relation_role   AS ENUM ('PREREQUISITE', 'LEARNING_OUTCOME');
-CREATE TYPE cohort_status         AS ENUM ('DRAFT', 'OPENING', 'ONGOING', 'COMPLETED', 'ARCHIVED');
-CREATE TYPE session_status        AS ENUM ('SCHEDULED', 'LIVE', 'PROCESSING_REPLAY', 'REPLAY_READY');
-CREATE TYPE video_source_provider AS ENUM ('R2_HLS_AES128', 'BUNNY_STREAM');
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELED', 'REFUNDED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE enrollment_status AS ENUM ('ACTIVE', 'COMPLETED', 'REVOKED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE order_status          AS ENUM ('PENDING', 'PAID', 'FAILED', 'EXPIRED', 'CANCELED');
-CREATE TYPE enrollment_status     AS ENUM ('ACTIVE', 'COMPLETED', 'REVOKED');
+DO $$ BEGIN CREATE TYPE assessment_purpose AS ENUM ('SESSION_ASSIGNMENT', 'FINAL_EXAM'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE assessment_status AS ENUM ('DRAFT', 'PUBLISHED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE grading_mode AS ENUM ('AUTO', 'MANUAL', 'HYBRID'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+    CREATE TYPE assessment_item_type AS ENUM (
+        'SINGLE_CHOICE', 'MULTI_SELECT', 'TRUE_FALSE',
+        'SHORT_ANSWER', 'ESSAY', 'FILE_SUBMISSION'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE mock_interview_status AS ENUM ('CV_SCREENING', 'IN_PROGRESS', 'COMPLETED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE assessment_purpose    AS ENUM ('SESSION_ASSIGNMENT', 'FINAL_EXAM');
-CREATE TYPE assessment_status     AS ENUM ('DRAFT', 'PUBLISHED');
-CREATE TYPE grading_mode          AS ENUM ('AUTO', 'MANUAL', 'HYBRID');
-CREATE TYPE assessment_item_type  AS ENUM (
-    'SINGLE_CHOICE', 'MULTI_SELECT', 'TRUE_FALSE',
-    'SHORT_ANSWER', 'ESSAY', 'FILE_SUBMISSION'
-);
-CREATE TYPE mock_interview_status AS ENUM ('IN_PROGRESS', 'COMPLETED', 'CV_SCREENING');
-
-
-CREATE TYPE answer_grading_status AS ENUM ('AUTO_GRADED', 'PENDING_MANUAL', 'MANUALLY_GRADED');
-CREATE TYPE integrity_verdict     AS ENUM ('CLEAN', 'FLAGGED', 'CONFIRMED_CHEAT', 'CLEARED_BY_INSTRUCTOR');
-CREATE TYPE chunk_visibility      AS ENUM ('PUBLIC', 'ENROLLED_ONLY');
+DO $$ BEGIN CREATE TYPE answer_grading_status AS ENUM ('AUTO_GRADED', 'PENDING_MANUAL', 'MANUALLY_GRADED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE integrity_verdict AS ENUM ('CLEAN', 'FLAGGED', 'CONFIRMED_CHEAT', 'CLEARED_BY_INSTRUCTOR'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE chunk_visibility AS ENUM ('PUBLIC', 'ENROLLED_ONLY'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- -----------------------------------------------------------------------------
 -- 2. DOMAIN 1 — Identity, Google OAuth & Instructors (4 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE accounts (
+CREATE TABLE IF NOT EXISTS accounts (
     id                  BIGSERIAL PRIMARY KEY,
     email               CITEXT NOT NULL UNIQUE,
     password_hash       TEXT,
@@ -53,7 +53,7 @@ CREATE TABLE accounts (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE account_identities (
+CREATE TABLE IF NOT EXISTS account_identities (
     id              BIGSERIAL PRIMARY KEY,
     account_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     provider        auth_provider NOT NULL,
@@ -63,9 +63,12 @@ CREATE TABLE account_identities (
     UNIQUE (provider, provider_uid)
 );
 
-CREATE TABLE user_profiles (
+CREATE TABLE IF NOT EXISTS user_profiles (
     account_id              BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     full_name               VARCHAR(150) NOT NULL,
+    phone                   VARCHAR(30),
+    github_url              TEXT,
+    linkedin_url            TEXT,
     avatar_url              TEXT,
     bio                     TEXT,
     career_goal             TEXT,
@@ -73,10 +76,12 @@ CREATE TABLE user_profiles (
     face_reference_r2_key   TEXT,
     face_embedding          vector(512),
     cv_parsed_data          JSONB NOT NULL DEFAULT '{}',
-    interview_credits       INT NOT NULL DEFAULT 2 CHECK (interview_credits >= 0),
+    preferences             JSONB NOT NULL DEFAULT '{}',
+    interview_credits       INT NOT NULL DEFAULT 0 CHECK (interview_credits >= 0),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE TABLE instructor_profiles (
+
+CREATE TABLE IF NOT EXISTS instructor_profiles (
     account_id              BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     headline                VARCHAR(200) NOT NULL,
     organization            VARCHAR(150),
@@ -86,11 +91,10 @@ CREATE TABLE instructor_profiles (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
 -- -----------------------------------------------------------------------------
 -- 3. DOMAIN 2 — Skill Taxonomy, Courses, Cohorts & Class Sessions (8 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(120) NOT NULL,
     slug        VARCHAR(140) NOT NULL UNIQUE,
@@ -99,7 +103,7 @@ CREATE TABLE categories (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE skills (
+CREATE TABLE IF NOT EXISTS skills (
     id              SERIAL PRIMARY KEY,
     category_id     INT REFERENCES categories(id) ON DELETE SET NULL,
     code            VARCHAR(80) NOT NULL UNIQUE,
@@ -108,7 +112,7 @@ CREATE TABLE skills (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE courses (
+CREATE TABLE IF NOT EXISTS courses (
     id                      BIGSERIAL PRIMARY KEY,
     category_id             INT NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
     title                   VARCHAR(255) NOT NULL,
@@ -116,7 +120,7 @@ CREATE TABLE courses (
     short_description       VARCHAR(500) NOT NULL,
     description_md          TEXT NOT NULL,
     thumbnail_url           TEXT,
-    difficulty_level        SMALLINT NOT NULL CHECK (difficulty_level BETWEEN 1 AND 5),
+    difficulty_level        SMALLINT NOT NULL DEFAULT 1 CHECK (difficulty_level BETWEEN 1 AND 5),
     syllabus_template       JSONB NOT NULL DEFAULT '[]',
     status                  course_status NOT NULL DEFAULT 'DRAFT',
     embedding               vector(1024),
@@ -127,10 +131,10 @@ CREATE TABLE courses (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_courses_embedding_hnsw ON courses USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX idx_courses_search_tsv_gin ON courses USING gin (search_tsv);
+CREATE INDEX IF NOT EXISTS idx_courses_embedding_hnsw ON courses USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_courses_search_tsv_gin ON courses USING gin (search_tsv);
 
-CREATE TABLE course_skills (
+CREATE TABLE IF NOT EXISTS course_skills (
     course_id       BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
     skill_id        INT NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
     skill_role      skill_relation_role NOT NULL,
@@ -138,7 +142,7 @@ CREATE TABLE course_skills (
     PRIMARY KEY (course_id, skill_id, skill_role)
 );
 
-CREATE TABLE cohorts (
+CREATE TABLE IF NOT EXISTS cohorts (
     id                      BIGSERIAL PRIMARY KEY,
     course_id               BIGINT NOT NULL REFERENCES courses(id) ON DELETE RESTRICT,
     code                    VARCHAR(50) NOT NULL UNIQUE,
@@ -147,6 +151,7 @@ CREATE TABLE cohorts (
     curriculum_version      VARCHAR(120) NOT NULL DEFAULT 'v1.0',
     tech_stack_notes        TEXT,
     tuition_vnd             BIGINT NOT NULL CHECK (tuition_vnd >= 0),
+    max_seats               INT NOT NULL DEFAULT 35 CHECK (max_seats > 0),
     enrolled_count          INT NOT NULL DEFAULT 0 CHECK (enrolled_count >= 0),
     enrollment_open_at      TIMESTAMPTZ NOT NULL,
     start_date              DATE NOT NULL,
@@ -158,7 +163,7 @@ CREATE TABLE cohorts (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE class_sessions (
+CREATE TABLE IF NOT EXISTS class_sessions (
     id                      BIGSERIAL PRIMARY KEY,
     cohort_id               BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
     instructor_id           BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -186,7 +191,7 @@ CREATE TABLE class_sessions (
     ) WHERE (scheduled_start IS NOT NULL AND scheduled_end IS NOT NULL)
 );
 
-CREATE TABLE session_attachments (
+CREATE TABLE IF NOT EXISTS session_attachments (
     id              BIGSERIAL PRIMARY KEY,
     session_id      BIGINT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
     file_name       VARCHAR(255) NOT NULL,
@@ -197,7 +202,7 @@ CREATE TABLE session_attachments (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE session_subtitles (
+CREATE TABLE IF NOT EXISTS session_subtitles (
     id                  BIGSERIAL PRIMARY KEY,
     session_id          BIGINT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
     language_code       VARCHAR(10) NOT NULL DEFAULT 'vi',
@@ -210,7 +215,7 @@ CREATE TABLE session_subtitles (
 -- -----------------------------------------------------------------------------
 -- 4. DOMAIN 3 — Direct Orders, SePay VietQR Transactions, Enrollments & Certs (6 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id                  BIGSERIAL PRIMARY KEY,
     order_code          VARCHAR(40) NOT NULL UNIQUE,
     account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -223,19 +228,19 @@ CREATE TABLE orders (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE payment_transactions (
+CREATE TABLE IF NOT EXISTS payment_transactions (
     id                  BIGSERIAL PRIMARY KEY,
     order_id            BIGINT NULL REFERENCES orders(id) ON DELETE RESTRICT,
-    gateway             VARCHAR(20) NOT NULL DEFAULT 'SEPAY_VIETQR',
+    gateway             VARCHAR(30) NOT NULL DEFAULT 'SEPAY_VIETQR',
     gateway_txn_id      VARCHAR(100) NOT NULL UNIQUE,
     amount_vnd          BIGINT NOT NULL,
-    response_code       VARCHAR(10) NOT NULL,
+    response_code       VARCHAR(40) NOT NULL,
     raw_payload         JSONB NOT NULL,
-    match_status        VARCHAR(20) NOT NULL DEFAULT 'MATCHED' CHECK (match_status IN ('MATCHED', 'UNMATCHED_ORDER', 'AMOUNT_MISMATCH')),
+    match_status        VARCHAR(30) NOT NULL DEFAULT 'MATCHED' CHECK (match_status IN ('MATCHED', 'UNMATCHED_ORDER', 'AMOUNT_MISMATCH')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE enrollments (
+CREATE TABLE IF NOT EXISTS enrollments (
     id                  BIGSERIAL PRIMARY KEY,
     account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     cohort_id           BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE RESTRICT,
@@ -251,17 +256,19 @@ CREATE TABLE enrollments (
     UNIQUE (account_id, cohort_id)
 );
 
-CREATE TABLE session_progress (
+CREATE TABLE IF NOT EXISTS session_progress (
     account_id              BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     session_id              BIGINT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
     last_position_sec       INT NOT NULL DEFAULT 0 CHECK (last_position_sec >= 0),
+    max_watched_sec         INT NOT NULL DEFAULT 0 CHECK (max_watched_sec >= 0),
+    attended_live           BOOLEAN NOT NULL DEFAULT FALSE,
     is_completed            BOOLEAN NOT NULL DEFAULT FALSE,
     completed_at            TIMESTAMPTZ,
     last_activity_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (account_id, session_id)
 );
 
-CREATE TABLE course_reviews (
+CREATE TABLE IF NOT EXISTS course_reviews (
     id          BIGSERIAL PRIMARY KEY,
     course_id   BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
     cohort_id   BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
@@ -273,7 +280,7 @@ CREATE TABLE course_reviews (
     UNIQUE (cohort_id, account_id)
 );
 
-CREATE TABLE certificates (
+CREATE TABLE IF NOT EXISTS certificates (
     id                  BIGSERIAL PRIMARY KEY,
     enrollment_id       BIGINT NOT NULL UNIQUE REFERENCES enrollments(id) ON DELETE RESTRICT,
     account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
@@ -287,7 +294,7 @@ CREATE TABLE certificates (
 -- -----------------------------------------------------------------------------
 -- 5. DOMAIN 4 — Timestamped Discussions & Notifications (3 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE discussion_threads (
+CREATE TABLE IF NOT EXISTS discussion_threads (
     id                  BIGSERIAL PRIMARY KEY,
     session_id          BIGINT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
     author_id           BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -298,7 +305,7 @@ CREATE TABLE discussion_threads (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE discussion_posts (
+CREATE TABLE IF NOT EXISTS discussion_posts (
     id                      BIGSERIAL PRIMARY KEY,
     thread_id               BIGINT NOT NULL REFERENCES discussion_threads(id) ON DELETE CASCADE,
     author_id               BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
@@ -311,7 +318,7 @@ CREATE TABLE discussion_posts (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
     id              BIGSERIAL PRIMARY KEY,
     recipient_id    BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     type            VARCHAR(40) NOT NULL,
@@ -324,12 +331,12 @@ CREATE TABLE notifications (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_notifications_recipient_unread ON notifications (recipient_id, created_at DESC) WHERE is_read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unread ON notifications (recipient_id, created_at DESC) WHERE is_read = FALSE;
 
 -- -----------------------------------------------------------------------------
 -- 6. DOMAIN 5 — Assessments, Dual Grading, Code Review & CV Proctoring (5 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE assessments (
+CREATE TABLE IF NOT EXISTS assessments (
     id                  BIGSERIAL PRIMARY KEY,
     cohort_id           BIGINT NOT NULL REFERENCES cohorts(id) ON DELETE CASCADE,
     session_id          BIGINT REFERENCES class_sessions(id) ON DELETE CASCADE,
@@ -344,10 +351,14 @@ CREATE TABLE assessments (
     proctoring_config   JSONB NOT NULL DEFAULT '{}',
     status              assessment_status NOT NULL DEFAULT 'DRAFT',
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_assessments_purpose_session CHECK (
+        (purpose = 'SESSION_ASSIGNMENT' AND session_id IS NOT NULL)
+        OR (purpose = 'FINAL_EXAM' AND session_id IS NULL)
+    )
 );
 
-CREATE TABLE assessment_items (
+CREATE TABLE IF NOT EXISTS assessment_items (
     id                  BIGSERIAL PRIMARY KEY,
     assessment_id       BIGINT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
     skill_id            INT NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
@@ -362,7 +373,7 @@ CREATE TABLE assessment_items (
     UNIQUE (assessment_id, item_order)
 );
 
-CREATE TABLE assessment_attempts (
+CREATE TABLE IF NOT EXISTS assessment_attempts (
     id                          BIGSERIAL PRIMARY KEY,
     assessment_id               BIGINT NOT NULL REFERENCES assessments(id) ON DELETE RESTRICT,
     account_id                  BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -383,7 +394,7 @@ CREATE TABLE assessment_attempts (
     verdict_at                  TIMESTAMPTZ
 );
 
-CREATE TABLE submission_answers (
+CREATE TABLE IF NOT EXISTS submission_answers (
     id                  BIGSERIAL PRIMARY KEY,
     attempt_id          BIGINT NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
     item_id             BIGINT NOT NULL REFERENCES assessment_items(id) ON DELETE RESTRICT,
@@ -400,10 +411,10 @@ CREATE TABLE submission_answers (
     UNIQUE (attempt_id, item_id)
 );
 
-CREATE INDEX idx_submission_answers_pending ON submission_answers (grading_status) WHERE grading_status = 'PENDING_MANUAL';
-CREATE INDEX idx_submission_answers_item    ON submission_answers (item_id, final_score);
+CREATE INDEX IF NOT EXISTS idx_submission_answers_pending ON submission_answers (grading_status) WHERE grading_status = 'PENDING_MANUAL';
+CREATE INDEX IF NOT EXISTS idx_submission_answers_item    ON submission_answers (item_id, final_score);
 
-CREATE TABLE proctoring_events (
+CREATE TABLE IF NOT EXISTS proctoring_events (
     id                  BIGSERIAL PRIMARY KEY,
     attempt_id          BIGINT NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
     occurred_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -416,12 +427,12 @@ CREATE TABLE proctoring_events (
     details             JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX idx_proctoring_events_attempt ON proctoring_events (attempt_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_proctoring_events_attempt ON proctoring_events (attempt_id, occurred_at);
 
 -- -----------------------------------------------------------------------------
 -- 7. DOMAIN 6 — Hybrid RAG Vector Store, Skill States, Chat, Interviews & System (6 Tables)
 -- -----------------------------------------------------------------------------
-CREATE TABLE knowledge_chunks (
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id              BIGSERIAL PRIMARY KEY,
     visibility      chunk_visibility NOT NULL DEFAULT 'ENROLLED_ONLY',
     course_id       BIGINT REFERENCES courses(id) ON DELETE CASCADE,
@@ -431,7 +442,7 @@ CREATE TABLE knowledge_chunks (
     source_type     VARCHAR(30) NOT NULL,
     chunk_index     INT NOT NULL,
     content         TEXT NOT NULL,
-    content_hash    CHAR(64) NOT NULL,
+    content_hash    VARCHAR(64) NOT NULL,
     start_sec       INT,
     end_sec         INT,
     page_number     INT,
@@ -440,11 +451,11 @@ CREATE TABLE knowledge_chunks (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_chunks_access_filter  ON knowledge_chunks (visibility, course_id, cohort_id);
-CREATE INDEX idx_chunks_embedding_hnsw ON knowledge_chunks USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX idx_chunks_search_tsv_gin ON knowledge_chunks USING gin (search_tsv);
+CREATE INDEX IF NOT EXISTS idx_chunks_access_filter  ON knowledge_chunks (visibility, course_id, cohort_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON knowledge_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_chunks_search_tsv_gin ON knowledge_chunks USING gin (search_tsv);
 
-CREATE TABLE student_skill_states (
+CREATE TABLE IF NOT EXISTS student_skill_states (
     account_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     skill_id        INT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
     mastery_score   REAL NOT NULL DEFAULT 0.0 CHECK (mastery_score BETWEEN 0.0 AND 100.0),
@@ -454,7 +465,7 @@ CREATE TABLE student_skill_states (
     PRIMARY KEY (account_id, skill_id)
 );
 
-CREATE TABLE chat_sessions (
+CREATE TABLE IF NOT EXISTS chat_sessions (
     id                  BIGSERIAL PRIMARY KEY,
     public_id           UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
     account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -467,9 +478,9 @@ CREATE TABLE chat_sessions (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_chat_sessions_owner ON chat_sessions (account_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_owner ON chat_sessions (account_id, updated_at DESC);
 
-CREATE TABLE chat_messages (
+CREATE TABLE IF NOT EXISTS chat_messages (
     id                  BIGSERIAL PRIMARY KEY,
     chat_session_id     BIGINT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
     role                VARCHAR(15) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
@@ -485,9 +496,10 @@ CREATE TABLE chat_messages (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_chat_messages_topic ON chat_messages (detected_topic) WHERE role = 'user' AND detected_topic IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_chat_messages_topic ON chat_messages (detected_topic) WHERE role = 'user' AND detected_topic IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (chat_session_id, created_at);
 
-CREATE TABLE mock_interviews (
+CREATE TABLE IF NOT EXISTS mock_interviews (
     id                  BIGSERIAL PRIMARY KEY,
     account_id          BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     target_level        VARCHAR(20) NOT NULL CHECK (target_level IN ('INTERN', 'FRESHER', 'JUNIOR', 'SENIOR')),
@@ -496,20 +508,17 @@ CREATE TABLE mock_interviews (
     cv_screening_result JSONB,
     transcript_log      JSONB NOT NULL DEFAULT '[]',
     evaluation_report   JSONB,
-    status              mock_interview_status NOT NULL DEFAULT 'IN_PROGRESS',
+    status              mock_interview_status NOT NULL DEFAULT 'CV_SCREENING',
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at        TIMESTAMPTZ
 );
 
-CREATE INDEX idx_mock_interviews_account ON mock_interviews (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mock_interviews_account ON mock_interviews (account_id, created_at DESC);
 
-CREATE INDEX idx_chat_messages_session ON chat_messages (chat_session_id, created_at);
-
-CREATE TABLE system_settings (
+CREATE TABLE IF NOT EXISTS system_settings (
     setting_key     VARCHAR(100) PRIMARY KEY,
     setting_value   TEXT NOT NULL,
     description     TEXT,
     is_public       BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-

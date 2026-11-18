@@ -88,16 +88,12 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
     aiCitations: [],
   };
 
-  const matchedSession =
-    sessions.find(
-      (s) =>
-        String(s.id) === String(resultData?.sessionId) ||
-        String(s.assessmentId) === String(assessmentId) ||
-        assessmentId.includes(String(s.id))
-    ) ??
-    sessions.find((s) => s.sessionOrder === 4) ??
-    sessions[3] ??
-    sessions[0];
+  const matchedSession = sessions.find(
+    (s) =>
+      String(s.id) === String(resultData?.sessionId) ||
+      String(s.assessmentId) === String(assessmentId) ||
+      assessmentId.includes(String(s.id))
+  );
 
   const targetSession: ClassSession = matchedSession ?? fallbackSessionObj;
 
@@ -168,7 +164,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
             {isFinalExam && submission.passed ? (
               <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950 text-[#065F46] dark:text-emerald-300 text-xs font-bold">
                 <ShieldCheck className="w-3.5 h-3.5 text-[#10B981]" />
-                <span>Đã đỗ Kỳ thi Cuối khóa (25 câu) &amp; Nhận +4 Credits — Đã khóa thi lại</span>
+                <span>Đã hoàn thành Kỳ thi Cuối khóa — Đã khóa thi lại</span>
               </span>
             ) : (
               <button
@@ -179,7 +175,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#0F172A] dark:bg-white/10 text-white text-xs font-bold hover:opacity-90 cursor-pointer"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-[#10B981]" />
-                <span>Thi Cuối Khóa 25 Câu Trắc Nghiệm (Có Camera Giám Sát) →</span>
+                <span>Thi Cuối Khóa (Có Camera Giám Sát) →</span>
               </button>
             )}
           </div>
@@ -219,8 +215,8 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
 
                 <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed max-w-2xl">
                   {isFinalExam
-                    ? 'Hệ thống đã tự động cấp Chứng chỉ Tốt nghiệp cho bạn, cộng thêm 4 lượt Luyện phỏng vấn giọng nói cùng AI (khóa thi lại để tránh cộng trùng Credits)!'
-                    : 'Hệ thống đã tự động chấm điểm 10 câu trắc nghiệm (A, B, C, D) ngay lập tức, đánh dấu Hoàn thành buổi học và cập nhật Điểm Kỹ Năng vào Bản đồ kỹ năng của bạn.'}
+                    ? 'Hệ thống đã tự động chấm điểm bài thi cuối khóa, thẩm định nhật ký giám sát phòng thi và cập nhật trạng thái văn bằng tốt nghiệp của bạn.'
+                    : `Hệ thống đã tự động chấm điểm ${submission.totalQuestions || questions.length} câu trắc nghiệm ngay lập tức, cập nhật tiến độ buổi học và Bản đồ kỹ năng của bạn.`}
                 </p>
               </div>
             </div>

@@ -5,5 +5,8 @@ export const systemSettings = pgTable('system_settings', {
   value: text('setting_value').notNull(),
   description: text('description'),
   isPublic: boolean('is_public').notNull().default(false),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 });

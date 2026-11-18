@@ -143,22 +143,23 @@ export const AdminPortalView: React.FC = () => {
 
   // Tab 3: Mở lớp khai giảng (Chọn Phiên bản đề cương v2025 vs v2026)
   const [newCohortCourseId, setNewCohortCourseId] = useState(
-    courseCatalog[0]?.id ?? 'course-ai-eng'
+    courseCatalog[0]?.id ?? ''
   );
   const [newCohortCurriculumVersion, setNewCohortCurriculumVersion] = useState<string>(
-    'Phiên bản 2026 mới (v2026 — 7 buổi cập nhật mới)'
+    'v2026'
   );
-  const [newCohortCode, setNewCohortCode] = useState('AI-ENG-2026-K02');
-  const [newCohortName, setNewCohortName] = useState('Khóa K02 — Khai giảng Năm 2026');
-  const [newCohortTuition, setNewCohortTuition] = useState(8900000);
-  const [newCohortOpenRegDate, setNewCohortOpenRegDate] = useState('20/11/2026');
-  const [newCohortStart, setNewCohortStart] = useState('15/12/2026');
+  const [newCohortCode, setNewCohortCode] = useState('AI-ENG-2026-K03');
+  const [newCohortName, setNewCohortName] = useState('Khóa K03 — Khai giảng Năm 2026');
+  const [newCohortTuition, setNewCohortTuition] = useState(10000);
+  const [newCohortMaxSeats, setNewCohortMaxSeats] = useState(35);
+  const [newCohortOpenRegDate, setNewCohortOpenRegDate] = useState('2026-11-20');
+  const [newCohortStart, setNewCohortStart] = useState('2026-12-15');
   const [newCohortScheduleSlots, setNewCohortScheduleSlots] = useState<CohortScheduleSlot[]>([
     { dayOfWeek: 1, startTime: '19:30', endTime: '21:30' },
     { dayOfWeek: 5, startTime: '16:30', endTime: '18:30' },
   ]);
   const [editingCohortScheduleId, setEditingCohortScheduleId] = useState<string | null>(null);
-  const [newCohortInstructor, setNewCohortInstructor] = useState('TS. Trần Minh Khoa');
+  const [newCohortInstructor, setNewCohortInstructor] = useState('TS. Lê Minh Khoa');
   const [cohortCreatedNotice, setCohortCreatedNotice] = useState<string | null>(null);
 
   // Tab 4: Học viên, Giảng viên & Quản trị viên
@@ -183,7 +184,7 @@ export const AdminPortalView: React.FC = () => {
   const [formAvatarUrl, setFormAvatarUrl] = useState('');
   const [formBio, setFormBio] = useState('');
   const [formCareerGoal, setFormCareerGoal] = useState('');
-  const [formInterviewCredits, setFormInterviewCredits] = useState<number>(2);
+  const [formInterviewCredits, setFormInterviewCredits] = useState<number>(0);
   const [formOrganization, setFormOrganization] = useState('');
   const [formYearsOfExp, setFormYearsOfExp] = useState<string>('');
   const [formExpertiseSummary, setFormExpertiseSummary] = useState('');
@@ -395,8 +396,8 @@ export const AdminPortalView: React.FC = () => {
       descriptionMd:
         courseFormDesc.trim() || 'Chương trình đào tạo thực hành cùng giảng viên doanh nghiệp.',
       difficultyLevel: 3,
-      ratingAvg: 4.9,
-      reviewCount: 42,
+      ratingAvg: 0,
+      reviewCount: 0,
       skills:
         parsedSkills.length > 0
           ? parsedSkills
@@ -470,18 +471,19 @@ export const AdminPortalView: React.FC = () => {
     const instructorId =
       matchedInstructorAcc?.id ||
       matchedCohortStaff?.instructorId ||
-      (newCohortInstructor === 'ThS. Lê Thu Hà' ? 'usr-inst-ha' : 'usr-inst-khoa');
+      (newCohortInstructor.includes('Hà') ? 'usr-inst-ha' : 'usr-inst-khoa');
     const resolvedInstructorName =
       matchedInstructorAcc?.fullName || newCohortInstructor;
 
     await adminApi.manageCohorts({
       cohortId: editingCohortScheduleId ?? undefined,
-      courseId: newCohortCourseId,
+      courseId: newCohortCourseId || courseCatalog[0]?.id || '',
       instructorId,
       curriculumVersion: newCohortCurriculumVersion.slice(0, 120),
       code: newCohortCode.trim(),
       name: newCohortName.trim(),
-      tuitionVnd: Number(newCohortTuition) || 8500000,
+      tuitionVnd: Math.max(0, Number(newCohortTuition) || 10000),
+      maxSeats: Math.max(1, Number(newCohortMaxSeats) || 35),
       startDate: newCohortStart,
       scheduleSlots: newCohortScheduleSlots,
       instructorName: resolvedInstructorName,
@@ -511,7 +513,7 @@ export const AdminPortalView: React.FC = () => {
     setFormAvatarUrl('');
     setFormBio('');
     setFormCareerGoal('');
-    setFormInterviewCredits(2);
+    setFormInterviewCredits(0);
     setFormOrganization('');
     setFormYearsOfExp('');
     setFormExpertiseSummary('');
@@ -564,7 +566,7 @@ export const AdminPortalView: React.FC = () => {
           typeof formInterviewCredits === 'number'
             ? formInterviewCredits
             : formRole === 'STUDENT'
-            ? 2
+            ? 0
             : 99,
         instructorHeadline: formRole === 'INSTRUCTOR' ? trimmedHeadline : undefined,
         instructorOrganization:
@@ -666,17 +668,25 @@ export const AdminPortalView: React.FC = () => {
   });
 
   const combinedReceipts =
-    receipts.length > 0
-      ? receipts
-      : (sepayTransactionsData ?? []).map((tx) => ({
+    (sepayTransactionsData && sepayTransactionsData.length > 0
+      ? sepayTransactionsData.map((tx) => ({
           orderCode: tx.orderCode ?? 'UNMATCHED',
-          cohortCode: tx.transferContent.split(' ')[1] || 'AI-ENG-K01',
-          courseTitle: 'Kỹ Sư AI Thực Chiến: Xây Dựng Hệ Thống RAG & Đa Tác Tử Doanh Nghiệp',
+          cohortCode: tx.cohortCode || 'Chưa gắn mã lớp',
+          courseTitle:
+            tx.courseTitle ||
+            (tx.studentName
+              ? `Học viên: ${tx.studentName}`
+              : tx.transferContent || 'Đối soát chuyển khoản SePay'),
           amountVnd: tx.amountVnd,
           paidAt: tx.processedAt,
-          bankName: 'MBBank',
+          bankName: tx.bankName || 'VietQR / SePay',
           transactionRef: tx.referenceNumber,
-        }));
+          matchStatus: tx.matchStatus,
+        }))
+      : receipts.map((r) => ({
+          ...r,
+          matchStatus: 'MATCHED' as const,
+        })));
 
   const filteredReceipts = combinedReceipts.filter(
     (r) =>
@@ -769,152 +779,183 @@ export const AdminPortalView: React.FC = () => {
             1. TỔNG QUAN HỌC VIỆN (/admin) — 2 CHẾ ĐỘ XEM (SUB-TABS TÁCH BIỆT)
            ========================================================= */}
         {adminSidebarTab === 'OVERVIEW' && (() => {
-          const monthlyComboData = [
-            {
-              month: 'Tháng 6',
-              revenueMillionVnd: 380,
-              newEnrollments: 165,
-              sepayMatchedRatePct: 98.5,
-            },
-            {
-              month: 'Tháng 7',
-              revenueMillionVnd: 445,
-              newEnrollments: 190,
-              sepayMatchedRatePct: 99.1,
-            },
-            {
-              month: 'Tháng 8',
-              revenueMillionVnd: 512,
-              newEnrollments: 220,
-              sepayMatchedRatePct: 99.4,
-            },
-            {
-              month: 'Tháng 9',
-              revenueMillionVnd: 590,
-              newEnrollments: 260,
-              sepayMatchedRatePct: 99.2,
-            },
-            {
-              month: 'Tháng 10',
-              revenueMillionVnd: 642,
-              newEnrollments: 285,
-              sepayMatchedRatePct: 99.6,
-            },
-            {
-              month: 'Tháng 11',
-              revenueMillionVnd: 685,
-              newEnrollments: 300,
-              sepayMatchedRatePct: 99.8,
-            },
-          ];
+          const allTx = sepayTransactionsData ?? [];
+          const now = new Date();
+          const recentMonths = Array.from({ length: 6 }, (_, idx) => {
+            const d = new Date(now.getFullYear(), now.getMonth() - (5 - idx), 1);
+            return {
+              year: d.getFullYear(),
+              monthIdx: d.getMonth(),
+              label: `Tháng ${d.getMonth() + 1}`,
+            };
+          });
 
-          const cohortRetentionData = [
-            {
-              label: 'AI-K01',
-              subLabel: 'v2025 · 48 HV',
-              subtitle: 'Lớp Kỹ Sư AI Thực Chiến — Khóa K01 (Đang học Buổi 5/6)',
-              values: { active: 36, completed: 10, revoked: 2 },
-            },
-            {
-              label: 'AI-K02',
-              subLabel: 'v2026 · 38 HV',
-              subtitle: 'Lớp Kỹ Sư AI Thực Chiến — Khóa K02 (Đang mở ghi danh & học Buổi 2)',
-              values: { active: 37, completed: 0, revoked: 1 },
-            },
-            {
-              label: 'PY-K04',
-              subLabel: 'v2025 · 52 HV',
-              subtitle: 'Lớp Lập Trình Python & Xử Lý Dữ Liệu — Khóa K04 (Đã tốt nghiệp)',
-              values: { active: 4, completed: 46, revoked: 2 },
-            },
-            {
-              label: 'DATA-K01',
-              subLabel: 'v2026 · 34 HV',
-              subtitle: 'Lớp Phân Tích Dữ Liệu Kinh Doanh — Khóa K01 (Đang học Buổi 3)',
-              values: { active: 32, completed: 0, revoked: 2 },
-            },
-          ];
+          const monthlyComboData = recentMonths.map((m) => {
+            const txInMonth = allTx.filter((tx) => {
+              const dt = new Date(tx.processedAt);
+              return (
+                !Number.isNaN(dt.getTime()) &&
+                dt.getFullYear() === m.year &&
+                dt.getMonth() === m.monthIdx
+              );
+            });
+            const matchedInMonth = txInMonth.filter((tx) => tx.matchStatus === 'MATCHED');
+            const sumVnd = matchedInMonth.reduce((sum, tx) => sum + (tx.amountVnd || 0), 0);
+            const enrInMonth = enrollmentsList.filter((enr) => {
+              const raw = enr.enrolledAt || enr.lastActivityAt;
+              const dt = raw ? new Date(raw) : null;
+              return (
+                dt !== null &&
+                !Number.isNaN(dt.getTime()) &&
+                dt.getFullYear() === m.year &&
+                dt.getMonth() === m.monthIdx
+              );
+            });
+            const matchedPct =
+              txInMonth.length > 0
+                ? Number(((matchedInMonth.length / txInMonth.length) * 100).toFixed(1))
+                : 100;
+            return {
+              month: m.label,
+              revenueMillionVnd: Number((sumVnd / 1_000_000).toFixed(3)),
+              newEnrollments: enrInMonth.length,
+              sepayMatchedRatePct: matchedPct,
+            };
+          });
 
-          const aiSystemWeeklyData = [
-            {
-              label: 'Tuần 1',
-              subLabel: '214 buổi PV',
-              value: 1240,
-              secondaryValue: 640,
-              detailText: '1.240 câu hỏi Trợ giảng AI · 214 lượt phỏng vấn · Độ trễ TB 640ms',
-            },
-            {
-              label: 'Tuần 2',
-              subLabel: '248 buổi PV',
-              value: 1480,
-              secondaryValue: 610,
-              detailText: '1.480 câu hỏi Trợ giảng AI · 248 lượt phỏng vấn · Độ trễ TB 610ms',
-            },
-            {
-              label: 'Tuần 3',
-              subLabel: '290 buổi PV',
-              value: 1720,
-              secondaryValue: 580,
-              detailText: '1.720 câu hỏi Trợ giảng AI · 290 lượt phỏng vấn · Độ trễ TB 580ms',
-            },
-            {
-              label: 'Tuần 4',
-              subLabel: '335 buổi PV',
-              value: 1960,
-              secondaryValue: 540,
-              detailText: '1.960 câu hỏi Trợ giảng AI · 335 lượt phỏng vấn · Độ trễ TB 540ms',
-            },
-            {
-              label: 'Tuần 5',
-              subLabel: '362 buổi PV',
-              value: 2180,
-              secondaryValue: 515,
-              detailText: '2.180 câu hỏi Trợ giảng AI · 362 lượt phỏng vấn · Độ trễ TB 515ms',
-            },
-            {
-              label: 'Tuần 6',
-              subLabel: '410 buổi PV',
-              value: 2450,
-              secondaryValue: 490,
-              detailText: '2.450 câu hỏi Trợ giảng AI · 410 lượt phỏng vấn · Độ trễ TB 490ms',
-            },
-          ];
+          const cohortRetentionData = cohorts.map((c) => {
+            const cEnrs = enrollmentsList.filter((e) => String(e.cohortId) === String(c.id));
+            const active = cEnrs.filter((e) => e.status === 'ACTIVE').length;
+            const completed = cEnrs.filter((e) => e.status === 'COMPLETED').length;
+            const revoked = cEnrs.filter((e) => e.status === 'REVOKED').length;
+            return {
+              label: c.code,
+              subLabel: `${c.curriculumVersion || 'v2026'} · ${cEnrs.length || c.enrolledCount} HV`,
+              subtitle: c.name,
+              values: { active, completed, revoked },
+            };
+          });
 
-          const ratingDistribution = [
-            {
-              stars: 5,
-              count: 342,
-              percentage: 86,
+          const totalTrackedEnr = enrollmentsList.length;
+          const retainedEnr = enrollmentsList.filter((e) => e.status !== 'REVOKED').length;
+          const retentionRatePct =
+            totalTrackedEnr > 0
+              ? Number(((retainedEnr / totalTrackedEnr) * 100).toFixed(1))
+              : 100;
+
+          const studentMsgs = chatMessagesList.filter((m) => m.senderRole === 'STUDENT');
+          const aiTutorMsgs = chatMessagesList.filter(
+            (m) => m.senderRole === 'AI_TUTOR' && typeof m.latencyMs === 'number'
+          );
+          const avgLatencyMs =
+            aiTutorMsgs.length > 0
+              ? Math.round(
+                  aiTutorMsgs.reduce((s, m) => s + (m.latencyMs || 0), 0) / aiTutorMsgs.length
+                )
+              : 0;
+          const fastLatencyPct =
+            aiTutorMsgs.length > 0
+              ? Number(
+                  (
+                    (aiTutorMsgs.filter((m) => (m.latencyMs || 0) < 800).length /
+                      aiTutorMsgs.length) *
+                    100
+                  ).toFixed(1)
+                )
+              : 100;
+
+          const aiSystemWeeklyData = Array.from({ length: 6 }, (_, idx) => {
+            const weekStart = new Date(now.getTime() - (6 - idx) * 7 * 86_400_000);
+            const weekEnd = new Date(now.getTime() - (5 - idx) * 7 * 86_400_000);
+            const msgsInWeek = chatMessagesList.filter((m) => {
+              const dt = new Date(m.createdAt);
+              return !Number.isNaN(dt.getTime()) && dt >= weekStart && dt < weekEnd;
+            });
+            const studentQuestionsInWeek = msgsInWeek.filter(
+              (m) => m.senderRole === 'STUDENT'
+            ).length;
+            const aiRepliesWithLat = msgsInWeek.filter(
+              (m) => m.senderRole === 'AI_TUTOR' && typeof m.latencyMs === 'number'
+            );
+            const weekLat =
+              aiRepliesWithLat.length > 0
+                ? Math.round(
+                    aiRepliesWithLat.reduce((s, m) => s + (m.latencyMs || 0), 0) /
+                      aiRepliesWithLat.length
+                  )
+                : avgLatencyMs;
+            return {
+              label: `Tuần ${idx + 1}`,
+              subLabel: `${studentQuestionsInWeek} câu hỏi`,
+              value: studentQuestionsInWeek,
+              secondaryValue: weekLat,
+              detailText: `${studentQuestionsInWeek} câu hỏi học viên · Độ trễ TB ${weekLat}ms`,
+            };
+          });
+
+          const maxWeeklyQuestions = Math.max(10, ...aiSystemWeeklyData.map((w) => w.value));
+
+          const topicCounts = new Map<string, number>();
+          for (const msg of chatMessagesList) {
+            if (msg.detectedTopic) {
+              topicCounts.set(msg.detectedTopic, (topicCounts.get(msg.detectedTopic) || 0) + 1);
+            }
+          }
+          const topDetectedTopicsText =
+            topicCounts.size > 0
+              ? Array.from(topicCounts.entries())
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 2)
+                  .map(([topic]) => topic)
+                  .join(', ')
+              : 'Chưa ghi nhận câu hỏi phân loại chủ đề';
+
+          const revSummary = overviewData?.reviewSummary;
+          const recentReviews = revSummary?.recentReviews ?? [];
+          const totalReviewsCount = revSummary?.totalReviews ?? 0;
+          const avgCourseRating =
+            revSummary?.avgRating ?? revSummary?.averageRating ?? 0;
+
+          const ratingDistribution = [5, 4, 3, 2, 1].map((stars) => {
+            const matchedReviews = recentReviews.filter((r) => Math.round(r.rating) === stars);
+            const distEntry = revSummary?.ratingDistribution?.find((d) => d.stars === stars);
+            const count =
+              distEntry !== undefined
+                ? distEntry.count
+                : stars === 5 && typeof revSummary?.fiveStarCount === 'number'
+                ? Math.max(revSummary.fiveStarCount, matchedReviews.length)
+                : matchedReviews.length;
+            const pct =
+              distEntry !== undefined
+                ? distEntry.percent
+                : totalReviewsCount > 0
+                ? Math.round((count / totalReviewsCount) * 100)
+                : 0;
+            return {
+              stars: stars as 1 | 2 | 3 | 4 | 5,
+              count,
+              percentage: pct,
               highlightQuote:
-                'Bài giảng thực chiến, Trợ giảng AI trích dẫn đúng từng giây video giúp mình ôn bài cực nhanh.',
-            },
-            {
-              stars: 4,
-              count: 44,
-              percentage: 11,
-              highlightQuote:
-                'Giảng viên giải đáp kỹ, phòng luyện phỏng vấn 2 vòng rất sát với câu hỏi tuyển dụng thực tế.',
-            },
-            {
-              stars: 3,
-              count: 8,
-              percentage: 2,
-              highlightQuote:
-                'Nội dung Buổi 4 khá nhiều kiến thức nâng cao, cần xem lại bản ghi 2 lần mới nắm hết.',
-            },
-            {
-              stars: 2,
-              count: 4,
-              percentage: 1,
-              highlightQuote: 'Mong học viện mở thêm các khung giờ học sáng cuối tuần.',
-            },
-            {
-              stars: 1,
-              count: 0,
-              percentage: 0,
-              highlightQuote: 'Chưa ghi nhận đánh giá 1 sao.',
-            },
-          ];
+                matchedReviews[0]?.comment ||
+                (count > 0
+                  ? `Ghi nhận ${count} đánh giá ${stars} sao từ học viên thực tế.`
+                  : `Chưa ghi nhận đánh giá ${stars} sao.`),
+            };
+          });
+
+          const highRatingPct =
+            totalReviewsCount > 0
+              ? Math.min(
+                  100,
+                  Math.round(
+                    ((ratingDistribution[0].count + ratingDistribution[1].count) /
+                      totalReviewsCount) *
+                      100
+                  )
+                )
+              : 0;
+
+          const todaySessionsList = overviewData?.todaySessions ?? [];
 
           return (
             <div className="space-y-6">
@@ -1030,7 +1071,7 @@ export const AdminPortalView: React.FC = () => {
                     <ComboBarLineChart data={monthlyComboData} />
                   </div>
 
-                  {/* Danh sách các lớp có buổi học trực tuyến trong ngày */}
+                  {/* Danh sách các lớp có buổi học trực tuyến trong ngày (100% từ DB class_sessions) */}
                   <div className="bg-white dark:bg-[#111A15] rounded-2xl border border-[#E2ECE7] dark:border-[#1E2D24] p-6 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
@@ -1038,63 +1079,59 @@ export const AdminPortalView: React.FC = () => {
                           Các lớp có buổi học trực tuyến hôm nay
                         </h2>
                         <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                          Theo dõi tình trạng vận hành các ca học tối nay của học viện
+                          Đồng bộ trực tiếp từ bảng lịch học `class_sessions` trong ngày
                         </p>
                       </div>
                       <span className="text-xs font-mono font-semibold text-[#10B981]">
-                        2 ca học tối nay
+                        {todaySessionsList.length} ca học hôm nay
                       </span>
                     </div>
 
-                    <div className="space-y-3">
-                      {[
-                        {
-                          cohortCode: 'AI-ENG-2026-K01',
-                          className: 'Lớp Kỹ Sư AI Thực Chiến — Khóa K01 (Đề cương v2025)',
-                          sessionTitle:
-                            'Buổi 5: Kết hợp tìm kiếm từ khóa & tìm kiếm ngữ nghĩa cho Trợ lý AI',
-                          timeText: '19:30 - 21:30 hôm nay',
-                          instructor: 'TS. Trần Minh Khoa',
-                          studentCount: 48,
-                        },
-                        {
-                          cohortCode: 'DATA-ANL-2026-K01',
-                          className:
-                            'Lớp Phân Tích Dữ Liệu Kinh Doanh — Khóa K01 (Đề cương v2026)',
-                          sessionTitle: 'Buổi 3: Thiết kế báo cáo quản trị doanh thu',
-                          timeText: '20:00 - 22:00 hôm nay',
-                          instructor: 'ThS. Lê Thu Hà',
-                          studentCount: 34,
-                        },
-                      ].map((item) => (
-                        <div
-                          key={item.cohortCode}
-                          className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-4"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                                {item.cohortCode}
-                              </span>
-                              <span className="text-xs text-[#475569] dark:text-[#94A3B8]">·</span>
-                              <span className="text-sm font-bold">{item.className}</span>
-                            </div>
-                            <p className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
-                              {item.sessionTitle}
-                            </p>
-                            <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                              Khung giờ: {item.timeText} · Giảng viên: {item.instructor} · Sĩ số:{' '}
-                              {item.studentCount} học viên
-                            </p>
-                          </div>
+                    {todaySessionsList.length === 0 ? (
+                      <div className="p-5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                        Hôm nay không có ca dạy trực tuyến nào đang mở hoặc lên lịch diễn ra.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {todaySessionsList.map((sess) => {
+                          const sessCohort = cohorts.find(
+                            (c) => String(c.id) === String(sess.cohortId)
+                          );
+                          return (
+                            <div
+                              key={sess.id}
+                              className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-4"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
+                                    {sessCohort?.code || 'LỚP HỌC'}
+                                  </span>
+                                  <span className="text-xs text-[#475569] dark:text-[#94A3B8]">·</span>
+                                  <span className="text-sm font-bold">
+                                    {sessCohort?.name || 'Đợt học đang vận hành'}
+                                  </span>
+                                </div>
+                                <p className="text-xs font-semibold text-[#0F172A] dark:text-[#ECFDF5]">
+                                  Buổi {sess.sessionOrder}: {sess.title}
+                                </p>
+                                <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                                  Giảng viên: {sess.hostInstructorName} · Sĩ số:{' '}
+                                  {sessCohort?.enrolledCount ?? 0} học viên
+                                </p>
+                              </div>
 
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399] text-xs font-bold">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Đã sẵn sàng phòng dạy trực tuyến
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#D1FAE5] dark:bg-[#065F46]/40 text-[#065F46] dark:text-[#34D399] text-xs font-bold">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                {sess.status === 'LIVE'
+                                  ? 'Đang phát trực tuyến (LIVE)'
+                                  : 'Đã lên lịch hôm nay'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1123,10 +1160,10 @@ export const AdminPortalView: React.FC = () => {
                         CHỦ ĐỀ THẮC MẮC NHIỀU NHẤT
                       </span>
                       <div className="text-lg font-bold">
-                        RAG &amp; Vector Search, PostgreSQL &amp; SQL
+                        {topDetectedTopicsText}
                       </div>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        {chatMessagesList.filter((m) => m.detectedTopic !== null).length} chủ đề trọng tâm được học viên đặt câu hỏi và thảo luận nhiều nhất.
+                        {chatMessagesList.filter((m) => m.detectedTopic !== null).length} lượt câu hỏi được gắn nhãn chủ đề kỹ thuật từ cơ sở dữ liệu.
                       </p>
                     </div>
 
@@ -1163,7 +1200,7 @@ export const AdminPortalView: React.FC = () => {
                             1. TỶ LỆ GIỮ CHÂN &amp; TỐT NGHIỆP GIỮA CÁC ĐỢT KHAI GIẢNG
                           </span>
                           <span className="text-[11px] font-mono text-[#059669] dark:text-[#34D399] font-bold">
-                            Tỷ lệ giữ chân: 95.9%
+                            Tỷ lệ giữ chân: {retentionRatePct}%
                           </span>
                         </div>
                         <h2 className="text-base sm:text-lg font-bold">
@@ -1205,22 +1242,22 @@ export const AdminPortalView: React.FC = () => {
                             2. HOẠT ĐỘNG &amp; HIỆU NĂNG HỆ THỐNG AI THEO TUẦN
                           </span>
                           <span className="text-[11px] font-mono text-sky-600 dark:text-sky-400 font-bold">
-                            Độ trễ TB: 515 ms
+                            Độ trễ TB: {avgLatencyMs} ms
                           </span>
                         </div>
                         <h2 className="text-base sm:text-lg font-bold">
-                          Số câu hỏi giải đáp, Lượt luyện phỏng vấn &amp; Tốc độ phản hồi
+                          Số câu hỏi giải đáp &amp; Tốc độ phản hồi Trợ giảng AI
                         </h2>
                         <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                          Thống kê số câu hỏi giải đáp theo tuần, số buổi luyện phỏng vấn và tốc độ phản hồi trung bình của hệ thống.
+                          Thống kê trực tiếp từ bảng `chat_messages` theo tuần và độ trễ phản hồi thực tế của hệ thống.
                         </p>
                       </div>
 
                       <SmoothAreaLineChart
                         data={aiSystemWeeklyData}
                         thresholdValue={undefined}
-                        minY={800}
-                        maxY={2600}
+                        minY={0}
+                        maxY={maxWeeklyQuestions}
                         unit=" câu"
                         secondaryUnit="ms"
                         primarySeriesLabel="Câu hỏi giải đáp"
@@ -1228,9 +1265,9 @@ export const AdminPortalView: React.FC = () => {
                       />
 
                       <div className="pt-2 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-2 text-xs text-[#475569] dark:text-[#94A3B8]">
-                        <span>Tổng cộng 1.859 buổi luyện phỏng vấn giọng nói đã thực hiện.</span>
+                        <span>Tổng cộng {studentMsgs.length} câu hỏi học viên đã được Trợ giảng AI giải đáp.</span>
                         <span className="font-mono font-bold text-[#059669] dark:text-[#34D399] tabular-nums">
-                          99.4% phản hồi &lt; 800ms
+                          {fastLatencyPct}% phản hồi &lt; 800ms
                         </span>
                       </div>
                     </div>
@@ -1244,21 +1281,23 @@ export const AdminPortalView: React.FC = () => {
                           3. PHÂN BỔ ĐÁNH GIÁ KHÓA HỌC (`course_reviews.rating` 1 – 5 SAO)
                         </div>
                         <h2 className="text-base sm:text-lg font-bold mt-0.5">
-                          Mức độ hài lòng của học viên sau khi hoàn thành khóa học
+                          Mức độ hài lòng của học viên thực tế trên hệ thống
                         </h2>
                         <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                          Di chuột vào từng mức sao để xem số lượng đánh giá và trích dẫn nhận xét tiêu biểu của học viên.
+                          Đồng bộ trực tiếp từ bảng `course_reviews` do học viên đã ghi danh gửi đánh giá.
                         </p>
                       </div>
                       <span className="text-xs font-mono font-bold text-[#059669] dark:text-[#34D399]">
-                        97% đánh giá 4 – 5 sao
+                        {totalReviewsCount > 0
+                          ? `${highRatingPct}% đánh giá 4 – 5 sao (${totalReviewsCount} đánh giá)`
+                          : 'Chưa có đánh giá'}
                       </span>
                     </div>
 
                     <CourseRatingDistributionChart
                       items={ratingDistribution}
-                      averageRating={4.9}
-                      totalReviews={398}
+                      averageRating={avgCourseRating}
+                      totalReviews={totalReviewsCount}
                     />
                   </div>
                 </div>
@@ -1661,11 +1700,11 @@ export const AdminPortalView: React.FC = () => {
                     onChange={(e) => setNewCohortCurriculumVersion(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-[#10B981] bg-[#D1FAE5]/30 dark:bg-emerald-950/40 text-xs sm:text-sm font-bold text-[#065F46] dark:text-[#34D399]"
                   >
-                    <option value="Phiên bản 2026 mới (v2026 — 7 buổi cập nhật mới)">
+                    <option value="v2026">
                       Phiên bản 2026 mới (v2026 — Cập nhật công nghệ mới)
                     </option>
-                    <option value="Phiên bản 2025 (v2025 — 6 buổi chuẩn khóa K01)">
-                      Phiên bản 2025 (v2025 — Giữ nguyên chuẩn khóa K01)
+                    <option value="v2025">
+                      Phiên bản 2025 (v2025 — Giữ nguyên chuẩn khóa cũ)
                     </option>
                   </select>
                 </div>
@@ -1694,6 +1733,7 @@ export const AdminPortalView: React.FC = () => {
                   <label className="block text-xs font-semibold mb-1">Mức học phí (VNĐ)</label>
                   <input
                     type="number"
+                    min={0}
                     value={newCohortTuition}
                     onChange={(e) => setNewCohortTuition(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm font-mono"
@@ -1701,22 +1741,34 @@ export const AdminPortalView: React.FC = () => {
                 </div>
 
                 <div>
+                  <label className="block text-xs font-semibold mb-1">Chỉ tiêu sĩ số tối đa</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={newCohortMaxSeats}
+                    onChange={(e) => setNewCohortMaxSeats(Math.max(1, Number(e.target.value) || 35))}
+                    className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm font-mono"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-xs font-semibold mb-1">Ngày mở đăng ký</label>
                   <input
-                    type="text"
+                    type="date"
                     value={newCohortOpenRegDate}
                     onChange={(e) => setNewCohortOpenRegDate(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm"
+                    className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm font-mono"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold mb-1">Ngày khai giảng</label>
                   <input
-                    type="text"
+                    type="date"
                     value={newCohortStart}
                     onChange={(e) => setNewCohortStart(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm"
+                    className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm font-mono"
                   />
                 </div>
 
@@ -1735,8 +1787,8 @@ export const AdminPortalView: React.FC = () => {
                       ))
                     ) : (
                       <>
-                        <option value="TS. Trần Minh Khoa">TS. Trần Minh Khoa</option>
-                        <option value="ThS. Lê Thu Hà">ThS. Lê Thu Hà</option>
+                        <option value="TS. Lê Minh Khoa">TS. Lê Minh Khoa</option>
+                        <option value="ThS. Nguyễn Thu Hà">ThS. Nguyễn Thu Hà</option>
                       </>
                     )}
                   </select>
@@ -1960,14 +2012,15 @@ export const AdminPortalView: React.FC = () => {
               </h2>
 
               <div className="space-y-3">
-                {cohorts.map((c, idx) => {
+                {cohorts.map((c) => {
                   const mainInstructor =
-                    c.staff.find((s) => s.role === 'INSTRUCTOR')?.fullName ?? 'TS. Trần Minh Khoa';
-                  const versionBadge =
-                    c.code.includes('K01') && idx === 0
-                      ? 'Phiên bản 2025 (v2025 — 6 buổi cố định)'
-                      : 'Phiên bản 2026 mới (v2026 — Đã cập nhật buổi học mới)';
+                    c.staff.find((s) => s.role === 'INSTRUCTOR')?.fullName ?? 'TS. Lê Minh Khoa';
+                  const versionBadge = c.curriculumVersion || 'v2026';
                   const formattedSlotsText = formatScheduleSlots(c.scheduleSlots);
+                  const toIsoDateInput = (raw: string) => {
+                    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw.trim());
+                    return m ? `${m[3]}-${m[2]}-${m[1]}` : raw.slice(0, 10);
+                  };
 
                   return (
                     <div
@@ -1981,7 +2034,7 @@ export const AdminPortalView: React.FC = () => {
                           </span>
                           <span className="text-sm font-bold">{c.name}</span>
                           <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded bg-white dark:bg-[#111A15] border border-[#10B981]/50 text-[#059669] dark:text-[#34D399]">
-                            {versionBadge}
+                            Đề cương: {versionBadge}
                           </span>
                         </div>
 
@@ -2008,8 +2061,10 @@ export const AdminPortalView: React.FC = () => {
 
                         <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                           Khai giảng: <strong>{c.startDate}</strong> · Giảng viên phụ trách:{' '}
-                          <strong>{mainInstructor}</strong> ({c.instructorId}) · Sĩ số:{' '}
-                          {c.enrolledCount} học viên
+                          <strong>{mainInstructor}</strong> · Sĩ số:{' '}
+                          <strong>
+                            {c.enrolledCount}/{c.maxSeats ?? 35} học viên
+                          </strong>
                         </p>
                       </div>
 
@@ -2023,10 +2078,15 @@ export const AdminPortalView: React.FC = () => {
                             onClick={() => {
                               setEditingCohortScheduleId(c.id);
                               setNewCohortCourseId(c.courseId);
+                              setNewCohortCurriculumVersion(
+                                c.curriculumVersion?.includes('2025') ? 'v2025' : 'v2026'
+                              );
                               setNewCohortCode(c.code);
                               setNewCohortName(c.name);
                               setNewCohortTuition(c.tuitionVnd);
-                              setNewCohortStart(c.startDate);
+                              setNewCohortMaxSeats(c.maxSeats ?? 35);
+                              setNewCohortStart(toIsoDateInput(c.startDate));
+                              setNewCohortInstructor(mainInstructor);
                               setNewCohortScheduleSlots(
                                 c.scheduleSlots && c.scheduleSlots.length > 0
                                   ? c.scheduleSlots.map((s) => ({ ...s }))
@@ -2045,8 +2105,9 @@ export const AdminPortalView: React.FC = () => {
                             type="button"
                             onClick={() => {
                               setAdminSidebarTab('CURRICULUM');
+                              setSelectedCourseForVersionId(c.courseId);
                               setActiveVersionId(
-                                c.code.includes('K01') && idx === 0 ? 'v2025' : 'v2026'
+                                c.curriculumVersion?.includes('2025') ? 'v2025' : 'v2026'
                               );
                               navigate('/admin/courses');
                             }}
@@ -2128,7 +2189,7 @@ export const AdminPortalView: React.FC = () => {
                       type="button"
                       onClick={() => {
                         setFormRole('STUDENT');
-                        if (formInterviewCredits === 99) setFormInterviewCredits(2);
+                        if (formInterviewCredits === 99) setFormInterviewCredits(0);
                       }}
                       className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
                         formRole === 'STUDENT'
@@ -2232,7 +2293,7 @@ export const AdminPortalView: React.FC = () => {
                         required
                         value={formFullName}
                         onChange={(e) => setFormFullName(e.target.value)}
-                        placeholder="VD: Nguyễn Văn An / TS. Trần Minh Khoa"
+                        placeholder="VD: Nguyễn Văn An / TS. Lê Minh Khoa"
                         className="w-full px-3 py-2 rounded-xl border border-[#E2ECE7] dark:border-[#1E2D24] bg-[#F7FBF9] dark:bg-[#090F0C] text-sm focus:outline-none focus:border-[#10B981]"
                       />
                     </div>
@@ -2626,9 +2687,14 @@ export const AdminPortalView: React.FC = () => {
                 </div>
 
                 <div className="space-y-3">
-                  {filteredReceipts.map((r) => (
+                  {filteredReceipts.length === 0 ? (
+                    <div className="p-6 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-dashed border-[#E2ECE7] dark:border-[#1E2D24] text-center text-xs text-[#475569] dark:text-[#94A3B8]">
+                      Chưa ghi nhận giao dịch chuyển khoản học phí nào khớp bộ lọc hiện tại.
+                    </div>
+                  ) : null}
+                  {filteredReceipts.map((r, rIdx) => (
                     <div
-                      key={r.orderCode}
+                      key={`${r.orderCode}-${r.transactionRef}-${rIdx}`}
                       className="p-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] flex flex-wrap items-center justify-between gap-4"
                     >
                       <div>
@@ -2652,8 +2718,18 @@ export const AdminPortalView: React.FC = () => {
                         <p className="font-mono text-base font-bold text-[#10B981]">
                           {formatCurrencyVnd(r.amountVnd)}
                         </p>
-                        <span className="text-xs font-semibold text-[#059669] dark:text-[#34D399]">
-                          ✓ Đã xác nhận &amp; mở lớp học
+                        <span
+                          className={`text-xs font-semibold ${
+                            r.matchStatus === 'MATCHED'
+                              ? 'text-[#059669] dark:text-[#34D399]'
+                              : 'text-amber-600 dark:text-amber-400'
+                          }`}
+                        >
+                          {r.matchStatus === 'MATCHED'
+                            ? '✓ Đã xác nhận & mở lớp học'
+                            : r.matchStatus === 'AMOUNT_MISMATCH'
+                            ? '⚠ Chưa đủ học phí (Chờ đối soát)'
+                            : '⚠ Không khớp mã đơn'}
                         </span>
                       </div>
                     </div>
@@ -2774,7 +2850,10 @@ export const AdminPortalView: React.FC = () => {
                         </span>
                         <button
                           type="button"
-                          onClick={() => toggleCertificateRevoke(cert.certificateCode)}
+                          onClick={async () => {
+                            await toggleCertificateRevoke(cert.certificateCode);
+                            await refetchAdminOverview();
+                          }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
                             cert.isRevoked
                               ? 'bg-[#10B981] text-white'
