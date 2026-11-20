@@ -519,7 +519,7 @@ export const StudentDashboardView: React.FC = () => {
                   </h1>
                   <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
                     {myEnrolledCohorts.length > 0 && resumeSession
-                      ? 'Bạn chỉ cần làm xong bài tập ngắn (10 câu) bên dưới là hoàn thành buổi học hôm nay rồi nhé.'
+                      ? 'Bạn chỉ cần làm xong bài tập trắc nghiệm ngắn bên dưới là hoàn thành buổi học hôm nay rồi nhé.'
                       : myEnrolledCohorts.length > 0 && primaryCohort
                       ? `Bạn đã ghi danh đợt học ${primaryCohort.code}. Hãy xem lộ trình các buổi học và tài liệu chuẩn bị trước giờ mở lớp nhé.`
                       : 'Theo dõi tổng quan lộ trình học tập, khám phá các khóa học đang mở đăng ký hoặc luyện phỏng vấn thực chiến.'}
@@ -895,10 +895,10 @@ export const StudentDashboardView: React.FC = () => {
                         <span className="text-xs font-medium text-[#475569] dark:text-[#94A3B8]">
                           {resumeSession.isCompleted ? (
                             <span className="text-[#10B981] font-semibold">
-                              ✓ Bạn đã hoàn thành bài tập 10 câu của Buổi {resumeSession.sessionOrder} ({resumeSession.quizScore}/100)
+                              ✓ Bạn đã hoàn thành bài tập cuối Buổi {resumeSession.sessionOrder} ({resumeSession.quizScore}/100)
                             </span>
                           ) : (
-                            `Bạn chỉ cần làm xong bài kiểm tra 10 câu là hoàn thành Buổi ${resumeSession.sessionOrder} nhé!`
+                            `Bạn chỉ cần làm xong bài kiểm tra cuối buổi là hoàn thành Buổi ${resumeSession.sessionOrder} nhé!`
                           )}
                         </span>
 
@@ -971,7 +971,7 @@ export const StudentDashboardView: React.FC = () => {
                       {primaryCohort.name} — Khai giảng dự kiến: {primaryCohort.startDate}
                     </h2>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                      Các buổi học của đợt này chưa tới giờ mở lớp. Video bài giảng và bài tập 10 câu sẽ được mở tự động sau từng buổi học.
+                      Các buổi học của đợt này chưa tới giờ mở lớp. Video bài giảng và bài tập trắc nghiệm sẽ được mở tự động sau từng buổi học.
                     </p>
                   </div>
                   <button
@@ -992,7 +992,7 @@ export const StudentDashboardView: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-lg font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                      Bài Tập Ngắn (10 Câu) &amp; Kỳ Thi Cuối Khóa (25 Câu)
+                      Bài Tập Cuối Buổi &amp; Kỳ Thi Cuối Khóa
                     </h2>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                       Làm xong bài tập ngắn sau mỗi buổi giúp bạn nắm chắc kiến thức và nhận huy hiệu hoàn thành buổi học.
@@ -1016,7 +1016,7 @@ export const StudentDashboardView: React.FC = () => {
                     </div>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-md mx-auto">
                       {myEnrolledCohorts.length === 0
-                        ? 'Sau khi bạn đăng ký một lớp học, danh sách bài tập trắc nghiệm cuối mỗi buổi (10 câu) và kỳ thi cuối khóa sẽ hiển thị tại đây.'
+                        ? 'Sau khi bạn đăng ký một lớp học, danh sách bài tập trắc nghiệm cuối mỗi buổi và kỳ thi cuối khóa sẽ hiển thị tại đây.'
                         : 'Các bài tập trắc nghiệm sẽ tự động mở khóa ngay sau khi buổi học trực tuyến kết thúc hoặc khi có video xem lại.'}
                     </p>
                   </div>
@@ -1364,7 +1364,7 @@ export const StudentDashboardView: React.FC = () => {
                           Chưa có lịch sử làm bài kiểm tra
                         </div>
                         <p className="text-xs text-[#475569] dark:text-[#94A3B8] max-w-sm leading-relaxed">
-                          Khi bạn hoàn thành bài kiểm tra 10 câu cuối mỗi buổi học, biểu đồ xu hướng điểm số sẽ được cập nhật tại đây.
+                          Khi bạn hoàn thành bài kiểm tra trắc nghiệm cuối mỗi buổi học, biểu đồ xu hướng điểm số sẽ được cập nhật tại đây.
                         </p>
                       </div>
                     ) : (

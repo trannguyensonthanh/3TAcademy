@@ -177,7 +177,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
           id: 'faq-6',
           question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
           answer:
-            'Bạn chọn đợt học đang mở tuyển sinh và quét mã VietQR trên ứng dụng ngân hàng (mức phí trải nghiệm thực tế 10.000đ/khóa trên môi trường kiểm thử). Ngay khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
+            'Bạn chọn đợt học đang mở tuyển sinh và quét mã VietQR trên ứng dụng ngân hàng để hoàn tất học phí. Ngay khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
         },
       ]),
       description: 'Danh sách câu hỏi thường gặp công khai tại trang Về học viện',
@@ -2642,7 +2642,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
   const publicChunks = [
     'Học viện Công nghệ 3T Academy đào tạo trực tuyến tương tác trực tiếp (Live Cohort) cùng giảng viên thực chiến qua 4 lộ trình chuẩn kỹ sư: Lập trình Python & SQL Thực chiến, Kỹ sư AI Thực chiến (Hybrid RAG, Agents, LLMOps), Kiến trúc Backend Chuyên sâu (TypeScript, PostgreSQL, Redis) và Kỹ sư Dữ liệu Hiện đại (Kafka, PySpark, dbt Lakehouse).',
     'Học viên mới bắt đầu hoặc trái ngành nên học khóa Lập trình Python & SQL Thực chiến trước để vững nền tảng Python 3.12, AsyncIO, Pytest và SQL phân tích trên PostgreSQL trước khi lên các khóa AI Engineering, Backend hoặc Data Engineering.',
-    'Mỗi đợt học gồm 6 buổi chuyên sâu kèm bài kiểm tra năng lực cuối buổi (cần đạt tối thiểu 70%) và kỳ thi sát hạch cuối khóa có giám sát AI Proctoring. Đăng ký khóa học qua mã VietQR SePay (10.000đ trên môi trường trải nghiệm) sẽ mở khóa ngay phòng học và tặng 4 lượt Luyện phỏng vấn 1-1 cùng AI.',
+    'Mỗi đợt học gồm 6 buổi chuyên sâu kèm bài kiểm tra năng lực cuối buổi (cần đạt tối thiểu 70%) và kỳ thi sát hạch cuối khóa có giám sát AI Proctoring. Đăng ký khóa học qua mã VietQR SePay sẽ mở khóa ngay phòng học và tặng 4 lượt Luyện phỏng vấn 1-1 cùng AI.',
   ];
   await db.insert(knowledgeChunks).values(
     publicChunks.map((text, idx) => ({

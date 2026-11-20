@@ -536,7 +536,7 @@ export const SessionVideoRoomView: React.FC<{
             Buổi {session.sessionOrder}: {cleanSessionTitle}
           </h1>
           <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-            Buổi học này dự kiến diễn ra vào lúc <strong>{formattedStart}</strong>. Video bài giảng và bài kiểm tra 10 câu cuối buổi sẽ được mở ngay sau khi giảng viên hoàn tất buổi dạy trực tuyến và lưu bản ghi.
+            Buổi học này dự kiến diễn ra vào lúc <strong>{formattedStart}</strong>. Video bài giảng và bài kiểm tra cuối buổi sẽ được mở ngay sau khi giảng viên hoàn tất buổi dạy trực tuyến và lưu bản ghi.
           </p>
           <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
             <button

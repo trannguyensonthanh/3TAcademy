@@ -383,7 +383,7 @@ export const InstructorPortalView: React.FC = () => {
           scheduleData.examReviews.map((r) => ({
             ...r,
             studentEmail: r.studentEmail ?? 'hocvien@3t.edu.vn',
-            examTitle: r.examTitle ?? 'Kỳ thi tốt nghiệp cuối khóa (25 câu trắc nghiệm)',
+            examTitle: r.examTitle ?? 'Kỳ thi tốt nghiệp cuối khóa (Trắc nghiệm)',
             submittedAt: r.submittedAt ?? 'Đã nộp bài',
           }))
         );
@@ -844,6 +844,8 @@ export const InstructorPortalView: React.FC = () => {
       };
     } else {
       const nextNum = list.length + 1;
+      const inheritedSkill = list.find((item) => item.skillCode && item.skillName);
+      const cohortPrefix = (selectedCohort.code || 'COURSE').split('-')[0] || 'COURSE';
       list.push({
         number: nextNum,
         scenarioTag: `Câu ${nextNum} · Buổi ${activeSession.sessionOrder}`,
@@ -858,10 +860,10 @@ export const InstructorPortalView: React.FC = () => {
         explanation:
           newQExplanation.trim() ||
           'Giải thích đáp án đúng dựa trên nội dung trọng tâm của buổi học.',
-        skillCode: 'HYBRID-RAG',
-        skillName: 'Kiến thức trọng tâm buổi học',
-        reviewTimestampLabel: '14:20 - 16:05',
-        reviewJumpSec: 25,
+        skillCode: inheritedSkill?.skillCode || `${cohortPrefix}-S${activeSession.sessionOrder}`,
+        skillName: inheritedSkill?.skillName || 'Kiến thức trọng tâm buổi học',
+        reviewTimestampLabel: '00:00',
+        reviewJumpSec: 0,
         slideLabel: 'Slide bài giảng',
       });
     }
@@ -1579,7 +1581,7 @@ export const InstructorPortalView: React.FC = () => {
                         1. Danh sách các Buổi học của lớp ({displayCohortSessions.length} buổi)
                       </h2>
                       <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                        Bấm vào từng buổi học để mở không gian chi tiết (Livestream / Bản ghi, Tài liệu tóm tắt &amp; 10 câu trắc nghiệm của buổi đó).
+                        Bấm vào từng buổi học để mở không gian chi tiết (Livestream / Bản ghi, Tài liệu tóm tắt &amp; bài kiểm tra trắc nghiệm của buổi đó).
                       </p>
                     </div>
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#475569] dark:text-[#94A3B8] px-3 py-1 rounded-lg bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24]">
@@ -1635,7 +1637,10 @@ export const InstructorPortalView: React.FC = () => {
 
                           <div className="pt-3 border-t border-[#E2ECE7] dark:border-[#1E2D24] flex items-center justify-between gap-2 text-xs">
                             <span className="text-[#475569] dark:text-[#94A3B8]">
-                              10 câu trắc nghiệm mở khóa · {sess.attachmentsCount} tài liệu
+                              {(sessionQuizzesById[sess.id]?.length || sess.quizQuestions?.length)
+                                ? `${sessionQuizzesById[sess.id]?.length || sess.quizQuestions?.length} câu trắc nghiệm mở khóa`
+                                : 'Bài kiểm tra mở khóa'}{' '}
+                              · {sess.attachmentsCount} tài liệu
                             </span>
                             <button
                               type="button"
@@ -2385,7 +2390,7 @@ export const InstructorPortalView: React.FC = () => {
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D1FAE5] dark:bg-emerald-950/90 hover:bg-[#10B981] hover:text-white text-[#065F46] dark:text-emerald-300 text-xs font-bold transition-colors cursor-pointer"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Tạo 10 câu hỏi gợi ý từ nội dung buổi học này (DRAFT)</span>
+                        <span>Tạo câu hỏi gợi ý từ nội dung buổi học này (DRAFT)</span>
                       </button>
 
                       <button

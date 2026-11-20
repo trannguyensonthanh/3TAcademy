@@ -701,7 +701,7 @@ const DEFAULT_ACADEMY_FAQS = [
     id: 'faq-6',
     question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
     answer:
-      'Bạn chọn đợt học phù hợp và quét mã VietQR trên ứng dụng ngân hàng (10.000đ trên môi trường kiểm thử). Ngay sau khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
+      'Bạn chọn đợt học phù hợp và quét mã VietQR trên ứng dụng ngân hàng để hoàn tất học phí. Ngay sau khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
   },
 ];
 

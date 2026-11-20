@@ -273,7 +273,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                     onClick={() => navigate(`/app/assessments/${assessmentId}`)}
                     className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-semibold cursor-pointer whitespace-nowrap"
                   >
-                    <span>Làm lại bài trắc nghiệm (10 câu) để đạt 10/10</span>
+                    <span>Làm lại bài trắc nghiệm ({questions.length} câu) để cải thiện điểm số</span>
                   </button>
                 </>
               )}
@@ -524,7 +524,7 @@ export const AssessmentResultView: React.FC<{ assessmentId: string }> = ({ asses
                   onClick={() => navigate(`/app/exams/${resolvedFinalExamId}/proctored`)}
                   className="w-full py-2.5 px-4 rounded-xl bg-[#F7FBF9] dark:bg-[#090F0C] border border-[#E2ECE7] dark:border-[#1E2D24] hover:border-[#10B981] text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <span>Thi Cuối Khóa 25 Câu Trắc Nghiệm (Camera Giám Sát)</span>
+                  <span>Thi Tốt Nghiệp Cuối Khóa (Camera Giám Sát)</span>
                   <ArrowRight className="w-3.5 h-3.5 text-[#10B981]" />
                 </button>
               </div>
