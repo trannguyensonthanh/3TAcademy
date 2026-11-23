@@ -613,6 +613,7 @@ export interface McqQuestionItem {
   options: [string, string, string, string] | string[];
   correctIndex: number;
   explanation: string;
+  skillId?: string;
   skillCode: string;
   skillName: string;
   reviewTimestampLabel: string;
@@ -627,6 +628,7 @@ export interface StudentSafePromptConfigItem {
   scenarioTag: string;
   prompt: string;
   options: [string, string, string, string] | string[];
+  skillId?: string;
   skillCode: string;
   skillName: string;
   slideLabel: string;

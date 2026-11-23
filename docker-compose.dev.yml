@@ -3,6 +3,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: edutech-postgres-dev
     restart: unless-stopped
+    mem_limit: 512m
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-edutech_db}
       POSTGRES_USER: ${POSTGRES_USER:-edutech_user}
@@ -21,6 +22,7 @@ services:
     image: redis:7-alpine
     container_name: edutech-redis-dev
     restart: unless-stopped
+    mem_limit: 128m
     command: [ "redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-redis_secret_2026}" ]
     ports:
       - "6379:6379"
@@ -38,6 +40,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: edutech-api-dev
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,7 +59,7 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-jwt_refresh_super_secret_key_2026_dev}
       HMAC_CERTIFICATE_SECRET: ${HMAC_CERTIFICATE_SECRET:-3t-academy-hmac-certificate-secret-key-2026}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:4000}
       LIVEKIT_API_URL: ${LIVEKIT_API_URL:-}
@@ -89,6 +92,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: edutech-ai-dev
     restart: unless-stopped
+    mem_limit: 1536m
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,7 +107,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret_2026}@redis:6379
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal_shared_secret_2026}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}

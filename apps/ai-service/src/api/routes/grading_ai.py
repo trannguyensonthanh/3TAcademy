@@ -1,3 +1,17 @@
+"""Router API Khảo thí & Chấm điểm AI: Sinh đề Quiz tự động từ bài giảng và Trợ giảng đồng chấm bài tự luận.
+
+Vai trò trong kiến trúc 3 tầng (Frontend `apps/web` <-> Backend `apps/api` <-> AI Service `apps/ai-service`):
+- Phục vụ giảng viên (Instructor) trên trang giảng dạy tạo nhanh bộ câu hỏi trắc nghiệm bám sát phụ đề buổi học
+  (`/api/v1/ai/assessments/generate-quiz`) và nhận gợi ý chấm bài tự luận/dự án theo rubric (`/api/v1/ai/assessments/co-grade`).
+- Kết hợp gọi LLM qua `LLMGateway.generate_text()` (chuỗi fallback Gemini -> vLLM) với tầng dự phòng tất định
+  (`_build_deterministic_quiz_items`) để hệ thống không bao giờ trả lỗi trắng khi mất mạng hoặc hết quota LLM.
+
+Liên kết chéo (Cross-layer):
+- Được gọi từ `apps/api/src/modules/teach/teach.routes.ts` (dòng ~1924) thông qua
+  `aiServiceClient.generateQuizDraft()` trong `apps/api/src/integrations/aiService.client.ts`.
+- Gọi sang `LLMGateway.generate_text()` (`src/core/llm_gateway.py`); bảo vệ bởi `verify_internal_api_key`.
+"""
+
 import json
 import re
 from fastapi import APIRouter, Depends
@@ -6,6 +20,7 @@ from ...core.llm_gateway import LLMGateway
 from ...core.logging import logger
 from ...core.security import verify_internal_api_key
 
+# Khai báo router khảo thí AI (`/api/v1/ai/assessments`) với xác thực `X-Internal-Key`.
 grading_router = APIRouter(
     prefix="/api/v1/ai/assessments",
     tags=["ai-assessments"],
@@ -14,6 +29,8 @@ grading_router = APIRouter(
 
 
 class GenerateQuizRequest(BaseModel):
+    """Schema đầu vào để AI sinh bộ câu hỏi trắc nghiệm 4 đáp án gắn với `session_id` và `skill_ids`."""
+
     session_id: int
     session_title: str
     transcript_text: str = ""
@@ -22,6 +39,8 @@ class GenerateQuizRequest(BaseModel):
 
 
 class CoGradeSubmissionRequest(BaseModel):
+    """Schema đầu vào cho trợ giảng AI gợi ý điểm số và nhận xét bài nộp tự luận/code theo rubric."""
+
     item_id: int
     prompt_md: str
     rubric_config: dict
@@ -31,6 +50,19 @@ class CoGradeSubmissionRequest(BaseModel):
 
 
 def _build_deterministic_quiz_items(req: GenerateQuizRequest) -> list[dict]:
+    """Tạo bộ câu hỏi trắc nghiệm dự phòng theo ngữ cảnh buổi học khi LLM không khả dụng hoặc parse JSON lỗi.
+
+    Mục tiêu:
+        Đảm bảo tính khả dụng 100% cho luồng tạo nháp Quiz của giảng viên; câu hỏi dự phòng vẫn lồng ghép
+        tiêu đề buổi học, trích đoạn câu đầu của transcript và giữ đúng định dạng kép (camelCase + snake_case)
+        tương thích với cả Frontend lẫn DB schema của `apps/api`.
+    Liên kết luồng (Cross-layer):
+        Được gọi nội bộ trong `generate_session_quiz()` khi khối `try` gọi `LLMGateway` thất bại.
+    Đầu vào / Đầu ra:
+        - Input: `req` (`GenerateQuizRequest`).
+        - Output: Danh sách `req.question_count` dict câu hỏi trắc nghiệm đầy đủ `prompt_config` và `grading_config`.
+    """
+    # Bước 1: Trích tiêu đề buổi học và câu mở đầu transcript (giới hạn 120 ký tự) để cá nhân hóa nội dung câu hỏi.
     title = req.session_title.strip() or f"Buổi học #{req.session_id}"
     snippet = (req.transcript_text or "").strip()
     first_sentence = (
@@ -39,6 +71,8 @@ def _build_deterministic_quiz_items(req: GenerateQuizRequest) -> list[dict]:
         else f"nguyên lý thiết kế thực chiến trong {title}"
     )
 
+    # Bước 2: Định nghĩa 4 mẫu câu hỏi chuẩn kỹ thuật phần mềm (kiến trúc, kiểm thử, tránh lỗi phổ biến, mở rộng)
+    # có phân bổ vị trí đáp án đúng (`correct_idx`) đa dạng.
     templates = [
         (
             f"Trong nội dung '{title}', nguyên tắc kiến trúc cốt lõi nào giúp hệ thống vận hành ổn định trên môi trường Production?",
@@ -86,6 +120,7 @@ def _build_deterministic_quiz_items(req: GenerateQuizRequest) -> list[dict]:
         ),
     ]
 
+    # Bước 3: Lặp xoay vòng theo `question_count` và gán vòng tròn `skill_id` để phân bổ đều năng lực cần đánh giá.
     items: list[dict] = []
     for idx in range(req.question_count):
         tpl = templates[idx % len(templates)]
@@ -121,27 +156,43 @@ def _build_deterministic_quiz_items(req: GenerateQuizRequest) -> list[dict]:
 
 @grading_router.post("/generate-quiz")
 async def generate_session_quiz(req: GenerateQuizRequest):
+    """Sinh nháp bộ câu hỏi trắc nghiệm từ tiêu đề và nội dung phụ đề buổi học bằng LLM (có fallback an toàn).
+
+    Mục tiêu:
+        Giảm thời gian soạn đề của giảng viên: gửi prompt có cấu trúc yêu cầu LLM trả về JSON thuần
+        gồm 4 phương án A/B/C/D, vị trí đáp án đúng và giải thích chi tiết.
+    Liên kết luồng (Cross-layer):
+        - Được gọi từ `AiServiceClient.generateQuizDraft()` (`apps/api/src/integrations/aiService.client.ts`),
+          do `apps/api/src/modules/teach/teach.routes.ts` kích hoạt.
+        - Gọi `LLMGateway.generate_text()` (`src/core/llm_gateway.py`).
+    Đầu vào / Đầu ra:
+        - Input: `GenerateQuizRequest` (`session_id`, `session_title`, `transcript_text`, `skill_ids`, `question_count`).
+        - Output: Dict JSON `{ "session_id": int, "generated_items": list[dict] }`.
     """
-    AI Quiz Generator synced 100% with `apps/api/src/integrations/aiService.client.ts`.
-    Uses Gemini when configured and falls back cleanly to contextual questions.
-    """
+    # AI Quiz Generator synced 100% with `apps/api/src/integrations/aiService.client.ts`.
+    # Uses Gemini when configured and falls back cleanly to contextual questions.
     try:
+        # Bước 1: Thiết kế System Prompt ép định dạng đầu ra là mảng JSON thuần và phân bổ đều đáp án đúng 0..3.
         sys_inst = (
             "Bạn là chuyên gia khảo thí kỹ thuật phần mềm & AI tại 3T Academy. "
             "Hãy sinh bộ câu hỏi trắc nghiệm 4 lựa chọn (chỉ trả về JSON thuần, không markdown codeblock) "
             'theo cấu trúc: [{"prompt": "...", "options": ["...", "...", "...", "..."], "correctIndex": 0, "explanationMd": "..."}]. '
             "Phân bổ correctIndex đa dạng giữa 0, 1, 2, 3."
         )
+        # Cắt ngắn transcript ở 3000 ký tự đầu để tiết kiệm token và giữ tốc độ phản hồi trong timeout 4s của Backend.
         user_prompt = (
             f"Tiêu đề buổi học: {req.session_title}\n"
             f"Số câu hỏi cần tạo: {req.question_count}\n"
             f"Nội dung tóm tắt / phụ đề bài giảng:\n{(req.transcript_text or '')[:3000]}"
         )
+        # Bước 2: Gọi LLM bất đồng bộ qua `LLMGateway` (tự động fallback qua các model Gemini và vLLM).
         raw_json = await LLMGateway.generate_text(
             prompt=user_prompt, system_instruction=sys_inst, temperature=0.3
         )
+        # Bước 3: Lột bỏ vỏ ```json ... ``` nếu LLM vẫn sinh markdown fence, sau đó giải mã JSON.
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_json.strip(), flags=re.IGNORECASE)
         parsed = json.loads(cleaned)
+        # Bước 4: Chuẩn hóa dữ liệu (đảm bảo luôn đủ 4 phương án, `correctIndex` thuộc [0..3], gắn `skill_id`).
         if isinstance(parsed, list) and len(parsed) > 0:
             items: list[dict] = []
             option_letters = ["A", "B", "C", "D"]
@@ -181,6 +232,7 @@ async def generate_session_quiz(req: GenerateQuizRequest):
                 )
             return {"session_id": req.session_id, "generated_items": items}
     except Exception as exc:
+        # Bước 5: Ghi log và chuyển mượt sang bộ sinh câu hỏi tất định nếu LLM lỗi hoặc trả JSON sai cú pháp.
         logger.info("Using deterministic contextual quiz generator fallback", reason=str(exc))
 
     return {
@@ -191,8 +243,21 @@ async def generate_session_quiz(req: GenerateQuizRequest):
 
 @grading_router.post("/co-grade")
 async def co_grade_submission(req: CoGradeSubmissionRequest):
+    """Đưa ra điểm đề xuất và nhận xét sơ bộ hỗ trợ giảng viên chấm bài tự luận (Human-in-the-Loop Co-Grading).
+
+    Mục tiêu:
+        Tính nhanh tỷ lệ điểm gợi ý có chặn biên an toàn `[0.55, 0.95]` dựa trên độ chi tiết bài làm của học viên,
+        kèm cấu trúc nhận xét Markdown và điểm thành phần rubric để giảng viên xem xét phê duyệt cuối cùng.
+    Liên kết luồng (Cross-layer):
+        Được gọi qua `POST /api/v1/ai/assessments/co-grade` từ luồng chấm bài tự luận của Backend `apps/api`.
+    Đầu vào / Đầu ra:
+        - Input: `CoGradeSubmissionRequest` (`item_id`, `prompt_md`, `rubric_config`, `student_response_md`, `max_points`).
+        - Output: Dict JSON chứa `item_id` và `ai_suggestion` (`score`, `feedback_md`, `rubric_scores`).
+    """
+    # Bước 1: Đo độ dài nội dung bài làm và ánh xạ tuyến tính có kẹp ngưỡng [0.55, 0.95] để tránh cho điểm cực đoan.
     response_len = len((req.student_response_md or "").strip())
     ratio = min(0.95, max(0.55, 0.65 + min(response_len, 600) / 2000.0))
+    # Bước 2: Quy đổi sang thang điểm `max_points` và trả về phiếu góp ý có cấu trúc cho giảng viên.
     return {
         "item_id": req.item_id,
         "ai_suggestion": {

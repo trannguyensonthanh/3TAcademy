@@ -1,3 +1,38 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/learning/learning.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Module Không gian Học tập, Xem lại bài giảng (Replay),
+ *     Đồng bộ tiến độ video, Trợ giảng AI trong lớp & Phòng học trực tuyến LiveKit + SSE.
+ *   - Kết nối trực tiếp mọi tương tác hàng ngày của Học viên sau khi mua khóa học:
+ *     1. Bảng điều khiển cá nhân (`/me/dashboard`), thông báo (`/me/notifications/*`),
+ *        danh sách lớp đã ghi danh (`/me/enrollments`) kèm tự vá enrollment từ đơn đã PAID.
+ *     2. Không gian lớp học (`/cohorts/:cohortId/workspace`) & chi tiết buổi học xem lại
+ *        (`/cohorts/:cohortId/sessions/:sessionId`) với tài liệu tải về, phụ đề & thảo luận Q&A.
+ *     3. Lưu tiến độ xem video (`PUT /sessions/:sessionId/progress`) kèm tự đồng bộ thời lượng thật
+ *        từ thẻ `<video>` HTML5, và nộp Quiz cuối buổi (`POST /sessions/:sessionId/quiz-submit`)
+ *        dùng chung bộ chấm bài `gradeAndRecordAssessmentSubmission()` (`assessment.routes.ts`).
+ *     4. Hỏi **Trợ giảng AI khóa học (`POST /ai/tutor/ask`)** gọi `askCourseTutorRag()`
+ *        (`apps/api/src/integrations/ragAi.service.ts` — Hybrid RRF trên học liệu `ENROLLED_ONLY`
+ *        + Guardrail chống hỏi chéo môn + Gemini đa model -> Deterministic RAG; tương đồng hợp đồng
+ *        `aiServiceClient.askSessionTutor` tới `apps/ai-service/src/api/routes/rag_chat.py`).
+ *     5. **Phòng học trực tuyến LiveKit + SSE (`/live/sessions/*`)**: kiểm tra quyền vào lớp,
+ *        điểm danh tự động `attendedLive`, ký phát JWT LiveKit SFU (`livekit.service.ts`),
+ *        mở luồng SSE thời gian thực (`liveRoom.helpers.ts`), giơ tay, thả reaction, WebRTC signaling,
+ *        đồng bộ media dự phòng, xác thực link Diễn giả khách mời JWT, tiếp nhận LiveKit Egress Webhook
+ *        và cấp Presigned PUT URL upload bản ghi trực tiếp lên Cloudflare R2.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/learning.api.ts` (toàn bộ 20+ hàm `learningApi.*`).
+ *   - Đọc/Ghi bảng DB: `enrollments`, `cohorts`, `courses`, `class_sessions`, `session_progress`,
+ *     `session_attachments`, `assessments`, `assessment_items`, `assessment_attempts`,
+ *     `student_skill_states`, `skills`, `course_skills`, `categories`, `notifications`,
+ *     `discussion_threads`, `discussion_posts`, `user_profiles`, `accounts`, `knowledge_chunks`,
+ *     `chat_sessions`, `chat_messages`, `orders`, `payment_transactions`, `course_reviews`.
+ *   - Gọi tiếp sang: `ragAi.service.ts`, `livekit.service.ts`, `r2.service.ts`, `liveRoom.helpers.ts`,
+ *     `order.routes.ts` (`reconcileUnmatchedSepayTransactions`), `assessment.routes.ts` (`gradeAndRecordAssessmentSubmission`).
+ * ============================================================================
+ */
 import { Router } from 'express';
 import { eq, and, desc, asc, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -33,6 +68,7 @@ import { sql } from 'drizzle-orm';
 import { requireAuth, optionalAuth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
 import { askCourseTutorRag } from '../../integrations/ragAi.service.js';
+import { aiServiceClient } from '../../integrations/aiService.client.js';
 import { env } from '../../config/env.js';
 import {
   resolveCohort,
@@ -119,6 +155,7 @@ export function buildAttachmentDownloadUrl(r2ObjectKey: string): string {
   return `/api/v1/sessions/attachments/download?key=${encodeURIComponent(cleanKey)}`;
 }
 
+/** Kiểm tra quyền truy cập dữ liệu buổi học theo đợt học (`ADMIN` luôn hợp lệ, `INSTRUCTOR` phải đúng lớp, `STUDENT` phải đã ghi danh `ACTIVE`/`COMPLETED`). */
 async function assertSessionCohortAccess(params: {
   cohortId: number;
   userId: number;
@@ -318,6 +355,10 @@ function mapClassSessionDto(
   };
 }
 
+/**
+ * Tự vá quyền ghi danh (`enrollments`) cho các đơn hàng đã `PAID` nhưng chưa kịp tạo bản ghi enrollment,
+ * đồng thời chạy đối soát giao dịch SePay chưa khớp (`reconcileUnmatchedSepayTransactions`) trước khi tải dữ liệu học tập.
+ */
 async function ensureEnrollmentsForPaidOrders(accountId: number) {
   await reconcileUnmatchedSepayTransactions();
 
@@ -368,6 +409,10 @@ async function ensureEnrollmentsForPaidOrders(accountId: number) {
   return paidOrders;
 }
 
+/**
+ * Route `GET /api/v1/sessions/attachments/download` — Tải tài liệu học tập (chuyển hướng R2 hoặc xuất Handout tổng hợp từ `knowledge_chunks`).
+ * - **Liên kết luồng:** Kiểm tra ghi danh lớp trước khi cấp tài liệu (`assertSessionCohortAccess`). Đọc `session_attachments`, `class_sessions`, `knowledge_chunks`.
+ */
 // 3.0 GET /sessions/attachments/download — Serves R2 redirect or real lecture handout Markdown/Text
 learningRouter.get('/sessions/attachments/download', requireAuth, async (req, res, next) => {
   try {
@@ -449,6 +494,10 @@ learningRouter.get('/sessions/attachments/download', requireAuth, async (req, re
   }
 });
 
+/**
+ * Routes `PATCH /api/v1/me/notifications/:notificationId/read` & `POST /api/v1/me/notifications/read-all`
+ * — Đánh dấu đã đọc 1 hoặc tất cả thông báo cá nhân (`learningApi.markNotificationRead`, `markAllNotificationsRead`). Ghi bảng `notifications`.
+ */
 // 3.0B Notification Read State Endpoints
 learningRouter.patch('/me/notifications/:notificationId/read', requireAuth, async (req, res, next) => {
   try {
@@ -479,6 +528,10 @@ learningRouter.post('/me/notifications/read-all', requireAuth, async (req, res, 
   }
 });
 
+/**
+ * Route `POST /api/v1/cohorts/:cohortId/reviews` — Học viên đã ghi danh gửi/cập nhật đánh giá sao & nhận xét khóa học.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.submitCohortReview()`. Đọc `cohorts`, `enrollments`; ghi `course_reviews`.
+ */
 // 3.0C Course Review Submission (Enrolled Students Only)
 const submitCourseReviewSchema = z.object({
   rating: z.number().int().min(1).max(5),
@@ -549,6 +602,13 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `GET /api/v1/me/dashboard` — Tổng hợp toàn bộ dữ liệu Bảng điều khiển Học viên (`StudentDashboardView`).
+ * - **Mục tiêu:** Trả về buổi đang phát Live, buổi nên học tiếp (`resumeSession`), bài tập/kỳ thi sắp tới,
+ *   biểu đồ năng lực kỹ năng (`skillMastery`), xu hướng điểm thi (`attemptTrend`) và 10 thông báo mới nhất.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getStudentDashboard()` / `getDashboardSummary()`.
+ *   Đọc `enrollments`, `cohorts`, `class_sessions`, `session_progress`, `assessments`, `assessment_attempts`, `student_skill_states`, `skills`, `notifications`.
+ */
 // 3.1 GET /me/dashboard
 learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
   try {
@@ -759,6 +819,10 @@ learningRouter.get('/me/dashboard', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/me/enrollments` — Danh sách các đợt học học viên đang theo học / đã hoàn thành kèm % tiến độ.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getMyEnrollments()`. Đọc `enrollments`, `cohorts`, `courses`, `class_sessions`, `session_progress`, `orders`.
+ */
 // 3.2 GET /me/enrollments
 learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
   try {
@@ -903,6 +967,11 @@ learningRouter.get('/me/enrollments', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/cohorts/:cohortId/workspace` — Tải không gian lớp học đầy đủ (6 buổi học, điểm Quiz, tài liệu, đề thi cuối khóa, đánh giá).
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getCohortWorkspace(cohortId)`.
+ *   Đọc `cohorts`, `courses`, `enrollments`, `class_sessions`, `session_progress`, `session_attachments`, `assessments`, `assessment_attempts`, `course_reviews`.
+ */
 // 3.3 GET /cohorts/:cohortId/workspace
 learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res, next) => {
   try {
@@ -1254,6 +1323,12 @@ learningRouter.get('/cohorts/:cohortId/workspace', requireAuth, async (req, res,
   }
 });
 
+/**
+ * Route `GET /api/v1/cohorts/:cohortId/sessions/:sessionId` — Tải phòng xem lại bài giảng (Replay Room): nguồn video R2/MP4,
+ * phụ đề transcript có mốc giây, lịch sử chat Trợ giảng AI, danh sách tài liệu, thảo luận Q&A và trạng thái Quiz cuối buổi.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getSessionDetail(cohortId, sessionId)`.
+ *   Đọc `class_sessions`, `cohorts`, `session_progress`, `session_attachments`, `knowledge_chunks`, `assessments`, `assessment_items`, `chat_sessions`, `chat_messages`, `discussion_threads`.
+ */
 // 3.4 GET /cohorts/:cohortId/sessions/:sessionId
 learningRouter.get(
   '/cohorts/:cohortId/sessions/:sessionId',
@@ -1540,6 +1615,15 @@ learningRouter.get(
   }
 );
 
+/**
+ * Route `PUT /api/v1/sessions/:sessionId/progress` — Lưu vị trí xem video (`lastPositionSec`, `maxWatchedSec`) và đồng bộ thời lượng thật.
+ *
+ * - **Mục tiêu:** Giúp học viên xem tiếp đúng giây đang dở khi quay lại (`resumeSession`), đồng thời tự cập nhật
+ *   `class_sessions.duration_seconds` theo metadata thật của video HTML5 để tính % tiến độ chính xác.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `learningApi.saveSessionProgress(sessionId, ...)` (`apps/web/src/services/learning.api.ts`).
+ *   + Đọc/Ghi DB: `class_sessions`, `session_progress`.
+ */
 // 3.5 PUT /sessions/:sessionId/progress
 const progressSchema = z.object({
   lastPositionSec: z.number().int().min(0),
@@ -1647,6 +1731,15 @@ learningRouter.put(
   }
 );
 
+/**
+ * Route `POST /api/v1/sessions/:sessionId/quiz-submit` — Nộp bài Quiz củng cố cuối buổi ngay trong giao diện phòng học.
+ *
+ * - **Mục tiêu:** Ủy quyền toàn bộ việc chấm điểm, cập nhật Elo-IRT 2PL và đánh dấu hoàn thành buổi (`>= 70%`)
+ *   cho hàm thống nhất `gradeAndRecordAssessmentSubmission()` (`apps/api/src/modules/assessment/assessment.routes.ts`).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `learningApi.submitSessionQuiz(sessionId, answers)` (`apps/web/src/services/learning.api.ts`).
+ *   + Đọc/Ghi DB: Thông qua `gradeAndRecordAssessmentSubmission()`.
+ */
 // 3.6 POST /sessions/:sessionId/quiz-submit — Unified with gradeAndRecordAssessmentSubmission!
 const quickQuizSubmitSchema = z.object({
   answers: z.array(z.number().int()),
@@ -1724,6 +1817,18 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/ai/tutor/ask` — Hỏi **Trợ giảng AI riêng của khóa học** gắn mốc giây video đang xem.
+ *
+ * - **Mục tiêu:** Xác thực quyền ghi danh, chặn câu hỏi ngoài ngành/hỏi chéo môn khác, chạy Hybrid Search RRF
+ *   trên học liệu độc quyền (`ENROLLED_ONLY`), sinh lời giải thích có trích dẫn mốc giây + trang Slide,
+ *   và lưu lịch sử hội thoại vào `chat_sessions` / `chat_messages (scope = 'SESSION_TUTOR')`.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `learningApi.askSessionTutor()` (`apps/web/src/services/learning.api.ts`).
+ *   + Tầng AI/RAG: Gọi `askCourseTutorRag()` (`apps/api/src/integrations/ragAi.service.ts` — Gemini đa model
+ *     fallback -> Deterministic Course RAG; cùng hợp đồng với `aiServiceClient.askSessionTutor` -> `apps/ai-service/src/api/routes/rag_chat.py`).
+ *   + Đọc/Ghi DB: `class_sessions`, `cohorts`, `courses`, `enrollments`, `knowledge_chunks`, `chat_sessions`, `chat_messages`.
+ */
 // 3.7 POST /ai/tutor/ask
 const tutorAskSchema = z.object({
   cohortId: z.union([z.number(), z.string()]).optional(),
@@ -1771,36 +1876,100 @@ learningRouter.post(
       const resolvedCohortId = session.cohortId;
       const resolvedSessionId = session.id;
 
-      let tutorResult: {
-        answerMd: string;
-        detectedTopic: string;
-        citations: Array<{ label: string; jumpSec: number; slideLabel: string }>;
-      };
-
-      try {
-        tutorResult = await askCourseTutorRag({
-          accountId,
-          userRole,
-          cohortId: resolvedCohortId,
-          sessionId: resolvedSessionId,
-          question,
-          currentVideoSec: videoSec,
-        });
-      } catch (err: any) {
-        if (err?.statusCode === 403) {
+      // Bước 1: Kiểm tra phân quyền RBAC bắt buộc (học viên phải ghi danh lớp học này mới được gọi AI Service hoặc RAG nội bộ)
+      if (userRole !== 'ADMIN' && userRole !== 'INSTRUCTOR') {
+        const [activeEnroll] = await db
+          .select()
+          .from(enrollments)
+          .where(
+            and(
+              eq(enrollments.accountId, accountId),
+              eq(enrollments.cohortId, resolvedCohortId)
+            )
+          )
+          .limit(1);
+        if (!activeEnroll || (activeEnroll.status !== 'ACTIVE' && activeEnroll.status !== 'COMPLETED')) {
           res.status(403).json({
             success: false,
             status: 403,
-            code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
-            message: err.message,
+            code: 'FORBIDDEN_COURSE_NOT_PURCHASED',
+            message: 'Bạn chưa đăng ký đợt học này nên chưa thể sử dụng Trợ giảng AI của buổi học.',
             error: {
-              code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
-              message: err.message,
+              code: 'FORBIDDEN_COURSE_NOT_PURCHASED',
+              message: 'Bạn chưa đăng ký đợt học này nên chưa thể sử dụng Trợ giảng AI của buổi học.',
             },
           });
           return;
         }
-        throw err;
+      }
+
+      let tutorResult: {
+        answerMd: string;
+        detectedTopic: string;
+        citations: Array<{ label: string; jumpSec: number; slideLabel: string }>;
+      } | null = null;
+
+      // Bước 2: Ưu tiên gọi Python AI Microservice (`POST /api/v1/ai/tutor/ask` — 5-node CRAG LangGraph + Cross-Encoder Reranker)
+      try {
+        const aiTutor = await aiServiceClient.askSessionTutor(
+          {
+            cohortId: resolvedCohortId,
+            sessionId: resolvedSessionId,
+            question,
+            currentVideoSec: videoSec,
+          },
+          req.correlationId
+        );
+        if (aiTutor && typeof aiTutor.answerMd === 'string' && aiTutor.answerMd.trim().length > 0) {
+          const normalizedCitations = (aiTutor.citations ?? []).map((c) => {
+            const jumpSec = Math.max(0, Math.round(Number(c.jumpSec ?? c.startSec ?? videoSec ?? 0)));
+            const mm = String(Math.floor(jumpSec / 60)).padStart(2, '0');
+            const ss = String(jumpSec % 60).padStart(2, '0');
+            return {
+              label: c.label || `Buổi ${session.sessionOrder} · ${mm}:${ss}`,
+              jumpSec,
+              slideLabel:
+                c.slideLabel ||
+                (c.pageNumber ? `Buổi ${session.sessionOrder} · Slide Trang ${c.pageNumber}` : `Buổi ${session.sessionOrder} · Học liệu`),
+            };
+          });
+          tutorResult = {
+            answerMd: aiTutor.answerMd,
+            detectedTopic: aiTutor.detectedTopic || session.title,
+            citations: normalizedCitations,
+          };
+        }
+      } catch {
+        // AI Service tạm ngắt hoặc timeout -> tự động hạ cấp mượt sang RAG nội bộ Node.js
+      }
+
+      // Bước 3 (Fallback): Chạy Hybrid RAG + Gemini Cascade / Deterministic nội bộ tại `ragAi.service.ts`
+      if (!tutorResult) {
+        try {
+          tutorResult = await askCourseTutorRag({
+            accountId,
+            userRole,
+            cohortId: resolvedCohortId,
+            sessionId: resolvedSessionId,
+            question,
+            currentVideoSec: videoSec,
+          });
+        } catch (err: any) {
+          if (err?.statusCode === 403) {
+            res.status(403).json({
+              success: false,
+              status: 403,
+              code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
+              message: err.message,
+              error: {
+                code: err.code || 'FORBIDDEN_COURSE_NOT_PURCHASED',
+                message: err.message,
+              },
+            });
+            return;
+          }
+          throw err;
+        }
       }
 
       const { answerMd, detectedTopic, citations } = tutorResult;
@@ -1845,7 +2014,7 @@ learningRouter.post(
             content: answerMd,
             citations,
             llmProvider: 'gemini',
-            llmModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+            llmModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
           },
         ]);
       }
@@ -1861,6 +2030,11 @@ learningRouter.post(
   }
 );
 
+/**
+ * Routes `GET/POST /api/v1/sessions/:sessionId/discussions` — Lấy danh sách và đăng câu hỏi Q&A gắn mốc giây video.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getSessionDiscussions()`, `createSessionDiscussion()`.
+ *   Đọc/Ghi `discussion_threads`, `discussion_posts` và phát sự kiện SSE `qa_created` vào phòng Live.
+ */
 // 3.8 GET /sessions/:sessionId/discussions
 learningRouter.get('/sessions/:sessionId/discussions', requireAuth, async (req, res, next) => {
   try {
@@ -2002,6 +2176,11 @@ learningRouter.post(
   }
 );
 
+/**
+ * Routes `GET/POST /api/v1/sessions/:sessionId/chat-messages` — Tải và gửi tin nhắn trò chuyện trực tiếp trong phòng Live.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.getLiveSessionChatMessages()`, `sendLiveSessionChat()`.
+ *   Ghi vào `chat_sessions (scope = 'LIVE_COPILOT')`, `chat_messages` và broadcast SSE `chat_message`.
+ */
 // 3.10 GET /sessions/:sessionId/chat-messages
 learningRouter.get('/sessions/:sessionId/chat-messages', optionalAuth, async (req, res, next) => {
   try {
@@ -2164,6 +2343,18 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `GET /api/v1/live/sessions/:sessionId` — Khởi tạo & vào Phòng học Trực tuyến (LiveKit SFU + SSE).
+ *
+ * - **Quy trình từng bước:**
+ *   + Bước 1: Kiểm tra quyền ghi danh (Học viên phải có enrollment `ACTIVE`/`COMPLETED`; Giảng viên phải đúng lớp).
+ *   + Bước 2: Điểm danh tự động (`session_progress.attended_live = true`) nếu buổi đang `LIVE`, chặn học viên đã bị đuổi (`kickedIdentities`).
+ *   + Bước 3: Ký phát JWT LiveKit phân quyền Host/Student (`createLiveKitToken` ở `livekit.service.ts`).
+ *   + Bước 4: Đánh dấu hiện diện vào `liveRoom.helpers.ts` (`markParticipantJoinedRoom`) và trả toàn bộ trạng thái phòng (chat, Q&A, transcript, tài liệu, LiveKit token).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `learningApi.getLiveSessionRoom(sessionId)` (`apps/web/src/services/learning.api.ts`).
+ *   + Đọc/Ghi DB: `class_sessions`, `cohorts`, `courses`, `enrollments`, `session_progress`, `session_attachments`, `knowledge_chunks`, `chat_messages`, `discussion_threads`.
+ */
 // 3.12 GET /live/sessions/:sessionId (Phòng học trực tuyến — check quyền + LiveKit token + state thật)
 learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, next) => {
   try {
@@ -2460,6 +2651,11 @@ learningRouter.get('/live/sessions/:sessionId', requireAuth, async (req, res, ne
   }
 });
 
+/**
+ * Route `GET /api/v1/live/sessions/:sessionId/events` — Kênh Server-Sent Events (SSE) đẩy sự kiện phòng học theo thời gian thực.
+ * - **Lưu ý xác thực:** Vì `EventSource` chuẩn trình duyệt không gắn được header `Authorization`, endpoint hỗ trợ đọc JWT qua `?token=...`.
+ * - **Liên kết luồng:** Frontend kết nối qua `learningApi.getLiveEventsUrl(sessionId)` -> đăng ký vào `registerLiveRoomClient()` (`liveRoom.helpers.ts`).
+ */
 // 3.13 GET /live/sessions/:sessionId/events (SSE stream for live chat, Q&A, hand-raise, reactions, status, presence)
 learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req, res, next) => {
   try {
@@ -2590,6 +2786,11 @@ learningRouter.get('/live/sessions/:sessionId/events', optionalAuth, async (req,
   }
 });
 
+/**
+ * Routes `POST /live/sessions/:sessionId/hand-raise`, `/reactions`, `/live/discussions/:threadId/upvote`
+ * — Các tương tác tức thời trong phòng Live (giơ tay, thả cảm xúc, bình chọn câu hỏi Q&A) gọi `liveRoom.helpers.ts` để broadcast SSE.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.setLiveHandRaise()`, `sendLiveReaction()`, `upvoteLiveDiscussion()`.
+ */
 // 3.14 POST /live/sessions/:sessionId/hand-raise
 const handRaiseSchema = z.object({
   raised: z.boolean(),
@@ -2703,6 +2904,11 @@ learningRouter.post('/live/discussions/:threadId/upvote', requireAuth, async (re
   }
 });
 
+/**
+ * Route `POST /api/v1/live/guest/verify` — Xác thực mã mời JWT của Diễn giả Khách mời và cấp LiveKit Token tham gia phòng Live.
+ * - **Bảo mật:** Bắt buộc xác minh chữ ký JWT bằng `JWT_ACCESS_SECRET` (do Giảng viên tạo ở `teach.routes.ts`), chống vào phòng trái phép.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.verifyGuestSpeakerToken()` -> gọi `createGuestSpeakerToken()` (`livekit.service.ts`).
+ */
 // 3.17 POST /live/guest/verify — Requires cryptographically signed JWT invite token!
 const verifyGuestSchema = z.object({
   token: z.string().optional(),
@@ -2811,6 +3017,12 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/webhooks/livekit` — Tiếp nhận Webhook từ LiveKit Cloud (đặc biệt sự kiện `egress_ended`).
+ * - **Mục tiêu:** Khi LiveKit hoàn tất xuất file ghi hình MP4 lên Cloudflare R2, tự động cập nhật `class_sessions.video_r2_key`
+ *   & chuyển `status = 'REPLAY_READY'`, đồng thời broadcast SSE `session_status` để cả lớp thấy bản ghi ngay lập tức.
+ * - **Bảo mật:** Xác thực chữ ký header `Authorization` qua `getWebhookReceiver()` (`livekit.service.ts`) ở môi trường Production.
+ */
 // 3.18 POST /webhooks/livekit (LiveKit Cloud room & egress webhook receiver)
 learningRouter.post('/webhooks/livekit', async (req, res, next) => {
   try {
@@ -2896,6 +3108,10 @@ learningRouter.post('/webhooks/livekit', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `POST /api/v1/live/sessions/:sessionId/rtc-signal` — Chuyển tiếp tín hiệu WebRTC (`offer`/`answer`/`ice-candidate`) qua SSE.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.sendLiveRtcSignal()` -> `relayWebRtcSignal()` (`liveRoom.helpers.ts`).
+ */
 // 3.19 POST /live/sessions/:sessionId/rtc-signal (WebRTC signaling between Instructor and Students)
 const rtcSignalSchema = z.object({
   targetAccountId: z.union([z.string(), z.number()]).optional(),
@@ -2952,6 +3168,11 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/live/sessions/:sessionId/media-sync` — Đồng bộ trạng thái Camera/Micro/Chia sẻ màn hình & luồng âm thanh dự phòng của Giảng viên.
+ * - **Lưu ý quan trọng:** Nếu Giảng viên bật cam/mic/chia sẻ màn hình khi buổi học vẫn ở `SCHEDULED`, Backend tự chuyển `class_sessions.status -> 'LIVE'` và broadcast SSE.
+ * - **Liên kết luồng:** Frontend gọi từ `learningApi.syncLiveHostMedia()` -> `updateHostMediaState()` / `relayLiveAudioChunk()`.
+ */
 // 3.20 POST /live/sessions/:sessionId/media-sync (Real-time camera/screen frame & audio chunk sync)
 const mediaSyncSchema = z.object({
   camOn: z.boolean().optional(),
@@ -3059,6 +3280,10 @@ learningRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/live/sessions/:sessionId/recording/presign` — Cấp Presigned PUT URL Cloudflare R2 cho trình duyệt Giảng viên upload video lớn thẳng lên R2 (vượt giới hạn 15MB JSON body).
+ * - **Liên kết luồng:** Gọi `createR2PresignedPutUrl()` (`apps/api/src/integrations/r2.service.ts`), chỉ cho phép Host/Giảng viên phụ trách.
+ */
 // 3.21 POST /live/sessions/:sessionId/recording/presign — Direct browser-to-R2 PUT presign (no 15mb JSON limit!)
 const presignRecordingSchema = z.object({
   fileName: z.string().optional(),

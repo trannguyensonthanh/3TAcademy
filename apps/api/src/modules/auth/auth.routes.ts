@@ -1,3 +1,27 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/auth/auth.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Module Xác thực & Quản lý Phiên đăng nhập (Authentication).
+ *   - Đảm nhiệm đăng nhập Email/Password (băm mật khẩu bằng **Argon2**), đăng ký học viên mới
+ *     (tạo đồng bộ `accounts` + `account_identities` + `user_profiles` trong 1 Transaction ACID),
+ *     đăng nhập **Google OAuth 2.0** (xác thực chữ ký qua `oauth2.googleapis.com/tokeninfo`),
+ *     cấp mới cặp JWT (`access_token`, `refresh_token`) gắn song song HttpOnly Cookie + JSON body,
+ *     đăng xuất, lấy hồ sơ phiên hiện tại và đổi mật khẩu.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/auth.api.ts`:
+ *     + `authApi.login()`          -> `POST /api/v1/auth/login`
+ *     + `authApi.register()`       -> `POST /api/v1/auth/register`
+ *     + `authApi.googleAuth()` / `googleLogin()` -> `POST /api/v1/auth/google`
+ *     + `authApi.getMe()`          -> `GET  /api/v1/auth/me`
+ *     + `authApi.logout()`         -> `POST /api/v1/auth/logout`
+ *     + `authApi.changePassword()` -> `POST /api/v1/auth/change-password`
+ *     + `apiClient.ts` (auto-refresh) -> `POST /api/v1/auth/refresh`
+ *   - Đọc/Ghi bảng DB: `accounts`, `user_profiles`, `account_identities`.
+ *   - Gọi dịch vụ ngoài: Google OAuth2 TokenInfo API (không gọi `apps/ai-service`).
+ * ============================================================================
+ */
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import argon2 from 'argon2';
@@ -32,6 +56,7 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(1).optional(),
 });
 
+/** Kiểm tra request có đi qua HTTPS (trực tiếp hoặc sau Reverse Proxy như Nginx/Cloudflare qua `x-forwarded-proto`). */
 function isHttpsRequest(req: Request): boolean {
   const forwardedProto = req.headers['x-forwarded-proto'];
   if (typeof forwardedProto === 'string' && forwardedProto.split(',')[0]?.trim() === 'https') {
@@ -40,6 +65,11 @@ function isHttpsRequest(req: Request): boolean {
   return Boolean(req.secure);
 }
 
+/**
+ * Gắn cặp Cookie xác thực (`access_token`, `refresh_token`) với cờ bảo mật `httpOnly` (chống XSS đọc token).
+ * - Nếu chạy HTTPS (Production cross-site): bật `secure: true` và `sameSite: 'none'`.
+ * - Nếu chạy HTTP cục bộ (Dev): dùng `sameSite: 'lax'` để trình duyệt vẫn lưu cookie.
+ */
 function setAuthCookies(
   req: Request,
   res: Response,
@@ -65,6 +95,7 @@ function setAuthCookies(
   }
 }
 
+/** Xóa sạch cookie phiên đăng nhập (`access_token`, `refresh_token`) với đúng tập thuộc tính như lúc tạo. */
 function clearAuthCookies(req: Request, res: Response) {
   const isHttps = isHttpsRequest(req);
   const baseOptions = {
@@ -77,6 +108,11 @@ function clearAuthCookies(req: Request, res: Response) {
   res.clearCookie('refresh_token', baseOptions);
 }
 
+/**
+ * Ký phát cặp JWT (Access Token ngắn hạn + Refresh Token dài hạn) bằng hai khóa bí mật tách biệt.
+ * - **Đầu vào:** Thông tin tối thiểu `{ id, email, role }` để middleware `requireAuth` phân quyền RBAC nhanh.
+ * - **Đầu ra:** `{ accessToken, refreshToken }`.
+ */
 function generateTokens(user: { id: number; email: string; role: string }) {
   const accessToken = jwt.sign(
     { id: user.id, email: user.email, role: user.role },
@@ -91,6 +127,10 @@ function generateTokens(user: { id: number; email: string; role: string }) {
   return { accessToken, refreshToken };
 }
 
+/**
+ * Chuẩn hóa đối tượng hồ sơ người dùng trả về Frontend, tự động hợp nhất thông tin từ cột `user_profiles`
+ * với dữ liệu CV đã phân tích (`cvParsedData`) để tránh trống trường `phone`, `githubUrl`, `bio`, `careerGoal`.
+ */
 function formatUserResponse(
   account: { id: number; email: string; role: 'STUDENT' | 'INSTRUCTOR' | 'ADMIN' },
   profile?: {
@@ -140,9 +180,22 @@ function formatUserResponse(
   };
 }
 
+/**
+ * Route `POST /api/v1/auth/login` — Đăng nhập bằng Email và Mật khẩu.
+ *
+ * - **Mục tiêu:** Xác thực tài khoản nội bộ bằng thuật toán băm chống dò mật khẩu Argon2id,
+ *   kiểm tra trạng thái khóa tài khoản (`LOCKED`) và cấp cặp JWT + HttpOnly Cookie.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.login(email, password)` (`apps/web/src/services/auth.api.ts`).
+ *   + Đọc/Ghi DB: Đọc `accounts`, `user_profiles`; cập nhật `accounts.last_login_at`.
+ *   + AI Service: Không gọi.
+ * - **Đầu vào:** `{ email, password }` (validate qua `loginSchema`).
+ * - **Đầu ra:** `{ accessToken, refreshToken, user, isNewUser: false }`.
+ */
 // 1.1 POST /auth/login
 authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
+    // Bước 1: Chuẩn hóa email (chữ thường, cắt khoảng trắng) và tìm bản ghi tài khoản
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -167,6 +220,7 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
       return;
     }
 
+    // Bước 2: Chặn đăng nhập nếu tài khoản đang bị Quản trị viên khóa (`LOCKED`)
     if (account.status === 'LOCKED') {
       res.status(403).json({
         success: false,
@@ -182,6 +236,7 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
       return;
     }
 
+    // Bước 3: Đối chiếu mật khẩu thuần với chuỗi băm Argon2 lưu trong DB
     const isValid = await argon2.verify(account.passwordHash, password);
     if (!isValid) {
       res.status(401).json({
@@ -222,9 +277,23 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
   }
 });
 
+/**
+ * Route `POST /api/v1/auth/register` — Đăng ký tài khoản Học viên mới.
+ *
+ * - **Mục tiêu:** Tạo đồng thời tài khoản (`accounts`), danh tính nội bộ (`account_identities`)
+ *   và hồ sơ học viên (`user_profiles` với `interviewCredits = 0` + khung `cvParsedData` mặc định)
+ *   trong một Transaction ACID để đảm bảo không bao giờ phát sinh tài khoản mồ côi hồ sơ.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.register(fullName, email, password)` (`apps/web/src/services/auth.api.ts`).
+ *   + Đọc/Ghi DB: Đọc/Ghi `accounts`, ghi `account_identities`, ghi `user_profiles`.
+ *   + AI Service: Không gọi.
+ * - **Đầu vào:** `{ fullName, email, password, phone?, careerGoal? }` (`registerSchema`).
+ * - **Đầu ra:** HTTP 201 `{ accessToken, refreshToken, user, isNewUser: true }`.
+ */
 // 1.2 POST /auth/register
 authRouter.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
+    // Bước 1: Kiểm tra email đã tồn tại chưa (trả HTTP 409 nếu trùng)
     const { fullName, email, password, phone, careerGoal } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -249,11 +318,14 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
       return;
     }
 
+    // Bước 2: Băm mật khẩu bằng Argon2 và khởi tạo avatar chữ cái đầu từ DiceBear
     const passwordHash = await argon2.hash(password);
     const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(fullName)}`;
     const resolvedGoal = careerGoal || '';
     const resolvedBio = '';
 
+    // Bước 3: Mở Transaction ACID tạo 3 bảng liên kết (`accounts` -> `account_identities` -> `user_profiles`)
+    // Ghi chú nghiệp vụ: Tài khoản mới có 0 lượt phỏng vấn AI; chỉ được cộng +4 lượt khi thanh toán mua khóa học
     const result = await db.transaction(async (tx) => {
       const [newAccount] = await tx
         .insert(accounts)
@@ -320,6 +392,15 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
   }
 });
 
+/**
+ * Xác thực Google ID Token thông qua endpoint chính thức `oauth2.googleapis.com/tokeninfo`.
+ *
+ * - **Mục tiêu:** Chống giả mạo JWT không chữ ký bằng cách kiểm tra đủ 4 điều kiện mật mã học:
+ *   `iss` (Google issuer), `email_verified === true`, `aud === GOOGLE_CLIENT_ID` và chưa hết hạn `exp`.
+ *   (Ở môi trường dev/test cho phép tiền tố `dev-google-oauth:<email>` để kiểm thử luồng OAuth cục bộ).
+ * - **Đầu vào:** `idToken` chuỗi token Google do Frontend gửi lên.
+ * - **Đầu ra:** `{ email, name, sub, picture }` nếu hợp lệ, hoặc `null` nếu bị từ chối.
+ */
 async function verifyGoogleIdTokenPayload(idToken: string): Promise<{
   email: string;
   name: string;
@@ -384,6 +465,19 @@ async function verifyGoogleIdTokenPayload(idToken: string): Promise<{
   }
 }
 
+/**
+ * Route `POST /api/v1/auth/google` — Đăng nhập / Đăng ký tự động qua Google OAuth 2.0.
+ *
+ * - **Mục tiêu:** Xác thực Google ID Token; nếu email chưa tồn tại thì tự động tạo tài khoản
+ *   `STUDENT` + `account_identities (GOOGLE)` + `user_profiles` trong 1 Transaction ACID;
+ *   nếu đã tồn tại thì kiểm tra khóa tài khoản và cập nhật `lastLoginAt`.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.googleAuth(idToken)` / `authApi.googleLogin(idToken)` (`apps/web/src/services/auth.api.ts`).
+ *   + Đọc/Ghi DB: `accounts`, `account_identities`, `user_profiles`.
+ *   + Dịch vụ ngoài: `https://oauth2.googleapis.com/tokeninfo` (không gọi `apps/ai-service`).
+ * - **Đầu vào:** `{ idToken }` (`googleLoginSchema`).
+ * - **Đầu ra:** `{ accessToken, refreshToken, user, isNewUser }`.
+ */
 // 1.3 POST /auth/google
 authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) => {
   try {
@@ -467,7 +561,8 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
         return createdAcc!;
       });
     } else {
-      if (account.status === 'LOCKED') {
+      // Bước 2: Chặn đăng nhập nếu tài khoản đang bị Quản trị viên khóa (`LOCKED`)
+    if (account.status === 'LOCKED') {
         res.status(403).json({
           success: false,
           status: 403,
@@ -507,6 +602,18 @@ authRouter.post('/google', validate(googleLoginSchema), async (req, res, next) =
   }
 });
 
+/**
+ * Route `POST /api/v1/auth/refresh` — Làm mới cặp JWT (Token Rotation) khi Access Token hết hạn.
+ *
+ * - **Mục tiêu:** Đọc `refreshToken` từ body hoặc HttpOnly Cookie `refresh_token`, xác thực chữ ký
+ *   bằng `JWT_REFRESH_SECRET`, kiểm tra tài khoản còn hoạt động trong DB rồi cấp cặp token mới.
+ *   Nếu token sai hoặc tài khoản bị khóa thì tự động xóa sạch Cookie phiên.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `apps/web/src/services/apiClient.ts` (khi gặp HTTP 401 token hết hạn).
+ *   + Đọc DB: `accounts`.
+ * - **Đầu vào:** `{ refreshToken? }` hoặc Cookie `refresh_token`.
+ * - **Đầu ra:** `{ accessToken, refreshToken }`.
+ */
 // 1.4 POST /auth/refresh
 authRouter.post('/refresh', validate(refreshSchema), async (req, res) => {
   const refreshToken =
@@ -577,6 +684,13 @@ authRouter.post('/refresh', validate(refreshSchema), async (req, res) => {
   }
 });
 
+/**
+ * Route `POST /api/v1/auth/logout` — Đăng xuất và xóa sạch Cookie xác thực HttpOnly.
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.logout()` (`apps/web/src/services/auth.api.ts`).
+ *   + DB / AI Service: Không truy vấn.
+ */
 // 1.5 POST /auth/logout
 authRouter.post('/logout', (req, res) => {
   clearAuthCookies(req, res);
@@ -587,6 +701,16 @@ authRouter.post('/logout', (req, res) => {
   });
 });
 
+/**
+ * Route `GET /api/v1/auth/me` — Lấy thông tin tài khoản và hồ sơ của phiên đăng nhập hiện tại.
+ *
+ * - **Mục tiêu:** Đồng bộ lại trạng thái mới nhất (vai trò, `interviewCredits`, ảnh đại diện, khóa tài khoản)
+ *   khi người dùng tải lại trang (F5).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.getMe()` (`apps/web/src/services/auth.api.ts`).
+ *   + Đọc DB: `accounts`, `user_profiles`.
+ * - **Đầu ra:** `{ user }`.
+ */
 // 1.6 GET /auth/me
 authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
@@ -612,6 +736,7 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
       return;
     }
 
+    // Bước 2: Chặn đăng nhập nếu tài khoản đang bị Quản trị viên khóa (`LOCKED`)
     if (account.status === 'LOCKED') {
       res.status(403).json({
         success: false,
@@ -641,6 +766,17 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Route `POST /api/v1/auth/change-password` — Đổi mật khẩu đăng nhập cho người dùng hiện tại.
+ *
+ * - **Mục tiêu:** Bắt buộc xác minh lại mật khẩu hiện tại bằng `argon2.verify()` trước khi băm và lưu
+ *   mật khẩu mới vào `accounts.password_hash` nhằm phòng chống chiếm đoạt phiên (session hijacking).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `authApi.changePassword(currentPassword, newPassword)` (`apps/web/src/services/auth.api.ts`).
+ *   + Đọc/Ghi DB: `accounts`.
+ * - **Đầu vào:** `{ currentPassword, newPassword }` (`changePasswordSchema`).
+ * - **Đầu ra:** `{ success: true, message }`.
+ */
 // 1.7 POST /auth/change-password
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(6, 'Vui lòng nhập mật khẩu hiện tại (tối thiểu 6 ký tự)'),

@@ -67,9 +67,9 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   HMAC_CERTIFICATE_SECRET: z.string().default('3t-academy-hmac-certificate-secret-key-2026'),
-  AI_SERVICE_URL: z.string().default('http://localhost:8000'),
+  AI_SERVICE_URL: z.string().default('http://127.0.0.1:8000'),
   GEMINI_API_KEY: z.preprocess(emptyToUndefined, z.string().trim().optional()),
-  GEMINI_MODEL: z.string().trim().default('gemini-2.5-flash'),
+  GEMINI_MODEL: z.string().trim().default('gemini-3.5-flash'),
   GOOGLE_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().trim().optional()),
   LIVEKIT_API_URL: z.preprocess(
     mediaEnvPreprocess,

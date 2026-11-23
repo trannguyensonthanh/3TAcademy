@@ -13,6 +13,20 @@ Tier 1 (Local Real-Time Computer Vision, < 50ms, Zero LLM Token Cost):
 Tier 2 (Conditional Cloud VLM Escalation — `Gemini Vision API`):
   Invoked ONLY when Tier 1 flags a high-risk anomaly AND `escalate_vlm=True` to verify
   context and eliminate false positives before alerting the instructor.
+
+Vai trò trong kiến trúc 3 tầng (Frontend `apps/web` <-> Backend `apps/api` <-> AI Service `apps/ai-service`):
+- Đóng vai trò động cơ Thị giác Máy tính giám sát thi trực tuyến 2 tầng tối ưu chi phí & độ trễ:
+  + **Tầng 1 (Edge Local < 50ms, 0 token):** Chạy liên tục trên mọi khung hình webcam để đếm số mặt,
+    tính góc quay đầu 3D (Euler Yaw/Pitch/Roll bằng bài toán hình học Perspective-n-Point `solvePnP`),
+    và phát hiện vật thể cấm (điện thoại, người thứ 2, sách, laptop) bằng `YOLOv8n ONNX`.
+  + **Tầng 2 (Cloud VLM có điều kiện):** CHỈ gửi ảnh lên Gemini Vision khi Tầng 1 bắt được vi phạm rủi ro cao
+    (`riskDelta > 0`), giúp giảm > 95% chi phí API mà vẫn kiểm chứng được ngữ cảnh chống báo động giả (false positive).
+
+Liên kết chéo (Cross-layer):
+- Được gọi từ `src/api/routes/proctoring_ai.py` (`POST /api/v1/ai/proctoring/analyze-frame`),
+  vốn nhận ảnh base64 từ `apps/api/src/modules/assessment/assessment.routes.ts`.
+- Sử dụng trọng số ONNX định nghĩa tại `src/core/model_registry.py` (`YUNET_ONNX_PATH`, `YOLOV8N_ONNX_PATH`)
+  và HTTP client tại `src/core/llm_gateway.py`.
 """
 
 import base64
@@ -30,6 +44,8 @@ from ..core.model_registry import (
     has_package,
 )
 
+# Mô hình nhân trắc học 6 điểm mốc khuôn mặt chuẩn trong không gian 3D (đơn vị mm, gốc tọa độ tại đầu mũi)
+# làm đầu vào đối chiếu 3D-2D cho thuật toán `cv2.solvePnP`.
 # Canonical 3D Anthropometric Facial Model Points (mm)
 MODEL_3D_FACE_POINTS = np.array(
     [
@@ -43,12 +59,14 @@ MODEL_3D_FACE_POINTS = np.array(
     dtype=np.float64,
 )
 
+# Ánh xạ ID lớp vật thể chuẩn bộ dữ liệu COCO sang (tên nhãn, mã sự kiện gian lận, điểm cộng rủi ro).
 COCO_PROHIBITED_CLASSES = {
     67: ("cell phone", "PHONE_DETECTED", 30.0),
     73: ("book", "BOOK_DETECTED", 15.0),
     63: ("laptop", "SECOND_SCREEN_DETECTED", 15.0),
 }
 
+# Các biến singleton cache phiên suy luận ONNX / Haar / MediaPipe để tránh nạp lại model nặng trên từng khung hình.
 _yolo_ort_session: Any = None
 _haar_face_cascade: Any = None
 _haar_eye_cascade: Any = None
@@ -56,6 +74,7 @@ _mp_face_mesh: Any = None
 
 
 def _get_yolo_session() -> Any:
+    """Khởi tạo lười phiên suy luận `onnxruntime.InferenceSession` (CPUExecutionProvider) cho YOLOv8n ONNX."""
     global _yolo_ort_session
     if _yolo_ort_session is not None:
         return _yolo_ort_session
@@ -75,6 +94,7 @@ def _get_yolo_session() -> Any:
 
 
 def _get_mediapipe_mesh() -> Any:
+    """Khởi tạo lười `MediaPipe FaceMesh` (phát hiện tối đa 4 khuôn mặt và 468 mốc 3D/2D chính xác cao)."""
     global _mp_face_mesh
     if _mp_face_mesh is not None:
         return _mp_face_mesh
@@ -97,6 +117,12 @@ def _get_mediapipe_mesh() -> Any:
 
 
 def decode_base64_image(image_base64: str) -> Tuple[Optional[np.ndarray], bytes]:
+    """Giải mã chuỗi Data URI / base64 webcam thành mảng ảnh BGR OpenCV (`np.ndarray`) và byte thô.
+
+    Mục tiêu:
+        Xử lý linh hoạt cả chuỗi có tiền tố `data:image/jpeg;base64,...` lẫn chuỗi base64 thuần,
+        đồng thời giữ lại `img_bytes` gốc để gửi tiếp lên Gemini Vision nếu cần leo thang Tier 2.
+    """
     raw_str = (image_base64 or "").strip()
     if "," in raw_str and raw_str.lower().startswith("data:image"):
         raw_str = raw_str.split(",", 1)[1]
@@ -114,12 +140,22 @@ def decode_base64_image(image_base64: str) -> Tuple[Optional[np.ndarray], bytes]
 def solve_head_pose_pnp(
     image_2d_points: np.ndarray, img_w: int, img_h: int
 ) -> Dict[str, float]:
+    """Ước lượng góc quay đầu 3D (Yaw, Pitch, Roll theo độ) bằng thuật toán Perspective-n-Point (`cv2.solvePnP`).
+
+    Mục tiêu:
+        Từ 6 điểm mốc 2D phát hiện được trên ảnh webcam (mũi, cằm, 2 khóe mắt, 2 khóe miệng) đối chiếu với
+        mô hình khuôn mặt 3D chuẩn (`MODEL_3D_FACE_POINTS`), giải phương trình chiếu phối cảnh pinhole camera
+        để thu được vector xoay Rodrigues (`rvec`) -> phân rã thành 3 góc Euler (`Yaw` quay ngang, `Pitch` cúi/ngẩng,
+        `Roll` nghiêng đầu).
+    Đầu vào / Đầu ra:
+        - Input: `image_2d_points` (mảng 6x2 tọa độ pixel), `img_w`, `img_h` (kích thước ảnh).
+        - Output: Dict `{"yawDeg": float, "pitchDeg": float, "rollDeg": float}`.
     """
-    Computes 3D Euler head orientation angles (Yaw, Pitch, Roll in degrees)
-    from 6 2D facial landmarks using Perspective-n-Point (`cv2.solvePnP`).
-    """
+    # Computes 3D Euler head orientation angles (Yaw, Pitch, Roll in degrees)
+    # from 6 2D facial landmarks using Perspective-n-Point (`cv2.solvePnP`).
     import cv2
 
+    # Bước 1: Xấp xỉ ma trận nội tham số camera pinhole (tiêu cự `f ≈ width`, quang tâm tại giữa ảnh, không méo kính).
     focal_length = float(img_w)
     center = (img_w / 2.0, img_h / 2.0)
     camera_matrix = np.array(
@@ -132,6 +168,7 @@ def solve_head_pose_pnp(
     )
     dist_coeffs = np.zeros((4, 1), dtype=np.float64)
 
+    # Bước 2: Giải bài toán PnP lặp Levenberg-Marquardt (`SOLVEPNP_ITERATIVE`) tìm vector xoay `rvec` & tịnh tiến `tvec`.
     ok, rvec, tvec = cv2.solvePnP(
         MODEL_3D_FACE_POINTS,
         image_2d_points.astype(np.float64),
@@ -142,12 +179,14 @@ def solve_head_pose_pnp(
     if not ok:
         return {"yawDeg": 0.0, "pitchDeg": 0.0, "rollDeg": 0.0}
 
+    # Bước 3: Biến đổi `rvec` thành ma trận xoay 3x3 (`Rodrigues`) rồi phân rã RQ (`RQDecomp3x3`) ra 3 góc Euler.
     rmat, _ = cv2.Rodrigues(rvec)
     angles, _, _, _, _, _ = cv2.RQDecomp3x3(rmat)
     pitch = float(angles[0])
     yaw = float(angles[1])
     roll = float(angles[2])
 
+    # Bước 4: Chuẩn hóa góc Pitch khi bị đảo dấu quanh mốc ±180° do quy ước hệ trục tọa độ ảnh OpenCV.
     # Normalize wrap-around near +/-180 deg from coordinate convention
     if pitch > 90:
         pitch = 180 - pitch
@@ -162,11 +201,22 @@ def solve_head_pose_pnp(
 
 
 def _detect_faces_and_pose_cv(bgr: np.ndarray) -> Dict[str, Any]:
+    """Phát hiện số lượng khuôn mặt & ước lượng tư thế đầu 3D theo chuỗi fallback 3 tầng: MediaPipe -> YuNet ONNX -> Haar Cascade.
+
+    Mục tiêu:
+        Đạt độ chính xác cao nhất có thể tùy theo gói thư viện & trọng số đang có trên máy:
+        - **Tier 1A (`MediaPipe FaceMesh`):** 468 mốc chính xác nhất, lấy đúng 6 điểm chuẩn đưa vào `solvePnP`.
+        - **Tier 1B (`OpenCV YuNet ONNX`):** Mạng CNN siêu nhẹ phát hiện mặt + 5 mốc (2 mắt, mũi, 2 khóe miệng)
+          kèm nội suy điểm cằm từ cạnh dưới bounding box.
+        - **Tier 1C (`OpenCV Haar Cascade`):** Bộ phát hiện cổ điển tích hợp sẵn trong OpenCV + tổng hợp hình học
+          6 điểm mốc từ mắt/bounding box để vẫn tính được `solvePnP` khi thiếu mọi file ONNX.
+    """
     global _haar_face_cascade, _haar_eye_cascade
     import cv2
 
     h, w = bgr.shape[:2]
 
+    # Bước 1 (Tier 1A): Ưu tiên MediaPipe FaceMesh — trích xuất 6 chỉ số mốc (1, 152, 33, 263, 61, 291) khi có đúng 1 mặt.
     # Tier 1A: MediaPipe FaceMesh (468 3D/2D landmarks)
     mp_mesh = _get_mediapipe_mesh()
     if mp_mesh is not None:
@@ -192,6 +242,7 @@ def _detect_faces_and_pose_cv(bgr: np.ndarray) -> Dict[str, Any]:
             pose = solve_head_pose_pnp(pts_2d, w, h)
         return {"detector": "MEDIAPIPE_FACEMESH_SOLVEPNP", "faceCount": face_count, "headPose": pose}
 
+    # Bước 2 (Tier 1B): Dự phòng bằng mạng YuNet ONNX (`cv2.FaceDetectorYN`) với ngưỡng tin cậy 0.60 và NMS 0.3.
     # Tier 1B: OpenCV YuNet ONNX Face + 5-Keypoint Detector
     if YUNET_ONNX_PATH.exists() and hasattr(cv2, "FaceDetectorYN"):
         try:
@@ -218,6 +269,7 @@ def _detect_faces_and_pose_cv(bgr: np.ndarray) -> Dict[str, Any]:
         except Exception as exc:
             logger.warning("YuNet ONNX inference warning, using Haar fallback", error=str(exc))
 
+    # Bước 3 (Tier 1C): Dự phòng cuối bằng Haar Cascade (cân bằng sáng `equalizeHist` -> dò mặt & 2 mắt -> suy diễn 6 mốc).
     # Tier 1C: Built-in OpenCV Haar Cascade + Geometric Landmark Synthesis for SolvePnP
     if _haar_face_cascade is None:
         _haar_face_cascade = cv2.CascadeClassifier(
@@ -263,16 +315,24 @@ def _detect_faces_and_pose_cv(bgr: np.ndarray) -> Dict[str, Any]:
 
 
 def _detect_prohibited_objects_yolov8n(bgr: np.ndarray) -> Dict[str, Any]:
+    """Chạy mô hình phát hiện vật thể `YOLOv8n ONNX` phát hiện điện thoại, sách, laptop và đếm chéo số người.
+
+    Mục tiêu:
+        Tiền xử lý ảnh theo chuẩn Letterbox 640x640 (giữ nguyên tỷ lệ khung hình, đệm viền xám 114 để không làm méo vật thể),
+        suy luận tensor `(1, 3, 640, 640) -> (1, 84, 8400)` qua ONNX Runtime, lọc ngưỡng tin cậy (`conf >= 0.38`)
+        và khử khung chồng lấn bằng NMS (`IoU = 0.45`).
+        Ngoài điện thoại/sách/laptop, còn đếm lớp COCO `0` (`person`, `conf >= 0.48`) để phát hiện người thứ 2
+        ngay cả khi người đó quay lưng không lộ khuôn mặt trước bộ đếm mặt!
     """
-    Runs YOLOv8n ONNX (`1x3x640x640` -> `1x84x8400`) via `onnxruntime` to detect
-    prohibited exam items (`cell phone`, `book`, `laptop`) + person count cross-check.
-    """
+    # Runs YOLOv8n ONNX (`1x3x640x640` -> `1x84x8400`) via `onnxruntime` to detect
+    # prohibited exam items (`cell phone`, `book`, `laptop`) + person count cross-check.
     sess = _get_yolo_session()
     if sess is None or not has_package("cv2"):
         return {"enabled": False, "objects": [], "personCount": 0}
 
     import cv2
 
+    # Bước 1: Letterbox Resize về 640x640 (giữ đúng aspect ratio + viền màu xám 114), chuyển BGR->RGB, chuẩn hóa [0,1] và NCHW.
     orig_h, orig_w = bgr.shape[:2]
     inp_size = 640
     scale = min(inp_size / orig_w, inp_size / orig_h)
@@ -287,12 +347,14 @@ def _detect_prohibited_objects_yolov8n(bgr: np.ndarray) -> Dict[str, Any]:
     rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     blob = np.transpose(rgb, (2, 0, 1))[np.newaxis, ...]
 
+    # Bước 2: Chạy suy luận ONNX Runtime và chuyển vị đầu ra về `(8400, 84)` (4 tọa độ box + 80 điểm lớp COCO).
     input_name = sess.get_inputs()[0].name
     outputs = sess.run(None, {input_name: blob})
     preds = np.squeeze(outputs[0])  # (84, 8400) or (8400, 84)
     if preds.shape[0] == 84:
         preds = preds.T  # -> (8400, 84)
 
+    # Bước 3: Lọc nhanh các anchor vượt ngưỡng tin cậy `0.38` và quy đổi tọa độ box từ 640x640 về ảnh gốc.
     class_scores = preds[:, 4:]
     class_ids = np.argmax(class_scores, axis=1)
     max_confs = class_scores[np.arange(len(preds)), class_ids]
@@ -313,6 +375,8 @@ def _detect_prohibited_objects_yolov8n(bgr: np.ndarray) -> Dict[str, Any]:
         h_box = int(bh / scale)
         nms_boxes.append([max(0, x1), max(0, y1), max(1, w_box), max(1, h_box)])
 
+    # Bước 4: Áp dụng Non-Maximum Suppression (NMS, IoU=0.45) để giữ một hộp duy nhất cho mỗi vật thể,
+    # rồi phân loại người (`cid == 0`) và vật thể cấm (`COCO_PROHIBITED_CLASSES`).
     indices = cv2.dnn.NMSBoxes(nms_boxes, kept_confs.tolist(), 0.38, 0.45)
     flat_idx = indices.flatten().tolist() if len(indices) > 0 else []
 
@@ -342,11 +406,17 @@ def _detect_prohibited_objects_yolov8n(bgr: np.ndarray) -> Dict[str, Any]:
 async def _verify_with_gemini_vision(
     img_bytes: bytes, flagged_reasons: List[str]
 ) -> Optional[Dict[str, Any]]:
+    """Tầng 2 (Cloud VLM Escalation): Gửi ảnh nghi vấn sang Gemini Vision để xác minh ngữ cảnh giảm báo động giả.
+
+    Mục tiêu:
+        Khi Tier 1 (CV cục bộ) phát hiện vi phạm có `riskDelta > 0`, gọi Gemini Vision trả lời ngắn gọn 3 ý
+        (số người, điện thoại/tài liệu cầm tay, hướng nhìn màn hình) để đính kèm vào biên bản cảnh báo cho giảng viên.
+    """
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not is_valid_gemini_key(api_key):
         return None
     try:
-        model_name = (settings.GEMINI_MODEL or "gemini-2.5-flash").strip()
+        model_name = (settings.GEMINI_MODEL or "gemini-3.5-flash").strip()
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         b64_data = base64.b64encode(img_bytes).decode("ascii")
         client = get_http_client()
@@ -385,6 +455,23 @@ async def _verify_with_gemini_vision(
 async def analyze_exam_frame(
     image_base64: str, escalate_vlm: bool = True
 ) -> Dict[str, Any]:
+    """Hàm điều phối chính phân tích một khung hình webcam giám sát thi theo kiến trúc 2 tầng Edge-Cloud.
+
+    Mục tiêu:
+        Tổng hợp tín hiệu từ bộ phát hiện khuôn mặt + tư thế đầu 3D (`_detect_faces_and_pose_cv`) và
+        bộ phát hiện vật thể cấm (`_detect_prohibited_objects_yolov8n`), xếp hạng mức độ nghiêm trọng
+        (`PHONE_DETECTED` > `MULTI_FACE` > `NO_FACE` > `LOOK_AWAY`), leo thang xác minh Gemini Vision nếu cần
+        và đo độ trễ thực thi (`latencyMs`).
+    Liên kết luồng (Cross-layer):
+        - Được gọi trực tiếp bởi `analyze_proctoring_frame_endpoint()` trong `src/api/routes/proctoring_ai.py`
+          (nhận request từ `apps/api/src/modules/assessment/assessment.routes.ts`).
+    Đầu vào / Đầu ra:
+        - Input: `image_base64` (ảnh JPEG/PNG mã hóa base64), `escalate_vlm` (cho phép gọi Tier 2 Gemini Vision).
+        - Output: Dict JSON chứa `status`, `detectorTier1`, `yoloObjectDetectorActive`, `vlmTier2Escalation`,
+          `state` (`NORMAL`/`WARNING`/`ALERT`), `eventType`, `confidence`, `riskDelta`, `message`,
+          `faceCount`, `headPose`, `prohibitedObjects`, `latencyMs`.
+    """
+    # Bước 1: Bấm giờ độ trễ và giải mã ảnh base64 sang ma trận BGR OpenCV; nếu ảnh hỏng thì trả trạng thái an toàn.
     t0 = time.perf_counter()
     bgr, img_bytes = decode_base64_image(image_base64)
     if bgr is None:
@@ -400,9 +487,11 @@ async def analyze_exam_frame(
             "latencyMs": round((time.perf_counter() - t0) * 1000, 2),
         }
 
+    # Bước 2: Chạy song song về mặt dữ liệu 2 nhánh Tier 1 cục bộ: (A) Mặt & Tư thế đầu 3D + (B) Vật thể cấm YOLOv8n.
     face_res = _detect_faces_and_pose_cv(bgr)
     yolo_res = _detect_prohibited_objects_yolov8n(bgr)
 
+    # Đối chiếu chéo số người từ YOLOv8n: nếu phát hiện >= 2 người (kể cả quay lưng) thì cập nhật `face_count`.
     face_count = int(face_res["faceCount"])
     if yolo_res["personCount"] > face_count and yolo_res["personCount"] >= 2:
         face_count = int(yolo_res["personCount"])
@@ -412,6 +501,8 @@ async def analyze_exam_frame(
     pitch = abs(float(pose.get("pitchDeg", 0.0)))
     prohibited = yolo_res["objects"]
 
+    # Bước 3: Áp dụng luật chấm mức độ vi phạm theo thứ tự ưu tiên giảm dần rủi ro:
+    # Điện thoại (+30) -> Nhiều người (+25) -> Không thấy mặt (+15) -> Quay đầu quá ngưỡng |Yaw|>32° / |Pitch|>28° (cảnh báo +0).
     anomalies: List[Tuple[str, float, float, str]] = []  # (eventType, confidence, riskDelta, message)
     if any(obj["eventType"] == "PHONE_DETECTED" for obj in prohibited):
         ph = next(obj for obj in prohibited if obj["eventType"] == "PHONE_DETECTED")
@@ -451,12 +542,14 @@ async def analyze_exam_frame(
             )
         )
 
+    # Bước 4 (Tier 2): Chỉ leo thang gọi Cloud VLM (Gemini Vision) khi có vi phạm nghiêm trọng (`riskDelta > 0`).
     vlm_verification = None
     if anomalies and escalate_vlm and anomalies[0][2] > 0:
         vlm_verification = await _verify_with_gemini_vision(
             img_bytes, [a[0] for a in anomalies]
         )
 
+    # Bước 5: Kết luận trạng thái UI (`NORMAL` / `WARNING` / `ALERT`) và đóng gói kết quả telemetry gửi về Backend.
     if not anomalies:
         primary_event = "CAMERA_NORMAL"
         ui_state = "NORMAL"

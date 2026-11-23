@@ -23,10 +23,10 @@ type ProctoringState = 'NORMAL' | 'WARNING' | 'ALERT';
 
 const FALLBACK_EXAM_QUESTION: StudentSafePromptConfigItem = {
   number: 1,
-  scenarioTag: 'Câu 1/25 · Đề thi tốt nghiệp',
+  scenarioTag: 'Câu 1 · Đề thi tốt nghiệp',
   prompt: 'Đang tải đề thi tốt nghiệp cuối khóa...',
   options: ['Phương án A', 'Phương án B', 'Phương án C', 'Phương án D'],
-  skillCode: 'HYBRID-RAG',
+  skillCode: 'GENERAL',
   skillName: 'Kiến thức tổng hợp toàn khóa',
   slideLabel: 'Tài liệu ôn tập',
 };
@@ -363,7 +363,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
             </button>
             <div>
               <div className="text-[11px] font-bold uppercase tracking-wider text-[#10B981]">
-                KỲ THI TỐT NGHIỆP CUỐI KHÓA · 25 CÂU TRẮC NGHIỆM (A, B, C, D)
+                KỲ THI TỐT NGHIỆP CUỐI KHÓA · {examQuestions.length} CÂU TRẮC NGHIỆM (A, B, C, D)
               </div>
               <h1 className="text-sm sm:text-base font-bold">
                 {examPayload?.title || 'Bài Thi Cuối Khóa (Có Camera Đồng Hành Giám Sát)'}
@@ -403,7 +403,7 @@ export const ProctoredExamRoomView: React.FC<{ assessmentId: string }> = ({ asse
                 <span>BƯỚC 1 / 2 · KIỂM TRA THIẾT BỊ &amp; XÁC NHẬN KHUÔN MẶT TRƯỚC GIỜ THI</span>
               </span>
               <h2 className="text-xl sm:text-2xl font-bold text-[#0F172A] dark:text-[#ECFDF5]">
-                Sẵn sàng bước vào kỳ thi tốt nghiệp cuối khóa (25 câu trắc nghiệm A, B, C, D)
+                Sẵn sàng bước vào kỳ thi tốt nghiệp cuối khóa ({examQuestions.length} câu trắc nghiệm A, B, C, D)
               </h2>
               <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
                 Bài thi cuối khóa sử dụng 100% câu hỏi Trắc nghiệm 4 đáp án (A, B, C, D) để bạn chỉ cần dùng chuột chọn đáp án mà mắt luôn hướng thẳng vào màn hình.

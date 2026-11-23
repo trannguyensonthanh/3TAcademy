@@ -16,6 +16,22 @@ Orchestrates multi-step reasoning for both the Public Advisor and Course-Scoped 
 
 Uses native `langgraph.graph.StateGraph` when `langgraph` is installed, with a built-in
 deterministic `StateGraph` engine fallback so execution is 100% identical in all environments.
+
+Vai trò trong kiến trúc 3 tầng (Frontend `apps/web` <-> Backend `apps/api` <-> AI Service `apps/ai-service`):
+- Là bộ não điều phối suy luận đa bước (Agentic CRAG — Corrective Retrieval-Augmented Generation)
+  dùng chung cho cả AI Advisor (tư vấn công khai) lẫn AI Session Tutor (gia sư bài giảng có phân quyền RBAC).
+- Thiết kế đồ thị trạng thái 5 nút khép kín kèm dấu vết quan sát (`trace` ghi rõ latency từng nút):
+  1. `node_classify_intent`: Phân loại ý định, chặn lạc đề (Domain Guardrail) và trích mốc thời gian video.
+  2. `node_react_tool_router`: Chọn công cụ truy xuất phù hợp (Hybrid RRF pgvector + tsvector) và tinh lọc Cross-Encoder Reranker.
+  3. `node_grade_documents`: Thẩm định chất lượng tài liệu tìm được (`GROUNDED` nếu `max_relevance_score >= 0.34`, ngược lại `WEAK`).
+  4. `node_rewrite_query`: Tự động mở rộng thuật ngữ chuyên ngành (Query Expansion) và quay vòng truy xuất lại tối đa 1 lần khi tài liệu yếu.
+  5. `node_generate_and_verify_citations`: Sinh câu trả lời bám sát ngữ cảnh qua `LLMGateway` (có fallback offline) và hậu kiểm trích dẫn (chunkId, startSec <= endSec).
+
+Liên kết chéo (Cross-layer):
+- Được gọi từ `src/api/routes/rag_chat.py` (`POST /api/v1/ai/advisor/ask` & `POST /api/v1/ai/tutor/ask`),
+  vốn được gọi bởi `aiServiceClient.askAdvisor()` và `aiServiceClient.askSessionTutor()` trong
+  `apps/api/src/integrations/aiService.client.ts`.
+- Gọi tiếp xuống `src/rag/retriever.py`, `src/rag/reranker.py`, `src/core/llm_gateway.py`.
 """
 
 import re
@@ -31,6 +47,7 @@ from .retriever import (
     retrieve_public_advisor_context,
 )
 
+# Bộ luật rào chắn (Guardrail) nhận diện nhanh các câu hỏi ngoài lĩnh vực CNTT / 3T Academy để từ chối sớm mà không tốn gọi LLM.
 UNRELATED_DOMAIN_PATTERNS = [
     r"\bkế toán\b", r"\bke toan\b", r"\bthương mại điện tử\b", r"\bthuong mai dien tu\b",
     r"\bshopee\b", r"\blazada\b", r"\btiktok shop\b", r"\bnấu ăn\b", r"\bnau an\b",
@@ -40,6 +57,8 @@ UNRELATED_DOMAIN_PATTERNS = [
     r"\bmarketing\b", r"\bseo\b", r"\bnhân sự\b", r"\bhr\b", r"\bxổ số\b",
 ]
 
+# Các dấu hiệu câu hỏi kỹ thuật/bài giảng chuyên sâu: ở chế độ Advisor công khai sẽ được điều hướng nhẹ nhàng sang đăng ký khóa học
+# (tránh lộ nội dung bài giảng nội bộ `ENROLLED_ONLY` cho người chưa ghi danh).
 DEEP_TECHNICAL_LECTURE_PATTERNS = [
     r"\bcông thức\b", r"\bcong thuc\b", r"\bviết code\b", r"\bviet code\b",
     r"\bcode mẫu\b", r"\bđoạn code\b", r"\bthuật toán chi tiết\b", r"\bgiải thích chi tiết\b",
@@ -48,6 +67,7 @@ DEEP_TECHNICAL_LECTURE_PATTERNS = [
     r"\bragas\b", r"\bdeadlock\b", r"\boutbox pattern\b", r"\bwindow function\b",
 ]
 
+# Từ điển mở rộng đồng nghĩa kỹ thuật song ngữ Việt-Anh dùng cho Node 4 (`rewrite_query`) khi truy xuất lần 1 có điểm thấp.
 TECHNICAL_SYNONYM_EXPANSIONS = [
     (r"\btìm kiếm lai\b|\bhybrid\b", "Hybrid Search Dense Vector pgvector BM25 tsvector Reciprocal Rank Fusion RRF"),
     (r"\bảo giác\b|\bhallucination\b", "Hallucination Grounding Faithfulness RAG trích dẫn nguồn"),
@@ -61,6 +81,8 @@ TECHNICAL_SYNONYM_EXPANSIONS = [
 
 
 class AgentGraphState(TypedDict, total=False):
+    """Cấu trúc trạng thái chia sẻ (Shared Graph State) chảy xuyên suốt 5 nút của đồ thị LangGraph CRAG."""
+
     scope: str  # "ADVISOR" | "TUTOR"
     original_question: str
     active_query: str
@@ -83,11 +105,17 @@ class AgentGraphState(TypedDict, total=False):
 
 
 def _matches_any(text: str, patterns: List[str]) -> bool:
+    """Kiểm tra nhanh văn bản (chữ thường) có khớp bất kỳ biểu thức chính quy nào trong `patterns` không."""
     lowered = (text or "").lower()
     return any(re.search(p, lowered) for p in patterns)
 
 
 def _parse_timestamp_query_sec(question: str, fallback_sec: int) -> int:
+    """Trích xuất mốc thời gian video mà học viên đề cập trực tiếp trong câu hỏi (ví dụ "phút 05:30" hay "giây 120").
+
+    Mục tiêu:
+        Giúp Reranker ưu tiên đúng đoạn transcript mà học viên đang hỏi (thay vì chỉ dùng vị trí con trỏ phát hiện tại).
+    """
     m = re.search(r"(\d{1,2})\s*(?:phút|:)\s*(\d{1,2})", question.lower())
     if m:
         return int(m.group(1)) * 60 + int(m.group(2))
@@ -101,6 +129,13 @@ def _parse_timestamp_query_sec(question: str, fallback_sec: int) -> int:
 # NODE 1: Intent Classifier & Domain Guardrail
 # ============================================================================
 async def node_classify_intent(state: AgentGraphState) -> Dict[str, Any]:
+    """Nút 1 (Classify Intent): Phân loại ý định, áp rào chắn miền tri thức và trích mốc thời gian video.
+
+    Mục tiêu:
+        Định tuyến câu hỏi vào đúng 1 trong 5 nhãn ý định (`OUT_OF_DOMAIN`, `DEEP_LECTURE_IN_ADVISOR`,
+        `TIMESTAMP_CONTEXT_EXPLAIN`, `CATALOG_AND_ROADMAP_ADVISORY`, `COURSE_CONCEPT_QA`) và gán công cụ ReAct tương ứng.
+    """
+    # Bước 1: Lấy câu hỏi gốc, phạm vi (`ADVISOR`/`TUTOR`) và phân loại ý định theo thứ tự ưu tiên từ rào chắn -> nghiệp vụ.
     t0 = time.perf_counter()
     q = state["original_question"].strip()
     scope = state["scope"]
@@ -122,6 +157,7 @@ async def node_classify_intent(state: AgentGraphState) -> Dict[str, Any]:
         intent = "COURSE_CONCEPT_QA"
         tool = "search_course_hybrid_rrf"
 
+    # Bước 2: Giải mã mốc giây video nếu học viên nêu trực tiếp trong câu hỏi và ghi lại dấu vết `trace`.
     resolved_sec = _parse_timestamp_query_sec(q, state.get("current_video_sec", 0))
     trace.append(
         {
@@ -144,11 +180,22 @@ async def node_classify_intent(state: AgentGraphState) -> Dict[str, Any]:
 # NODE 2: ReAct Tool Router + Hybrid RRF + Cross-Encoder Reranker
 # ============================================================================
 async def node_react_tool_router(state: AgentGraphState) -> Dict[str, Any]:
+    """Nút 2 (Retrieve & Rerank): Thực thi truy xuất 2 tầng (Stage 1 Hybrid RRF -> Stage 2 Cross-Encoder Reranker).
+
+    Mục tiêu:
+        Kéo về 8 ứng viên rộng từ PostgreSQL (đảm bảo cách ly RBAC `PUBLIC` vs `ENROLLED_ONLY`),
+        sau đó tinh lọc qua Cross-Encoder để giữ 4 ứng viên sắc nét nhất cùng điểm `max_relevance_score`.
+    Liên kết luồng (Cross-layer):
+        Gọi `retrieve_public_advisor_context()` hoặc `retrieve_course_scoped_tutor_context()` (`src/rag/retriever.py`)
+        và `rerank_candidates()` (`src/rag/reranker.py`).
+    """
     t0 = time.perf_counter()
     trace = list(state.get("trace") or [])
     intent = state.get("intent", "")
     query = state.get("active_query") or state["original_question"]
 
+    # Bước 1: Nhánh ngắn mạch cho câu hỏi ngoài miền (`OUT_OF_DOMAIN`) — bỏ qua Reranker để tiết kiệm chi phí,
+    # nhưng với Tutor vẫn tải nhẹ tên khóa học/kỹ năng để câu từ chối lịch sự đúng ngữ cảnh lớp học.
     if intent == "OUT_OF_DOMAIN":
         # For Tutor, still fetch session metadata if needed to personalize guardrail message
         meta: Dict[str, Any] = {}
@@ -179,6 +226,7 @@ async def node_react_tool_router(state: AgentGraphState) -> Dict[str, Any]:
             "trace": trace,
         }
 
+    # Bước 2: Phạm vi ADVISOR — Truy xuất Hybrid RRF 8 chunks công khai (`PUBLIC`) + danh mục khóa học -> Rerank lấy Top 4.
     if state["scope"] == "ADVISOR":
         ctx = await retrieve_public_advisor_context(query, top_k=8)
         reranked = rerank_candidates(query, ctx["chunks"], top_k=4)
@@ -200,6 +248,7 @@ async def node_react_tool_router(state: AgentGraphState) -> Dict[str, Any]:
             "trace": trace,
         }
 
+    # Bước 3: Phạm vi TUTOR — Truy xuất Hybrid RRF cách ly khóa học (`ENROLLED_ONLY`) -> Rerank kèm thưởng mốc video (`±30s`).
     # TUTOR scope: Course-isolated Hybrid RRF + Cross-Encoder Reranking
     ctx = await retrieve_course_scoped_tutor_context(
         cohort_id=state.get("cohort_id", 0),
@@ -240,11 +289,20 @@ async def node_react_tool_router(state: AgentGraphState) -> Dict[str, Any]:
 # NODE 3: CRAG Document Relevance Grader
 # ============================================================================
 async def node_grade_documents(state: AgentGraphState) -> Dict[str, Any]:
+    """Nút 3 (Grade/Verify Documents): Đánh giá chất lượng tập tài liệu truy xuất theo nguyên lý CRAG.
+
+    Mục tiêu:
+        Lọc bỏ các đoạn nhiễu có `rerankScore < 0.22` và kết luận trạng thái:
+        - `GUARDRAIL_BLOCKED`: Câu hỏi bị rào chắn từ Node 1.
+        - `GROUNDED`: Có bằng chứng đáng tin cậy (`max_relevance_score >= 0.34`) -> đi thẳng tới Node 5 (Generate).
+        - `WEAK`: Bằng chứng yếu -> kích hoạt cạnh rẽ nhánh quay sang Node 4 (`rewrite_query`) để tự sửa câu truy vấn.
+    """
     t0 = time.perf_counter()
     trace = list(state.get("trace") or [])
     if state.get("doc_grade") == "NOT_FOUND":
         return {"doc_grade": "NOT_FOUND"}
 
+    # Bước 1: Nếu là ý định bị rào chắn, đánh dấu `GUARDRAIL_BLOCKED` để không kích hoạt vòng lặp rewrite vô ích.
     intent = state.get("intent", "")
     if intent in ("OUT_OF_DOMAIN", "DEEP_LECTURE_IN_ADVISOR"):
         trace.append(
@@ -260,11 +318,13 @@ async def node_grade_documents(state: AgentGraphState) -> Dict[str, Any]:
             "trace": trace,
         }
 
+    # Bước 2: Lọc giữ các chunk vượt ngưỡng nhiễu `0.22` (luôn dự phòng tối thiểu 2 chunk đầu nếu tất cả đều thấp).
     candidates = state.get("candidate_chunks") or []
     filtered = [c for c in candidates if float(c.get("rerankScore", 0.0)) >= 0.22]
     if not filtered and candidates:
         filtered = candidates[:2]
 
+    # Bước 3: Chốt phán quyết `GROUNDED` hay `WEAK` dựa vào ngưỡng chất lượng `0.34` của ứng viên đứng đầu.
     max_score = float(state.get("max_relevance_score", 0.0))
     verdict = "GROUNDED" if (filtered and max_score >= 0.34) else "WEAK"
 
@@ -288,21 +348,31 @@ async def node_grade_documents(state: AgentGraphState) -> Dict[str, Any]:
 # NODE 4: Corrective Query Rewriter (Domain Terminology Expansion)
 # ============================================================================
 async def node_rewrite_query(state: AgentGraphState) -> Dict[str, Any]:
+    """Nút 4 (Corrective Query Rewriter): Mở rộng từ đồng nghĩa kỹ thuật & ngữ cảnh buổi học để truy xuất lại.
+
+    Mục tiêu:
+        Khắc phục hiện tượng lệch từ vựng (vocabulary mismatch — ví dụ học viên hỏi "khóa dòng" trong khi tài liệu
+        viết "SELECT FOR UPDATE") bằng cách nối thêm thuật ngữ chuẩn song ngữ hoặc tiêu đề buổi học vào `active_query`,
+        tăng `rewrite_count` để đảm bảo vòng lặp CRAG dừng sau tối đa 1 lần thử lại.
+    """
     t0 = time.perf_counter()
     trace = list(state.get("trace") or [])
     base_q = state["original_question"].strip()
     additions: List[str] = []
 
+    # Bước 1: So khớp từ điển mở rộng thuật ngữ song ngữ `TECHNICAL_SYNONYM_EXPANSIONS`.
     for pat, expansion in TECHNICAL_SYNONYM_EXPANSIONS:
         if re.search(pat, base_q.lower()):
             additions.append(expansion)
 
+    # Bước 2: Nếu không trúng mẫu từ điển nào, neo thêm tiêu đề buổi học (Tutor) hoặc từ khóa danh mục (Advisor).
     meta = state.get("context_meta") or {}
     if not additions and meta.get("sessionTitle"):
         additions.append(str(meta["sessionTitle"]))
     elif not additions and state["scope"] == "ADVISOR":
         additions.append("3T Academy lộ trình khóa học Python SQL AI Backend Data")
 
+    # Bước 3: Cập nhật `active_query` mới và tăng bộ đếm `rewrite_count` lên 1 rồi quay lại Node 2 (`react_tool_router`).
     rewritten = f"{base_q} {' '.join(additions)}".strip()
     new_count = int(state.get("rewrite_count", 0)) + 1
     trace.append(
@@ -324,6 +394,17 @@ async def node_rewrite_query(state: AgentGraphState) -> Dict[str, Any]:
 # NODE 5: Grounded Response Generator + Citation Verification
 # ============================================================================
 async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str, Any]:
+    """Nút 5 (Generate Grounded Answer & Verify Citations): Sinh phản hồi bám sát tài liệu và hậu kiểm trích dẫn.
+
+    Mục tiêu:
+        - Xử lý phản hồi rào chắn an toàn (`OUT_OF_DOMAIN`, `DEEP_LECTURE_IN_ADVISOR`) không tốn token LLM.
+        - Với câu hỏi hợp lệ, nhồi ngữ cảnh đã qua Reranker vào Prompt chống ảo giác (Grounded Prompting)
+          và gọi `LLMGateway.generate_text()`; nếu LLM lỗi thì tự động fallback bằng đoạn trích tốt nhất.
+        - Hậu kiểm danh sách trích dẫn (`verified_citations`): đảm bảo có `chunkId` hợp lệ và biên thời gian
+          không âm (`endSec >= startSec`) để trình phát video nhảy đúng vị trí khi người dùng bấm vào trích dẫn.
+    Liên kết luồng (Cross-layer):
+        Gọi `LLMGateway.generate_text()` (`src/core/llm_gateway.py`).
+    """
     t0 = time.perf_counter()
     trace = list(state.get("trace") or [])
     scope = state["scope"]
@@ -335,6 +416,7 @@ async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str
     if state.get("doc_grade") == "NOT_FOUND":
         return {"answer_md": "", "verified_citations": [], "trace": trace}
 
+    # Bước 1 (5A): Trả lời rào chắn tức thì cho câu hỏi lạc đề hoặc câu hỏi bài giảng sâu ở chế độ Advisor công khai.
     # 5A. Guardrail responses
     if intent == "OUT_OF_DOMAIN":
         if scope == "ADVISOR":
@@ -384,6 +466,7 @@ async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str
         ]
         return {"answer_md": ans, "verified_citations": cites, "detected_topic": "Tư vấn lộ trình", "trace": trace}
 
+    # Bước 2 (5B - ADVISOR): Lắp ghép danh mục khóa học thực thời + top chunks công khai vào prompt và gọi LLM (kèm fallback).
     # 5B. Grounded Generation for Advisor vs Tutor
     if scope == "ADVISOR":
         catalog = meta.get("catalog") or []
@@ -444,6 +527,7 @@ async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str
             "trace": trace,
         }
 
+    # Bước 3 (5B - TUTOR): Xây dựng prompt cô lập kiến thức theo khóa học & buổi học kèm mốc giây video hiện tại.
     # TUTOR Grounded Generation + Timestamp Verification
     course_title = meta.get("courseTitle", "")
     skill_names = [s["name"] for s in (meta.get("skills") or [])]
@@ -480,6 +564,7 @@ async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str
             f"mình giải thích chi tiết điểm bạn đang thắc mắc như sau nhé:\n\n{top_content}"
         )
 
+    # Bước 4: Hậu kiểm trích dẫn (Post-hoc Citation Verification) — đảm bảo `endSec >= startSec` và lọc đủ `chunkId`.
     # Post-hoc Citation Grounding Verification: ensure valid non-negative bounds
     verified_citations = []
     for c in chunks[:3]:
@@ -516,6 +601,12 @@ async def node_generate_and_verify_citations(state: AgentGraphState) -> Dict[str
 
 
 def _route_after_grading(state: AgentGraphState) -> str:
+    """Hàm định tuyến có điều kiện (Conditional Edge) sau Node 3 (`grade_documents`).
+
+    Mục tiêu:
+        Nếu tài liệu truy xuất bị đánh giá `WEAK` và chưa viết lại câu hỏi lần nào (`rewrite_count < 1`),
+        rẽ nhánh sang `rewrite_query` để tự sửa truy vấn; ngược lại đi thẳng sang `generate_and_verify_citations`.
+    """
     grade = state.get("doc_grade", "GROUNDED")
     rewrites = int(state.get("rewrite_count", 0))
     if grade == "WEAK" and rewrites < 1:
@@ -530,6 +621,7 @@ _compiled_langgraph: Any = None
 
 
 def _get_compiled_langgraph() -> Any:
+    """Biên dịch đồ thị 5 nút CRAG bằng `langgraph.graph.StateGraph` (lazy singleton) nếu thư viện `langgraph` đã cài."""
     global _compiled_langgraph
     if _compiled_langgraph is not None:
         return _compiled_langgraph
@@ -538,6 +630,7 @@ def _get_compiled_langgraph() -> Any:
     try:
         from langgraph.graph import END, StateGraph
 
+        # Khai báo 5 nút và các cạnh chuyển trạng thái (bao gồm cạnh rẽ nhánh có điều kiện + vòng lặp tự sửa CRAG).
         workflow = StateGraph(AgentGraphState)
         workflow.add_node("classify_intent", node_classify_intent)
         workflow.add_node("react_tool_router", node_react_tool_router)
@@ -566,7 +659,13 @@ def _get_compiled_langgraph() -> Any:
 
 
 async def _run_deterministic_state_graph(initial_state: AgentGraphState) -> AgentGraphState:
-    """Executes the exact 5-node CRAG graph topology when `langgraph` package is absent."""
+    """Động cơ chạy đồ thị trạng thái 5 nút tất định (Fallback Engine) tương đương 100% LangGraph khi thiếu gói `langgraph`.
+
+    Mục tiêu:
+        Duy trì đúng tô-pô đồ thị và giới hạn an toàn `steps < 10` (tránh lặp vô hạn) để hành vi hệ thống
+        nhất quán tuyệt đối trên mọi môi trường triển khai.
+    """
+    # Executes the exact 5-node CRAG graph topology when `langgraph` package is absent.
     state: Dict[str, Any] = dict(initial_state)
     nodes: Dict[str, Callable[[AgentGraphState], Any]] = {
         "classify_intent": node_classify_intent,
@@ -596,6 +695,14 @@ async def _run_deterministic_state_graph(initial_state: AgentGraphState) -> Agen
 
 
 async def execute_crag_agent(initial_state: AgentGraphState) -> AgentGraphState:
+    """Điểm vào duy nhất kích hoạt đồ thị tác tử 5 nút CRAG (ưu tiên LangGraph native, fallback về engine nội bộ).
+
+    Liên kết luồng (Cross-layer):
+        Được gọi bởi `ask_advisor()` và `ask_tutor()` trong `src/api/routes/rag_chat.py`.
+    Đầu vào / Đầu ra:
+        - Input: `initial_state` (`AgentGraphState` chứa `scope`, `original_question`, và tùy chọn `cohort_id`, `session_id`, `current_video_sec`).
+        - Output: `AgentGraphState` cuối cùng chứa `answer_md`, `verified_citations`, `detected_topic`, `rerank_backend`, `max_relevance_score`, `trace`.
+    """
     graph = _get_compiled_langgraph()
     if graph is not None:
         res = await graph.ainvoke(initial_state)

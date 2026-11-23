@@ -17,8 +17,8 @@ const FALLBACK_SINGLE_QUESTION: StudentSafePromptConfigItem = {
   scenarioTag: 'Câu 1 · Tình huống thực tế',
   prompt: 'Đang tải đề kiểm tra trắc nghiệm...',
   options: ['Phương án A', 'Phương án B', 'Phương án C', 'Phương án D'],
-  skillCode: 'HYBRID-RAG',
-  skillName: 'Tìm Kiếm Kết Hợp (Từ Khóa & Ngữ Nghĩa)',
+  skillCode: 'GENERAL',
+  skillName: 'Kiến thức trọng tâm buổi học',
   slideLabel: 'Slide bài giảng',
 };
 

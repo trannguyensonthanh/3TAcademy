@@ -389,21 +389,30 @@ describe('seedHelpers & 32-table seed invariants', () => {
     await expect(runSeed(mockDb as never)).resolves.toBeUndefined();
 
     // Verify all 32 tables are populated coherently!
-    expect(store.get(schema.accounts)).toHaveLength(6);
+    expect(store.get(schema.accounts)).toHaveLength(7);
     expect(store.get(schema.courses)).toHaveLength(4);
     expect(store.get(schema.cohorts)).toHaveLength(5);
     expect((store.get(schema.cohorts) ?? []).every((c) => c.tuitionVnd === 10000)).toBe(true);
     expect(store.get(schema.classSessions)).toHaveLength(30);
-    expect(store.get(schema.orders)).toHaveLength(5);
-    expect(store.get(schema.paymentTransactions)).toHaveLength(6);
-    expect(store.get(schema.enrollments)).toHaveLength(4);
+    expect(store.get(schema.orders)).toHaveLength(6);
+    expect(store.get(schema.paymentTransactions)).toHaveLength(7);
+    expect(store.get(schema.enrollments)).toHaveLength(5);
     expect(store.get(schema.certificates)).toHaveLength(1);
     expect(store.get(schema.courseReviews)).toHaveLength(1);
     expect(store.get(schema.assessments)).toHaveLength(35);
-    expect((store.get(schema.assessmentAttempts) ?? []).length).toBeGreaterThanOrEqual(14);
+    expect((store.get(schema.assessmentAttempts) ?? []).length).toBeGreaterThanOrEqual(20);
     expect((store.get(schema.discussionThreads) ?? []).length).toBe(2);
     expect((store.get(schema.chatSessions) ?? []).length).toBe(2);
     expect((store.get(schema.mockInterviews) ?? []).length).toBe(2);
+
+    const linhAcc = (store.get(schema.accounts) ?? []).find((a) => a.email === 'linh.student@3t.edu.vn');
+    const linhEnr = (store.get(schema.enrollments) ?? []).find((e) => e.accountId === linhAcc?.id);
+    const linhProgress = (store.get(schema.sessionProgress) ?? []).filter(
+      (p) => p.accountId === linhAcc?.id && p.isCompleted === true
+    );
+    expect(linhEnr?.status).toBe('ACTIVE');
+    expect(linhEnr?.finalExamPassed).toBe(false);
+    expect(linhProgress).toHaveLength(6);
 
     const namAcc = (store.get(schema.accounts) ?? []).find((a) => a.email === 'nam.student@3t.edu.vn');
     const namProf = (store.get(schema.userProfiles) ?? []).find((p) => p.accountId === namAcc?.id);

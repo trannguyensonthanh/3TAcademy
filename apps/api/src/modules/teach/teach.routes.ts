@@ -1,3 +1,36 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/teach/teach.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Cổng Giảng viên & Vận hành Lớp học (`INSTRUCTOR` / `ADMIN`).
+ *   - Toàn bộ router được bảo vệ bởi `requireAuth` + `requireRole(['INSTRUCTOR', 'ADMIN'])`
+ *     và kiểm tra quyền sở hữu lớp (`assertInstructorOwnsCohort`) ở mọi thao tác ghi.
+ *   - Đảm nhiệm:
+ *     1. Lịch giảng dạy, danh sách lớp phụ trách, theo dõi rủi ro bỏ học học viên (`buildFormattedEnrollments`).
+ *     2. Quản lý buổi học: biên tập học liệu/tóm tắt, điều khiển trạng thái `LIVE` / `REPLAY_READY`,
+ *        tắt mic/đuổi học viên trên cả LiveKit SFU lẫn SSE, ghi hình LiveKit Egress / upload R2,
+ *        và tạo link mời Diễn giả Khách mời ký JWT.
+ *     3. **Biên soạn đề kiểm tra cùng AI:**
+ *        - `POST /teach/sessions/:sessionId/generate-quiz`: gọi `aiServiceClient.generateQuizDraft()`
+ *          (`apps/ai-service/src/api/routes/grading_ai.py`) dựa trên transcript/chunks buổi học
+ *          (có fallback sinh 4 câu deterministic bám chủ đề + nhúng vector 1024-dim).
+ *        - `PUT /teach/assessments/:assessmentId/publish`: xuất bản đề kèm gắn thẻ kỹ năng từ
+ *          `course_skills` và **đồng bộ đầy đủ 3 chiều INSERT + UPDATE + DELETE an toàn**
+ *          (chỉ xóa câu hỏi không bị `submission_answers` lịch sử tham chiếu).
+ *     4. Trả lời & xác nhận Q&A, gửi nhắc nhở học tập AI, và **hậu kiểm ca thi Proctoring**
+ *        (`PUT /teach/exam-reviews/:reviewId`, `POST /teach/proctoring/:attemptId/verdict`)
+ *        đồng bộ nguyên tử kết quả tốt nghiệp & thu hồi/cấp Chứng chỉ HMAC-SHA256.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/teach.api.ts` (toàn bộ `teachApi.*`).
+ *   - Đọc/Ghi bảng DB: `cohorts`, `courses`, `class_sessions`, `session_attachments`, `session_progress`,
+ *     `assessments`, `assessment_items`, `assessment_attempts`, `submission_answers`, `proctoring_events`,
+ *     `enrollments`, `certificates`, `discussion_threads`, `discussion_posts`, `notifications`,
+ *     `user_profiles`, `accounts`, `skills`, `course_skills`, `knowledge_chunks`, `chat_sessions`, `chat_messages`, `orders`.
+ *   - Gọi AI Service: `aiServiceClient.generateQuizDraft()` -> `POST /api/v1/ai/assessments/generate-quiz` (`grading_ai.py`).
+ *   - Gọi tích hợp media: `livekit.service.ts`, `r2.service.ts`, `liveRoom.helpers.ts`.
+ * ============================================================================
+ */
 import { Router } from 'express';
 import { eq, and, asc, desc, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -98,6 +131,7 @@ function inferMaterialFileType(
   return 'PDF';
 }
 
+/** Kiểm tra quyền phụ trách đợt học (`ADMIN` luôn được phép; `INSTRUCTOR` phải có `cohorts.instructor_id === user.id`). */
 async function assertInstructorOwnsCohort(
   cohortId: number,
   user: { id: number; role: string }
@@ -107,6 +141,7 @@ async function assertInstructorOwnsCohort(
   return Boolean(cohort && cohort.instructorId === user.id);
 }
 
+/** Tổng hợp bảng tiến độ học viên, điểm trung bình có trọng số giai đoạn (`computeWeightedCohortScorePct`) và phân loại nguy cơ bỏ học (`riskLevel`). */
 export async function buildFormattedEnrollments(cohortFilterIds?: number[]) {
   await reconcileUnmatchedSepayTransactions();
 
@@ -518,6 +553,10 @@ function mapAssessmentItemsToMcq(
   });
 }
 
+/**
+ * Route `GET /api/v1/teach/schedule` — Lịch giảng dạy tổng hợp, ca học sắp tới, danh sách Q&A chưa giải quyết và ca thi chờ duyệt Proctoring.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.getInstructorSchedule()`. Đọc `cohorts`, `courses`, `class_sessions`, `enrollments`, `assessments`, `assessment_attempts`, `proctoring_events`, `discussion_threads`.
+ */
 // 7.1 GET /teach/schedule
 teachRouter.get('/teach/schedule', async (req, res, next) => {
   try {
@@ -788,6 +827,10 @@ teachRouter.get('/teach/schedule', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/teach/cohorts` — Danh sách các đợt học Giảng viên phụ trách (hoặc toàn bộ nếu là `ADMIN`).
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.getInstructorCohorts()`. Đọc `cohorts`, `courses`, `enrollments`.
+ */
 // 7.2 GET /teach/cohorts
 teachRouter.get('/teach/cohorts', async (req, res, next) => {
   try {
@@ -851,6 +894,10 @@ teachRouter.get('/teach/cohorts', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/teach/cohorts/:cohortId` — Chi tiết vận hành một đợt học: 6 buổi học, danh sách học viên, điểm thi, ngân hàng đề & ca thi Proctoring.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.getInstructorCohortDetail(cohortId)`.
+ */
 // 7.3 GET /teach/cohorts/:cohortId
 teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
   try {
@@ -869,7 +916,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       return;
     }
 
-    const [[course], sessions, cohortAssessments, allSkills, getStaffForInstructor] =
+    const [[course], sessions, cohortAssessments, allSkills, courseSkillRows, getStaffForInstructor] =
       await Promise.all([
         db.select().from(courses).where(eq(courses.id, cohort.courseId)).limit(1),
         db
@@ -879,10 +926,26 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
           .orderBy(asc(classSessions.sessionOrder)),
         db.select().from(assessments).where(eq(assessments.cohortId, cohort.id)),
         db.select().from(skills),
+        db.select().from(courseSkills).where(eq(courseSkills.courseId, cohort.courseId)),
         buildInstructorStaffMap(),
       ]);
 
     const skillMap = new Map(allSkills.map((s) => [s.id, s]));
+    const formattedCourseSkills =
+      courseSkillRows.length > 0
+        ? [...courseSkillRows]
+            .sort((a, b) => (a.skillRole === 'LEARNING_OUTCOME' ? -1 : 1) - (b.skillRole === 'LEARNING_OUTCOME' ? -1 : 1))
+            .map((cs) => {
+              const sk = skillMap.get(cs.skillId);
+              return sk ? { id: String(sk.id), code: sk.code, name: sk.name, role: cs.skillRole } : null;
+            })
+            .filter((x): x is NonNullable<typeof x> => Boolean(x))
+        : allSkills.map((sk) => ({
+            id: String(sk.id),
+            code: sk.code,
+            name: sk.name,
+            role: 'LEARNING_OUTCOME',
+          }));
     const finalExam = cohortAssessments.find((a) => a.purpose === 'FINAL_EXAM');
     const finalExamItems = finalExam
       ? await db
@@ -985,6 +1048,7 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
       finalExamId: finalExam ? String(finalExam.id) : undefined,
       finalExamPublishStatus: finalExam?.status || 'PUBLISHED',
       finalExamQuestions: mapAssessmentItemsToMcq(finalExamItems, skillMap),
+      courseSkills: formattedCourseSkills,
       enrollments: cohortEnrollments,
       discussions,
       materials: attachments.map((att) => {
@@ -1020,6 +1084,10 @@ teachRouter.get('/teach/cohorts/:cohortId', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/teach/cohorts/:cohortId/sessions/:sessionId` — Chi tiết biên soạn một buổi học (tài liệu, tóm tắt AI, đề Quiz kèm đáp án, thảo luận).
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.getInstructorSessionDetail(cohortId, sessionId)`.
+ */
 // 7.4 GET /teach/cohorts/:cohortId/sessions/:sessionId
 teachRouter.get(
   '/teach/cohorts/:cohortId/sessions/:sessionId',
@@ -1041,7 +1109,7 @@ teachRouter.get(
         return;
       }
 
-      const [attachments, [quiz], allSkills, discussions, getStaffForInstructor] =
+      const [attachments, [quiz], allSkills, sessionCohortRows, discussions, getStaffForInstructor] =
         await Promise.all([
           db
             .select()
@@ -1053,12 +1121,32 @@ teachRouter.get(
             .where(eq(assessments.sessionId, session.id))
             .limit(1),
           db.select().from(skills),
+          db.select().from(cohorts).where(eq(cohorts.id, session.cohortId)).limit(1),
           buildFormattedDiscussionsForSessions([session]),
           buildInstructorStaffMap(),
         ]);
 
       const staffInfo = getStaffForInstructor(session.instructorId);
       const skillMap = new Map(allSkills.map((s) => [s.id, s]));
+      const sessionCourseId = sessionCohortRows[0]?.courseId;
+      const sessionCourseSkillRows = sessionCourseId
+        ? await db.select().from(courseSkills).where(eq(courseSkills.courseId, sessionCourseId))
+        : [];
+      const formattedSessionCourseSkills =
+        sessionCourseSkillRows.length > 0
+          ? [...sessionCourseSkillRows]
+              .sort((a, b) => (a.skillRole === 'LEARNING_OUTCOME' ? -1 : 1) - (b.skillRole === 'LEARNING_OUTCOME' ? -1 : 1))
+              .map((cs) => {
+                const sk = skillMap.get(cs.skillId);
+                return sk ? { id: String(sk.id), code: sk.code, name: sk.name, role: cs.skillRole } : null;
+              })
+              .filter((x): x is NonNullable<typeof x> => Boolean(x))
+          : allSkills.map((sk) => ({
+              id: String(sk.id),
+              code: sk.code,
+              name: sk.name,
+              role: 'LEARNING_OUTCOME',
+            }));
       const quizItems = quiz
         ? await db
             .select()
@@ -1144,6 +1232,7 @@ teachRouter.get(
         quiz: quiz ? { ...quiz, id: String(quiz.id) } : null,
         quizItems,
         questions,
+        courseSkills: formattedSessionCourseSkills,
         publishStatus: quiz?.status || 'PUBLISHED',
         discussions,
       });
@@ -1153,6 +1242,10 @@ teachRouter.get(
   }
 );
 
+/**
+ * Route `PUT /api/v1/teach/sessions/:sessionId/materials` — Cập nhật tóm tắt bài giảng, học liệu đính kèm và link video replay của buổi học.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.updateSessionMaterials()` / `updateSessionSummary()`. Ghi `class_sessions`, `session_attachments`, `knowledge_chunks`.
+ */
 // 7.5 PUT /teach/sessions/:sessionId/materials
 const updateMaterialsSchema = z.object({
   title: z.string().optional(),
@@ -1326,6 +1419,10 @@ teachRouter.put(
   }
 );
 
+/**
+ * Route `PUT /api/v1/teach/sessions/:sessionId/live-status` — Chuyển đổi trạng thái phòng học (`SCHEDULED` <-> `LIVE` <-> `REPLAY_READY`), cập nhật ghi chú slide và broadcast SSE.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.updateSessionLiveStatus()`. Ghi `class_sessions`, phát SSE qua `liveRoom.helpers.ts`.
+ */
 // 7.5b PUT /teach/sessions/:sessionId/live-status
 const updateLiveStatusSchema = z.object({
   status: z.enum(['LIVE', 'SCHEDULED', 'REPLAY_READY']).optional(),
@@ -1429,6 +1526,11 @@ teachRouter.put(
   }
 );
 
+/**
+ * Routes `POST /teach/sessions/:sessionId/mute-participant` & `kick-participant` — Điều phối phòng Live: tắt mic (1 người / toàn lớp) hoặc mời học viên rời phòng
+ * đồng thời trên cả LiveKit SFU (`livekit.service.ts`) lẫn trạng thái phòng SSE (`liveRoom.helpers.ts`).
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.muteSessionParticipant()`, `kickSessionParticipant()`.
+ */
 // 7.5c POST /teach/sessions/:sessionId/mute-participant (Host mutes 1 student or all students)
 const muteParticipantSchema = z.object({
   targetIdentity: z.string().optional(),
@@ -1571,6 +1673,13 @@ teachRouter.post(
   }
 );
 
+/**
+ * Routes `POST /teach/sessions/:sessionId/recording/start`, `/stop`, `/upload` — Vòng đời ghi hình buổi học lên **Cloudflare R2**:
+ * - `/start`: gọi `startLiveKitRoomRecordingToR2()` (LiveKit Egress -> fallback `BROWSER_R2`) kèm `createR2PresignedPutUrl()`.
+ * - `/stop`: dừng Egress (`stopLiveKitRoomRecording`), lưu URL replay vào `class_sessions.video_r2_key` và chuyển `REPLAY_READY`.
+ * - `/upload`: nhận bản ghi Base64 từ trình duyệt Giảng viên và đẩy thẳng lên R2 qua `uploadBufferToR2()`.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.startSessionRecording()`, `stopSessionRecording()`, `uploadSessionRecordingToR2()`.
+ */
 // 7.5d POST /teach/sessions/:sessionId/recording/start (Start recording to Cloudflare R2)
 teachRouter.post('/teach/sessions/:sessionId/recording/start', async (req, res, next) => {
   try {
@@ -1789,6 +1898,17 @@ teachRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/teach/sessions/:sessionId/generate-quiz` — Nhờ AI sinh bản nháp bộ câu hỏi trắc nghiệm bám sát học liệu buổi học.
+ *
+ * - **Quy trình từng bước:**
+ *   + Bước 1: Kiểm tra quyền giảng viên phụ trách; tạo mới hoặc đưa `assessments` của buổi về trạng thái `DRAFT`.
+ *   + Bước 2: Gom toàn bộ `knowledge_chunks` (transcript/slide) của buổi học & danh sách `course_skills` làm đầu vào.
+ *   + Bước 3: Gọi `aiServiceClient.generateQuizDraft()` sang `apps/ai-service` (`POST /api/v1/ai/assessments/generate-quiz` ở `grading_ai.py`),
+ *     tính vector embedding 1024-dim và lưu vào `assessment_items`.
+ *   + Bước 4: Fallback — nếu AI Service không phản hồi và đề chưa có câu nào, tự sinh 4 câu deterministic bám chủ đề buổi học.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.generateSessionQuizByAi(sessionId)`. Đọc/Ghi DB: `class_sessions`, `assessments`, `assessment_items`, `knowledge_chunks`, `course_skills`, `skills`.
+ */
 // 7.6 POST /teach/sessions/:sessionId/generate-quiz — Real AI / Chunk-Grounded Quiz Draft!
 teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, next) => {
   try {
@@ -1903,7 +2023,8 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
           .insert(assessmentItems)
           .values(
             aiGenerated.generated_items.map((gi, idx) => {
-              const jumpSec = 180 + idx * 240;
+              const maxVideoSec = Math.max(45, (session.durationSeconds || 90) - 15);
+              const jumpSec = Math.min(maxVideoSec, Math.max(5, Math.round(((idx + 1) / (aiGenerated.generated_items.length + 1)) * maxVideoSec)));
               const opts =
                 Array.isArray(gi.options) && gi.options.length >= 4
                   ? gi.options.slice(0, 4)
@@ -1945,7 +2066,8 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
 
     if (finalItems.length === 0) {
       const fallbackSeeds = [0, 1, 2, 3].map((idx) => {
-        const jumpSec = 180 + idx * 240;
+        const maxVideoSec = Math.max(45, (session.durationSeconds || 90) - 15);
+        const jumpSec = Math.min(maxVideoSec, Math.max(5, Math.round(((idx + 1) / 5) * maxVideoSec)));
         const correctIdx = idx % 4;
         const options = [0, 1, 2, 3].map((optIdx) =>
           optIdx === correctIdx
@@ -1992,6 +2114,16 @@ teachRouter.post('/teach/sessions/:sessionId/generate-quiz', async (req, res, ne
   }
 });
 
+/**
+ * Route `PUT /api/v1/teach/assessments/:assessmentId/publish` — Xuất bản (hoặc lưu nháp) đề kiểm tra với đồng bộ **INSERT + UPDATE + DELETE** đầy đủ.
+ *
+ * - **Quy trình từng bước:**
+ *   + Bước 1: Kiểm tra quyền sở hữu lớp và cập nhật metadata đề (`status`, `passScorePct`, `durationMinutes`).
+ *   + Bước 2: Tải `course_skills` của khóa học để chọn kỹ năng mặc định (`LEARNING_OUTCOME`) cho câu hỏi mới không chỉ định `skillId`.
+ *   + Bước 3: Duyệt mảng `items` từ Giảng viên: câu đã có trong DB -> `UPDATE` (cập nhật cả `itemEmbedding` 1024-dim); câu mới -> `INSERT`.
+ *   + Bước 4: `DELETE` an toàn các câu bị Giảng viên xóa khỏi giao diện — CHỈ xóa nếu chưa có bản ghi `submission_answers` lịch sử tham chiếu (tránh vỡ khóa ngoại FK).
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.publishAssessment(assessmentId, items, status)`. Ghi DB: `assessments`, `assessment_items` (đọc `course_skills`, `skills`, `submission_answers`).
+ */
 // 7.7 PUT /teach/assessments/:assessmentId/publish — Full INSERT + UPDATE + DELETE Sync!
 const publishAssessmentSchema = z.object({
   status: z.enum(['DRAFT', 'PUBLISHED']).default('PUBLISHED'),
@@ -2064,17 +2196,31 @@ teachRouter.put(
       let finalCount = 0;
 
       if (Array.isArray(items) && items.length > 0) {
-        const [existingDbItems, allSkills] = await Promise.all([
+        const [existingDbItems, allSkills, [assessmentCohort]] = await Promise.all([
           db
             .select()
             .from(assessmentItems)
             .where(eq(assessmentItems.assessmentId, assessment.id))
             .orderBy(asc(assessmentItems.itemOrder)),
           db.select().from(skills),
+          db.select().from(cohorts).where(eq(cohorts.id, assessment.cohortId)).limit(1),
         ]);
 
-        const fallbackSkillId = existingDbItems[0]?.skillId ?? allSkills[0]?.id ?? 1;
-        const skillIdByCode = new Map(allSkills.map((s) => [s.code.toLowerCase(), s.id]));
+        const cohortCourseSkillRows = assessmentCohort
+          ? await db
+              .select()
+              .from(courseSkills)
+              .where(eq(courseSkills.courseId, assessmentCohort.courseId))
+          : [];
+        const primaryCourseSkillId =
+          cohortCourseSkillRows.find((cs) => cs.skillRole === 'LEARNING_OUTCOME')?.skillId ??
+          cohortCourseSkillRows[0]?.skillId;
+
+        const fallbackSkillId =
+          primaryCourseSkillId ?? existingDbItems[0]?.skillId ?? allSkills[0]?.id ?? 1;
+        const normalizeSkillKey = (raw: string) =>
+          raw.trim().toLowerCase().replace(/[-\s]+/g, '_');
+        const skillIdByCode = new Map(allSkills.map((s) => [normalizeSkillKey(s.code), s.id]));
         const validSkillIds = new Set(allSkills.map((s) => s.id));
 
         const keptItemIds: number[] = [];
@@ -2093,12 +2239,12 @@ teachRouter.put(
               ? rawSkillNum
               : undefined) ||
             (itemPayload.skillCode
-              ? skillIdByCode.get(itemPayload.skillCode.toLowerCase())
+              ? skillIdByCode.get(normalizeSkillKey(itemPayload.skillCode))
               : undefined) ||
             matchedExisting?.skillId ||
             fallbackSkillId;
 
-          const jumpSec = itemPayload.reviewJumpSec ?? 180 + idx * 240;
+          const jumpSec = itemPayload.reviewJumpSec ?? 10 + idx * 15;
           const promptCfg = {
             number: idx + 1,
             scenarioTag: itemPayload.scenarioTag || 'Kiến thức cốt lõi',
@@ -2188,6 +2334,10 @@ teachRouter.put(
   }
 );
 
+/**
+ * Route `POST /api/v1/teach/sessions/:sessionId/guest-link` — Ký tạo đường dẫn mời Diễn giả Khách mời một lần (JWT có thời hạn `expiresInMinutes`).
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.createGuestSpeakerLink(sessionId)`; khách mời xác thực tại `POST /api/v1/live/guest/verify` (`learning.routes.ts`).
+ */
 // 7.8 POST /teach/sessions/:sessionId/guest-link
 const guestLinkSchema = z.object({
   guestDisplayName: z.string().min(2).default('Chuyên gia Khách mời Doanh nghiệp'),
@@ -2250,6 +2400,11 @@ teachRouter.post(
   }
 );
 
+/**
+ * Routes `POST /teach/discussions/:threadId/reply` & `PATCH /teach/discussions/:threadId/verify`
+ * — Giảng viên trả lời và gắn dấu xác thực chính thức (`isInstructorVerified`, `isResolved`) cho câu hỏi Q&A của học viên.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.replyAndVerifyDiscussion()`, `verifyDiscussionThread()`. Ghi `discussion_posts`, `discussion_threads`.
+ */
 // 7.9 POST /teach/discussions/:threadId/reply
 const replyDiscussionSchema = z.object({
   contentMd: z.string().optional(),
@@ -2331,6 +2486,10 @@ teachRouter.post(
   }
 );
 
+/**
+ * Routes `POST /teach/enrollments/:enrollmentId/remind` & `/ai-reminder` — Gửi thông báo nhắc nhở học tập cá nhân hóa (`AI_STUDY_REMINDER`) tới học viên có nguy cơ tụt tiến độ.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.sendAiPersonalizedReminder()`. Ghi bảng `notifications`.
+ */
 // 7.10 POST /teach/enrollments/:enrollmentId/remind & /teach/enrollments/:enrollmentId/ai-reminder
 async function handleSendEnrollmentReminder(req: any, res: any, next: any) {
   try {
@@ -2460,6 +2619,17 @@ teachRouter.patch('/teach/discussions/:threadId/verify', async (req, res, next) 
   }
 });
 
+/**
+ * Routes `PUT /api/v1/teach/exam-reviews/:reviewId` & `POST /api/v1/teach/proctoring/:attemptId/verdict`
+ * — Hậu kiểm ca thi bị AI Proctoring gắn cờ (`FLAGGED`) và đồng bộ nguyên tử kết quả tốt nghiệp + Chứng chỉ HMAC trong **Transaction ACID**.
+ *
+ * - **Quy trình xử lý 2 phán quyết (`applyInstructorProctoringVerdict`):**
+ *   + `CONFIRMED_CHEAT` (`RETAKE_REQUIRED`): đưa điểm bài thi về `0`, mở lại quyền thi lại (`enrollments.final_exam_passed = false`),
+ *     thu hồi mọi chứng chỉ liên quan (`certificates.revoked_at`) và gửi thông báo `EXAM_RETAKE_REQUIRED`.
+ *   + `CLEARED_BY_INSTRUCTOR` (`APPROVED`): nếu điểm thi `>= passScorePct`, công nhận đậu (`isPassed = true`),
+ *     chuyển `enrollments.status = 'COMPLETED'` và tự động ký cấp/khôi phục Chứng chỉ HMAC-SHA256.
+ * - **Liên kết luồng:** Frontend gọi từ `teachApi.reviewExamProctoring(reviewId, decision)`. Ghi DB: `assessment_attempts`, `enrollments`, `certificates`, `notifications`.
+ */
 // 7.11 PUT /teach/exam-reviews/:reviewId & POST /teach/proctoring/:attemptId/verdict
 // Reconciles enrollment graduation status + revokes/issues HMAC certificate atomically!
 async function applyInstructorProctoringVerdict(params: {

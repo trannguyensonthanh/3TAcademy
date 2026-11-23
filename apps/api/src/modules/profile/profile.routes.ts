@@ -1,3 +1,45 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/profile/profile.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Module Hồ sơ Năng lực (CV Builder & Parser)
+ *     và Luyện Phỏng vấn Kỹ thuật 1-1 hai vòng cùng AI (AI Mock Interview).
+ *   - Đảm nhiệm:
+ *     1. Tổng hợp Hồ sơ năng lực tự động (`GET /me/profile-skills`): hợp nhất kỹ năng học được
+ *        (`student_skill_states`), chứng chỉ HMAC (`certificates`), khóa đã tham gia (`enrollments`)
+ *        và dữ liệu CV cá nhân (`user_profiles.cv_parsed_data`).
+ *     2. Tải lên & bóc tách CV từ file PDF (`multipart/form-data`) hoặc JSON (`POST /me/cv/upload`, `/me/cv`):
+ *        gọi `aiServiceClient.parseCvPdf()` (`apps/ai-service/src/api/routes/career_ai.py`) kèm bộ trích xuất
+ *        tín hiệu cục bộ dự phòng (từ khóa kỹ thuật, SĐT, GitHub, LinkedIn).
+ *     3. Luồng **Phỏng vấn AI 2 vòng kèm quản lý lượt (`interview_credits`)**:
+ *        - **Vòng 1 (`POST /interviews/screen-cv`) — MIỄN PHÍ (0 credit):** Đối chiếu CV + kỹ năng học viện
+ *          với JD mục tiêu bằng `aiServiceClient.screenCv()` (fallback đối soát từ khóa cục bộ).
+ *        - **Vòng 2 (`POST /interviews/:id/start` -> `/turn` -> `/complete`):**
+ *          + `/start`: Kiểm tra quyền sở hữu & bắt buộc `interviewCredits > 0` (HTTP 402 nếu hết lượt),
+ *            sinh bộ 3 câu hỏi thích ứng theo vai trò (AI/RAG, Backend, Data, Python/SQL) — CHƯA trừ lượt.
+ *          + `/turn`: Chấm từng lượt trả lời ứng viên theo cấu trúc, từ khóa JD & số liệu định lượng.
+ *          + `/complete`: Tổng hợp báo cáo + nhận xét Gemini (`generateGeminiText`) và **chỉ trừ đúng 1 credit
+ *            trong Transaction ACID tại thời điểm hoàn tất** (Idempotent: gọi lại không trừ thêm).
+ *          + `DELETE /interviews/:id`: Cho phép hủy phiên dở dang mà không mất lượt.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/profile-interview.api.ts`:
+ *     + `getMyProfileAndSkills()` -> `GET /api/v1/me/profile-skills` (alias `/me/profile`)
+ *     + `updateMyProfile()`       -> `PUT /api/v1/me/profile`
+ *     + `uploadAndParseCv()`      -> `POST /api/v1/me/cv/upload` (alias `/me/cv`)
+ *     + `screenCvAgainstJd()`     -> `POST /api/v1/interviews/screen-cv`
+ *     + `startVoiceInterview()`   -> `POST /api/v1/interviews/:interviewId/start`
+ *     + `sendVoiceTurn()`         -> `POST /api/v1/interviews/:interviewId/turn`
+ *     + `completeInterview()`     -> `POST /api/v1/interviews/:interviewId/complete`
+ *     + `cancelDraftInterview()`  -> `DELETE /api/v1/interviews/:interviewId`
+ *   - Đọc/Ghi bảng DB: `accounts`, `user_profiles`, `student_skill_states`, `skills`,
+ *     `mock_interviews`, `enrollments`, `cohorts`, `courses`, `certificates`.
+ *   - Gọi AI Service (`aiServiceClient`):
+ *     + `parseCvPdf` -> `POST /api/v1/ai/cv/parse` (`apps/ai-service/src/api/routes/career_ai.py`)
+ *     + `screenCv`   -> `POST /api/v1/ai/mock-interviews/round1-cv-defense` (`apps/ai-service/src/api/routes/career_ai.py`)
+ *     + `generateGeminiText` (`apps/api/src/integrations/ragAi.service.ts`) sinh nhận xét tổng kết phỏng vấn.
+ * ============================================================================
+ */
 import { Router, type Request } from 'express';
 import { eq, desc, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -56,6 +98,7 @@ const KNOWN_TECH_KEYWORDS = [
   'Lakehouse',
 ];
 
+/** Trích xuất văn bản đọc được từ nhị phân PDF (fallback nhẹ không phụ thuộc thư viện native khi đọc CV PDF tải lên). */
 function extractReadableTextFromPdfBuffer(buf: Buffer): string {
   const latin = buf.toString('latin1');
   const textChunks: string[] = [];
@@ -79,6 +122,7 @@ function extractReadableTextFromPdfBuffer(buf: Buffer): string {
   return `${textChunks.join(' ')} ${utf8Fallback}`.slice(0, 30000);
 }
 
+/** Quét nhanh các tín hiệu cấu trúc cục bộ từ văn bản CV (kỹ năng công nghệ chuẩn, số điện thoại VN, link GitHub/LinkedIn) dùng làm nền và fallback cho AI Service. */
 function extractStructuredSignalsFromCvText(rawText: string) {
   const text = rawText || '';
   const lower = text.toLowerCase();
@@ -101,6 +145,7 @@ function extractStructuredSignalsFromCvText(rawText: string) {
   };
 }
 
+/** Bộ phân giải request linh hoạt hỗ trợ cả `multipart/form-data` (file PDF thật) lẫn `application/json` (trình tạo CV trực tuyến). */
 async function parseMultipartOrJsonCvRequest(req: Request): Promise<{
   fileName: string;
   rawText: string;
@@ -170,6 +215,7 @@ async function parseMultipartOrJsonCvRequest(req: Request): Promise<{
   };
 }
 
+/** Chuẩn hóa cấu trúc JSON hồ sơ CV (`cvParsedData`), lấp đầy các trường rỗng từ bảng `user_profiles` và `accounts.email`. */
 function normalizeCvData(
   rawCv: Record<string, unknown>,
   profile?: {
@@ -322,6 +368,12 @@ function normalizeCvData(
   };
 }
 
+/**
+ * Routes `GET /api/v1/me/profile-skills` & `GET /api/v1/me/profile` — Tải Hồ sơ năng lực toàn diện,
+ * ma trận điểm kỹ năng Elo-IRT, chứng chỉ HMAC, lịch sử phỏng vấn AI và số lượt phỏng vấn còn lại.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.getMyProfileAndSkills()`.
+ *   Đọc DB: `accounts`, `user_profiles`, `student_skill_states`, `skills`, `mock_interviews`, `enrollments`, `cohorts`, `courses`, `certificates`.
+ */
 // 5.1 GET /me/profile-skills & /me/profile
 async function handleGetProfileSkills(req: Request, res: any, next: any) {
   try {
@@ -457,6 +509,10 @@ async function handleGetProfileSkills(req: Request, res: any, next: any) {
 profileRouter.get('/me/profile-skills', requireAuth, handleGetProfileSkills);
 profileRouter.get('/me/profile', requireAuth, handleGetProfileSkills);
 
+/**
+ * Route `PUT /api/v1/me/profile` — Cập nhật thông tin cá nhân và đồng bộ ngược vào `user_profiles.cv_parsed_data`.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.updateMyProfile()`. Đọc/Ghi DB: `user_profiles`, `accounts`.
+ */
 // 5.1B PUT /me/profile
 const updateProfileSchema = z.object({
   fullName: z.string().min(2).optional(),
@@ -575,6 +631,15 @@ profileRouter.put(
   }
 );
 
+/**
+ * Routes `POST /api/v1/me/cv/upload` & `POST /api/v1/me/cv` — Tải lên CV PDF để AI bóc tách (`PARSE_PDF`) hoặc lưu CV soạn tay (`SAVE_RESUME`).
+ *
+ * - **Quy trình chế độ `PARSE_PDF`:**
+ *   + Bước 1: Đọc văn bản PDF / JSON và chạy trích xuất cục bộ (`extractStructuredSignalsFromCvText`).
+ *   + Bước 2: Gọi `aiServiceClient.parseCvPdf()` sang `apps/ai-service` (`POST /api/v1/ai/cv/parse`) để làm giàu kỹ năng, dự án, liên hệ (có fallback cục bộ nếu lỗi).
+ *   + Bước 3: Hợp nhất dữ liệu theo cờ `overwriteProfile` và lưu vào `user_profiles` (bỏ qua ghi DB nếu `previewOnly = true`).
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.uploadAndParseCv()`. Đọc/Ghi DB: `user_profiles`, `accounts`.
+ */
 // 5.2 POST /me/cv/upload & POST /me/cv (Supports BOTH multipart/form-data PDF & JSON!)
 async function handleUploadCv(req: Request, res: any, next: any) {
   try {
@@ -727,6 +792,15 @@ async function handleUploadCv(req: Request, res: any, next: any) {
 profileRouter.post('/me/cv/upload', requireAuth, handleUploadCv);
 profileRouter.post('/me/cv', requireAuth, handleUploadCv);
 
+/**
+ * Route `POST /api/v1/interviews/screen-cv` — Vòng 1 Phỏng vấn AI: Rà soát mức độ khớp giữa CV và JD (MIỄN PHÍ — 0 credit).
+ *
+ * - **Mục tiêu:** Hợp nhất kỹ năng tự khai trên CV với kỹ năng đã được học viện xác thực (`student_skill_states`),
+ *   gọi `aiServiceClient.screenCv()` (`apps/ai-service/src/api/routes/career_ai.py` -> `POST /api/v1/ai/mock-interviews/round1-cv-defense`)
+ *   để chấm điểm khớp `matchPercent`, chỉ ra lỗ hổng kỹ năng (`missingKeywordsOrGaps`) và tạo bản ghi `mock_interviews (status = 'CV_SCREENING')`.
+ * - **Fallback:** Đã tính sẵn điểm so khớp từ khóa JD vs CV cục bộ nên vẫn chạy trơn tru nếu AI Service tạm ngắt.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.screenCvAgainstJd()`. Đọc `user_profiles`, `student_skill_states`, `skills`; ghi `mock_interviews`.
+ */
 // 5.3 POST /interviews/screen-cv (Free Stage 1 — does NOT deduct interview_credits)
 const screenCvSchema = z.object({
   targetLevel: z.enum(['INTERN', 'FRESHER', 'JUNIOR', 'SENIOR']),
@@ -734,6 +808,7 @@ const screenCvSchema = z.object({
   jdRawText: z.string().min(10),
 });
 
+/** Sinh bộ 3 câu hỏi phỏng vấn kỹ thuật thích ứng theo chuyên ngành JD (Data/Kafka-Spark, Backend/Distributed, Python/SQL hoặc AI/RAG) và tên dự án thực tế trong CV. */
 function buildRoleAdaptiveInterviewQuestions(params: {
   candidateName: string;
   targetRole: string;
@@ -812,6 +887,7 @@ function buildRoleAdaptiveInterviewQuestions(params: {
   ];
 }
 
+/** Chấm điểm định lượng chất lượng câu trả lời ứng viên theo 3 tiêu chí: độ dài/cấu trúc (`structureScore`), độ khớp từ khóa JD (`relevanceScore`) và có dẫn chứng số liệu (`hasMetrics`: ms, %, p95...). */
 function evaluateCandidateAnswerQuality(answer: string, jdRawText: string, questionText: string) {
   const clean = answer.trim();
   const wordCount = clean.split(/\s+/).filter(Boolean).length;
@@ -995,6 +1071,15 @@ profileRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/interviews/:interviewId/start` — Bắt đầu Vòng 2 Phỏng vấn Giọng nói 1-1 cùng AI.
+ *
+ * - **Bảo mật & Kiểm soát lượt (Credit Gate):**
+ *   + Bước 1: Kiểm tra quyền sở hữu phiên phỏng vấn (chống IDOR -> HTTP 403).
+ *   + Bước 2: Kiểm tra `user_profiles.interview_credits > 0` (nếu bằng 0 trả HTTP 402 `NO_INTERVIEW_CREDITS` nhắc mua khóa học nhận +4 lượt).
+ *   + Bước 3: Sinh bộ 3 câu hỏi thích ứng, chuyển trạng thái `IN_PROGRESS` và trả câu hỏi đầu tiên (CHƯA trừ credit ở bước này).
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.startVoiceInterview()`. Đọc `user_profiles`; đọc/ghi `mock_interviews`.
+ */
 // 5.4 POST /interviews/:interviewId/start (Strict Ownership + Credit Gate!)
 profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, res, next) => {
   try {
@@ -1095,6 +1180,10 @@ profileRouter.post('/interviews/:interviewId/start', requireAuth, async (req, re
   }
 });
 
+/**
+ * Route `POST /api/v1/interviews/:interviewId/turn` — Ghi nhận câu trả lời của một lượt phỏng vấn, chấm điểm tức thì và trả câu hỏi tiếp theo.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.sendVoiceTurn()`. Đọc `user_profiles`; cập nhật `mock_interviews.transcript_log`.
+ */
 // 5.5 POST /interviews/:interviewId/turn
 const turnSchema = z
   .object({
@@ -1169,11 +1258,50 @@ profileRouter.post(
         questionBank[currentTurnIdx]?.text ||
         String(currentLog[currentLog.length - 1]?.text || '');
 
-      const turnEval = evaluateCandidateAnswerQuality(
+      // Bước 1: Tính điểm & nhận xét dự phòng cục bộ trước để luôn có kết quả tức thì
+      const localEval = evaluateCandidateAnswerQuality(
         answerTranscript,
         interview.jdRawText,
         currentQuestionText
       );
+
+      // Bước 2: Ưu tiên gọi Python AI Service (`POST /api/v1/ai/mock-interviews/evaluate-answer`)
+      // để chấm Rubric định lượng 3 tiêu chí (Technical 50% + STAR 30% + WPM Fluency 20%)
+      let turnEval = localEval;
+      let rubricDetail:
+        | {
+            technicalScore: number;
+            starStructureScore: number;
+            fluencyScore: number;
+            speechMetrics: { wordCount: number; wordsPerMinute: number; fillerCount: number };
+          }
+        | undefined;
+
+      try {
+        const aiTurn = await aiServiceClient.evaluateInterviewTurn(
+          {
+            question: currentQuestionText,
+            transcriptAnswer: answerTranscript,
+            durationSeconds: durationSec ?? 45,
+          },
+          req.correlationId
+        );
+        if (aiTurn && typeof aiTurn.overallScore === 'number') {
+          rubricDetail = {
+            technicalScore: aiTurn.technicalScore,
+            starStructureScore: aiTurn.starStructureScore,
+            fluencyScore: aiTurn.fluencyScore,
+            speechMetrics: aiTurn.speechMetrics,
+          };
+          turnEval = {
+            ...localEval,
+            score: Math.round(aiTurn.overallScore),
+            feedback: `${localEval.feedback} [Rubric AI: Chuyên môn ${aiTurn.technicalScore}/100 · STAR ${aiTurn.starStructureScore}/100 · Lưu loát ${aiTurn.fluencyScore}/100 (${aiTurn.speechMetrics.wordsPerMinute} từ/phút)]`,
+          };
+        }
+      } catch {
+        // AI Service tạm ngắt -> giữ nguyên kết quả chấm cục bộ `localEval`
+      }
 
       const nextQ = questionBank[currentTurnIdx + 1] || null;
       const isCompleted = currentTurnIdx + 1 >= questionBank.length || !nextQ;
@@ -1224,6 +1352,7 @@ profileRouter.post(
         nextStageTag: nextQ?.stageTag ?? null,
         nextQuestionText: nextQ?.text ?? null,
         isCompleted,
+        ...(rubricDetail ? { aiRubric: rubricDetail } : {}),
       });
     } catch (err) {
       next(err);
@@ -1231,6 +1360,16 @@ profileRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/interviews/:interviewId/complete` — Chốt báo cáo đánh giá tổng thể và **trừ đúng 1 lượt phỏng vấn AI** trong Transaction ACID.
+ *
+ * - **Quy trình từng bước:**
+ *   + Bước 1: Kiểm tra chủ sở hữu & tính **Idempotency** (nếu phiên đã `COMPLETED`, trả lại báo cáo cũ với `creditDeducted: 0`).
+ *   + Bước 2: Chấm lại toàn bộ lượt trả lời của ứng viên (`overallScore`, `projectDepthScore`, `technicalAccuracy`, `communicationScore`).
+ *   + Bước 3: Gọi `generateGeminiText()` (`ragAi.service.ts`) sinh 2 câu nhận xét khách quan (fallback sang mảng `strengths`/`improvements` cục bộ).
+ *   + Bước 4: Mở **Transaction ACID**: giảm `interview_credits = GREATEST(0, interview_credits - 1)` và cập nhật `mock_interviews.status = 'COMPLETED'`.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.completeInterview()`. Ghi DB: `user_profiles`, `mock_interviews`.
+ */
 // 5.6 POST /interviews/:interviewId/complete (Deducts 1 credit ONLY once upon completion!)
 profileRouter.post('/interviews/:interviewId/complete', requireAuth, async (req, res, next) => {
   try {
@@ -1409,6 +1548,10 @@ profileRouter.post('/interviews/:interviewId/complete', requireAuth, async (req,
   }
 });
 
+/**
+ * Route `DELETE /api/v1/interviews/:interviewId` — Hủy bỏ phiên phỏng vấn nháp/chưa hoàn tất mà KHÔNG trừ `interview_credits`.
+ * - **Liên kết luồng:** Frontend gọi từ `profileInterviewApi.cancelDraftInterview()`. Xóa bản ghi trong `mock_interviews` (sau khi kiểm tra chủ sở hữu).
+ */
 // 5.7 DELETE /interviews/:interviewId (Abort incomplete interview without deducting credits)
 profileRouter.delete('/interviews/:interviewId', requireAuth, async (req, res, next) => {
   try {

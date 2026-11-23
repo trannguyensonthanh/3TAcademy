@@ -177,7 +177,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
           id: 'faq-6',
           question: 'Mình đăng ký lớp học và thanh toán học phí như thế nào?',
           answer:
-            'Bạn chọn đợt học đang mở tuyển sinh và quét mã VietQR trên ứng dụng ngân hàng (mức phí trải nghiệm thực tế 10.000đ/khóa trên môi trường kiểm thử). Ngay khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
+            'Bạn chọn đợt học đang mở tuyển sinh và quét mã VietQR trên ứng dụng ngân hàng. Ngay khi SePay xác nhận giao dịch khớp mã đơn, phòng học và 4 lượt phỏng vấn AI được mở khóa tự động.',
         },
       ]),
       description: 'Danh sách câu hỏi thường gặp công khai tại trang Về học viện',
@@ -223,104 +223,88 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     .values([
       {
         categoryId: catProg!.id,
-        code: 'PYTHON_ASYNC',
-        name: 'Lập trình Python & AsyncIO',
+        code: 'PYTHON',
+        name: 'Lập trình Python',
         description:
-          'Làm chủ Python 3.11+, Type Hints, Generator, Pytest và lập trình bất đồng bộ với asyncio/httpx.',
-      },
-      {
-        categoryId: catAi!.id,
-        code: 'HYBRID_RAG',
-        name: 'Kiến trúc Hybrid RAG & Vector DB',
-        description:
-          'Thiết kế pipeline Chunking, Embedding, kết hợp Dense Vector (pgvector HNSW) + BM25 RRF và Reranking.',
-      },
-      {
-        categoryId: catAi!.id,
-        code: 'TOOL_CALLING',
-        name: 'Function Calling & Agentic Workflows',
-        description:
-          'Xây dựng AI Agent gọi công cụ an toàn với JSON Schema, Pydantic v2 và vòng lặp suy luận ReAct.',
-      },
-      {
-        categoryId: catSwe!.id,
-        code: 'NODE_TS',
-        name: 'Backend TypeScript & Clean Architecture',
-        description:
-          'Xây dựng RESTful API chuẩn công nghiệp với Node.js, TypeScript, Express, Drizzle ORM và Zod.',
-      },
-      {
-        categoryId: catSwe!.id,
-        code: 'DOCKER_CI',
-        name: 'Docker, CI/CD & Triển khai Production',
-        description:
-          'Đóng gói Multi-stage Dockerfile, Docker Compose, Healthcheck, bảo mật JWT/RBAC và kiểm thử tự động.',
+          'Làm chủ Python hiện đại: cấu trúc dữ liệu, OOP, Type Hints, Generator, kiểm thử Pytest, lập trình bất đồng bộ AsyncIO và viết API Python.',
       },
       {
         categoryId: catData!.id,
-        code: 'SQL_VECTOR',
-        name: 'Tối ưu PostgreSQL & pgvector',
+        code: 'SQL',
+        name: 'SQL & Cơ sở dữ liệu',
         description:
-          'Thiết kế lược đồ chuẩn hóa, giao dịch ACID, CTE, Window Functions, chỉ mục B-Tree/GIN và HNSW.',
+          'Thiết kế lược đồ quan hệ chuẩn hóa, ràng buộc toàn vẹn, giao dịch ACID, JOIN, CTE, Window Functions, JSONB và tối ưu chỉ mục PostgreSQL.',
       },
       {
         categoryId: catAi!.id,
-        code: 'FASTAPI_ARCH',
-        name: 'Kiến trúc FastAPI & Pydantic v2',
+        code: 'RAG',
+        name: 'Hệ thống RAG & Tìm kiếm Ngữ nghĩa',
         description:
-          'Xây dựng cổng dịch vụ AI tốc độ cao với FastAPI, Dependency Injection và SSE streaming.',
+          'Thiết kế pipeline Chunking, Embedding, chỉ mục Vector (pgvector HNSW), Hybrid Search (Dense + BM25), Reciprocal Rank Fusion và Reranking.',
       },
       {
         categoryId: catAi!.id,
-        code: 'LANGGRAPH_AGENT',
-        name: 'Multi-Agent Orchestration & Memory',
+        code: 'AI_AGENTS',
+        name: 'AI Agents & Điều phối Công cụ',
         description:
-          'Điều phối hệ thống đa tác tử, quản lý bộ nhớ hội thoại dài hạn và cơ chế tự kiểm chứng.',
+          'Xây dựng tác tử AI gọi công cụ an toàn với Function Calling, JSON Schema/Structured Outputs, vòng lặp ReAct, Multi-Agent và bộ nhớ hội thoại.',
+      },
+      {
+        categoryId: catAi!.id,
+        code: 'LLMOPS',
+        name: 'Đánh giá & Vận hành AI (LLMOps)',
+        description:
+          'Thiết kế LLM Gateway bất đồng bộ (FastAPI/SSE), đánh giá chất lượng bằng Ragas, phòng chống Prompt Injection (Guardrails) và Semantic Cache.',
+      },
+      {
+        categoryId: catSwe!.id,
+        code: 'BACKEND_TS',
+        name: 'Backend TypeScript & API',
+        description:
+          'Xây dựng RESTful API chuẩn công nghiệp với Node.js, TypeScript, Express, Clean Architecture, Drizzle ORM, Zod và bảo mật JWT/RBAC.',
       },
       {
         categoryId: catSwe!.id,
         code: 'SYSTEM_DESIGN',
-        name: 'Thiết kế Hệ thống Phân tán & Caching',
+        name: 'Thiết kế Hệ thống & Caching',
         description:
-          'Áp dụng Redis Caching, Rate Limiting, Idempotent Webhook, Pessimistic Locking và Message Queue.',
+          'Áp dụng Redis Caching, Rate Limiting, Idempotent Webhook, Pessimistic Locking và hàng đợi xử lý bất đồng bộ cho hệ thống chịu tải cao.',
+      },
+      {
+        categoryId: catSwe!.id,
+        code: 'DEVOPS',
+        name: 'Docker, CI/CD & Triển khai',
+        description:
+          'Đóng gói Multi-stage Dockerfile, Docker Compose, Healthcheck, đường ống CI/CD, giám sát vận hành và kiểm thử tự động Production.',
       },
       {
         categoryId: catData!.id,
-        code: 'SPARK_KAFKA',
-        name: 'Xử lý Dữ liệu Lớn với Spark & Kafka',
+        code: 'DATA_PIPELINE',
+        name: 'Data Pipeline & Streaming',
         description:
-          'Xây dựng luồng xử lý Streaming và Batch với Apache Kafka Consumer Group và PySpark Structured Streaming.',
+          'Xây dựng đường ống dữ liệu Batch và Real-time Streaming với Apache Kafka, PySpark, điều phối tác vụ và giám sát SLA dữ liệu.',
       },
       {
         categoryId: catData!.id,
-        code: 'DBT_WAREHOUSE',
-        name: 'Data Modeling & Analytics với dbt',
+        code: 'DATA_MODELING',
+        name: 'Data Warehouse & Modeling',
         description:
-          'Thiết kế Star Schema, kiến trúc Medallion Bronze-Silver-Gold và kiểm định chất lượng dữ liệu tự động.',
-      },
-      {
-        categoryId: catAi!.id,
-        code: 'EVAL_GUARDRAILS',
-        name: 'LLMOps, Ragas Evaluation & Guardrails',
-        description:
-          'Đo lường Faithfulness, Answer Relevancy, Context Precision với Ragas và phòng chống Prompt Injection.',
+          'Thiết kế mô hình kho dữ liệu Star Schema, kiến trúc Lakehouse Medallion Bronze-Silver-Gold, chuẩn hóa với dbt, Data Quality và Feature Store.',
       },
     ])
     .returning();
 
   const [
     skPython,
+    skSql,
     skRag,
-    skTool,
-    skNode,
-    skDocker,
-    skSqlVec,
-    skFastApi,
-    skLangGraph,
+    skAgents,
+    skLlmOps,
+    skBackendTs,
     skSysDesign,
-    skSparkKafka,
-    skDbt,
-    skEval,
+    skDevOps,
+    skDataPipeline,
+    skDataModeling,
   ] = insertedSkills;
 
   const skillNamesById = new Map(insertedSkills.map((s) => [s.id, s.name]));
@@ -385,10 +369,19 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         createdAt: new Date('2026-11-15T09:00:00Z'),
         lastLoginAt: new Date('2026-11-18T01:45:00Z'),
       },
+      {
+        email: 'linh.student@3t.edu.vn',
+        passwordHash: defaultPasswordHash,
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        emailVerifiedAt: new Date('2026-01-03T08:00:00Z'),
+        createdAt: new Date('2026-01-03T08:00:00Z'),
+        lastLoginAt: new Date('2026-11-23T06:00:00Z'),
+      },
     ])
     .returning();
 
-  const [adminAcc, instKhoaAcc, instHaAcc, stuAnAcc, stuMaiAcc, stuNamAcc] = insertedAccounts;
+  const [adminAcc, instKhoaAcc, instHaAcc, stuAnAcc, stuMaiAcc, stuNamAcc, stuLinhAcc] = insertedAccounts;
 
   await db.insert(accountIdentities).values([
     ...insertedAccounts.map((acc) => ({
@@ -658,25 +651,23 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
 
   await db.insert(courseSkills).values([
     { courseId: courseAi!.id, skillId: skPython!.id, skillRole: 'PREREQUISITE', targetWeight: 1.0 },
-    { courseId: courseAi!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
-    { courseId: courseAi!.id, skillId: skRag!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseAi!.id, skillId: skTool!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseAi!.id, skillId: skFastApi!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
-    { courseId: courseAi!.id, skillId: skLangGraph!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
-    { courseId: courseAi!.id, skillId: skEval!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
+    { courseId: courseAi!.id, skillId: skRag!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.3 },
+    { courseId: courseAi!.id, skillId: skAgents!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: courseAi!.id, skillId: skLlmOps!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.1 },
+    { courseId: courseAi!.id, skillId: skSql!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
-    { courseId: courseSwe!.id, skillId: skNode!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseSwe!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.1 },
+    { courseId: courseSwe!.id, skillId: skBackendTs!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: courseSwe!.id, skillId: skSql!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.1 },
     { courseId: courseSwe!.id, skillId: skSysDesign!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseSwe!.id, skillId: skDocker!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
+    { courseId: courseSwe!.id, skillId: skDevOps!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
     { courseId: courseData!.id, skillId: skPython!.id, skillRole: 'PREREQUISITE', targetWeight: 1.0 },
-    { courseId: courseData!.id, skillId: skSparkKafka!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseData!.id, skillId: skDbt!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: courseData!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
+    { courseId: courseData!.id, skillId: skDataPipeline!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: courseData!.id, skillId: skDataModeling!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: courseData!.id, skillId: skSql!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.0 },
 
     { courseId: coursePython!.id, skillId: skPython!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
-    { courseId: coursePython!.id, skillId: skSqlVec!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
+    { courseId: coursePython!.id, skillId: skSql!.id, skillRole: 'LEARNING_OUTCOME', targetWeight: 1.2 },
   ]);
 
   // =========================================================================
@@ -694,7 +685,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         techStackNotes: 'Python 3.12 · AsyncIO · httpx · Pytest · PostgreSQL 16',
         tuitionVnd: 10000,
         maxSeats: 35,
-        enrolledCount: 1, // An (COMPLETED)
+        enrolledCount: 2, // An (COMPLETED) + Linh (ACTIVE — 6/6 sessions done, ready for Final Exam!)
         enrollmentOpenAt: new Date('2025-12-15T00:00:00Z'),
         startDate: '2026-01-05',
         endDate: '2026-01-25',
@@ -909,7 +900,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 3,
       topic: 'Lập trình Bất đồng bộ AsyncIO & httpx API',
       primarySkillId: skPython!.id,
-      secondarySkillId: skFastApi!.id,
+      secondarySkillId: skPython!.id,
       attachmentFileName: 'PY_S03_AsyncIO_EventLoop_Httpx.pdf',
       chunkContent:
         'Trong Python AsyncIO, tuyệt đối không gọi thư viện đồng bộ gây nghẽn như time.sleep() hay requests.get() bên trong hàm async def vì nó khóa cứng toàn bộ Event Loop. Thay vào đó phải dùng await asyncio.sleep(), httpx.AsyncClient và dùng asyncio.Semaphore để giới hạn số kết nối đồng thời.',
@@ -967,7 +958,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 4,
       topic: 'Thiết kế CSDL Quan hệ, Khóa ngoại & JOIN PostgreSQL',
-      primarySkillId: skSqlVec!.id,
+      primarySkillId: skSql!.id,
       secondarySkillId: skPython!.id,
       attachmentFileName: 'PY_S04_PostgreSQL_Relational_Joins.pdf',
       chunkContent:
@@ -1026,7 +1017,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 5,
       topic: 'SQL Phân tích Nâng cao: CTE, Window Functions & JSONB',
-      primarySkillId: skSqlVec!.id,
+      primarySkillId: skSql!.id,
       secondarySkillId: skPython!.id,
       attachmentFileName: 'PY_S05_Window_Functions_CTE_JSONB.pdf',
       chunkContent:
@@ -1075,7 +1066,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 6,
       topic: 'Ứng dụng Tổng hợp Python + PostgreSQL Pool & Bảo mật SQL',
-      primarySkillId: skSqlVec!.id,
+      primarySkillId: skSql!.id,
       secondarySkillId: skPython!.id,
       attachmentFileName: 'PY_S06_ConnectionPool_Parameterized_SQL.pdf',
       chunkContent:
@@ -1137,7 +1128,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 1,
       topic: 'Kiến trúc AI Production, FastAPI Gateway & SSE Streaming',
-      primarySkillId: skFastApi!.id,
+      primarySkillId: skLlmOps!.id,
       secondarySkillId: skPython!.id,
       attachmentFileName: 'AI_S01_FastAPI_LLM_Gateway_SSE.pdf',
       chunkContent:
@@ -1192,7 +1183,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 2,
       topic: 'Chiến lược Chunking Đa tầng & Chỉ mục HNSW trên pgvector',
       primarySkillId: skRag!.id,
-      secondarySkillId: skSqlVec!.id,
+      secondarySkillId: skSql!.id,
       attachmentFileName: 'AI_S02_Chunking_Pgvector_HNSW.pdf',
       chunkContent:
         'Khi băm tài liệu cho hệ thống RAG, sử dụng Recursive Markdown Chunking có phần gối nhau (chunk overlap 10%–15%) giúp không làm đứt gãy ngữ nghĩa giữa hai đoạn liên tiếp. Trên PostgreSQL pgvector, chỉ mục HNSW với toán tử khoảng cách cosine (<=>) giúp tìm kiếm láng giềng gần đúng tốc độ mili-giây kèm bộ lọc phân quyền visibility/course_id.',
@@ -1246,7 +1237,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 3,
       topic: 'Hybrid Search (Dense + BM25) & Reciprocal Rank Fusion (RRF)',
       primarySkillId: skRag!.id,
-      secondarySkillId: skSqlVec!.id,
+      secondarySkillId: skSql!.id,
       attachmentFileName: 'AI_S03_Hybrid_Search_RRF_Reranking.pdf',
       chunkContent:
         'Dense Vector Search nắm bắt tốt ngữ nghĩa tương đồng nhưng thường bỏ sót mã lỗi chính xác, tên hàm hoặc mã đơn hàng (như ET20260001). Kiến trúc Hybrid RAG kết hợp tìm kiếm vector pgvector với Full-Text Search tsvector và hợp nhất thứ hạng bằng công thức Reciprocal Rank Fusion RRF_Score(d) = 1/(k + rank_dense) + 1/(k + rank_fts) với hằng số làm mượt k = 60, sau đó tinh lọc Top-5 qua Cross-Encoder Reranker.',
@@ -1304,8 +1295,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 4,
       topic: 'Function Calling, Structured Outputs & ReAct Agent',
-      primarySkillId: skTool!.id,
-      secondarySkillId: skLangGraph!.id,
+      primarySkillId: skAgents!.id,
+      secondarySkillId: skPython!.id,
       attachmentFileName: 'AI_S04_Function_Calling_ReAct_Agents.pdf',
       chunkContent:
         'Trong kiến trúc Function Calling, LLM không trực tiếp thực thi câu lệnh hệ thống hay truy vấn DB mà chỉ sinh ra cấu trúc JSON chỉ định tên công cụ và tham số theo JSON Schema. Tầng ứng dụng Backend chịu trách nhiệm kiểm tra quyền, xác thực tham số bằng Pydantic/Zod, thực thi công cụ an toàn và áp đặt max_iterations để chống vòng lặp vô hạn.',
@@ -1363,7 +1354,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 5,
       topic: 'LLMOps: Ragas Evaluation, Guardrails & Semantic Cache',
-      primarySkillId: skEval!.id,
+      primarySkillId: skLlmOps!.id,
       secondarySkillId: skRag!.id,
       attachmentFileName: 'AI_S05_Ragas_Guardrails_SemanticCache.pdf',
       chunkContent:
@@ -1422,8 +1413,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 6,
       topic: 'Bảo vệ Đồ án Hệ thống AI & Tổng ôn Kiến trúc Cuối khóa',
-      primarySkillId: skEval!.id,
-      secondarySkillId: skLangGraph!.id,
+      primarySkillId: skLlmOps!.id,
+      secondarySkillId: skAgents!.id,
       attachmentFileName: 'AI_S06_Production_Readiness_Checklist.pdf',
       chunkContent:
         'Một hệ thống AI sẵn sàng cho Production cần kết hợp đầy đủ: kiểm soát truy cập theo khóa học trên kho vector, Hybrid Search + Reranking, Structured Outputs, giám sát độ trễ/token/trace (Langfuse) và cơ chế Fallback duyên dáng khi dịch vụ LLM bên ngoài gián đoạn.',
@@ -1484,7 +1475,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 1,
       topic: 'Clean Layered Architecture & Kiểm soát Hợp đồng với TypeScript / Zod',
-      primarySkillId: skNode!.id,
+      primarySkillId: skBackendTs!.id,
       secondarySkillId: skSysDesign!.id,
       attachmentFileName: 'SWE_S01_Clean_Architecture_Zod.pdf',
       chunkContent:
@@ -1543,8 +1534,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 2,
       topic: 'Tối ưu Truy vấn PostgreSQL, EXPLAIN ANALYZE & Partial Index',
-      primarySkillId: skSqlVec!.id,
-      secondarySkillId: skNode!.id,
+      primarySkillId: skSql!.id,
+      secondarySkillId: skBackendTs!.id,
       attachmentFileName: 'SWE_S02_Postgres_Explain_Partial_Index.pdf',
       chunkContent:
         'Lệnh EXPLAIN (ANALYZE, BUFFERS) cho biết kế hoạch thực thi thực tế và số trang bộ nhớ phải đọc của PostgreSQL. Với bảng thông báo có 95% bản ghi đã đọc, tạo Partial Index có điều kiện WHERE is_read = FALSE giúp kích thước chỉ mục nhỏ gọn và tăng tốc vọt truy vấn chuông thông báo chưa đọc.',
@@ -1603,7 +1594,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 3,
       topic: 'Giao dịch ACID, Khóa SELECT FOR UPDATE & Idempotent Webhook',
       primarySkillId: skSysDesign!.id,
-      secondarySkillId: skSqlVec!.id,
+      secondarySkillId: skSql!.id,
       attachmentFileName: 'SWE_S03_ACID_Locking_Idempotent_Webhook.pdf',
       chunkContent:
         'Cổng thanh toán SePay có thể gửi lại cùng một thông báo giao dịch nhiều lần khi mạng chập chờn (At-least-once delivery). Do đó xử lý Webhook bắt buộc phải thực thi trong một giao dịch DB sử dụng khóa dòng SELECT ... FOR UPDATE trên đơn hàng, kiểm tra số tiền chuyển thực tế >= học phí yêu cầu (chặn giao dịch 0đ hoặc thiếu tiền) và ràng buộc UNIQUE trên gateway_txn_id + enrollments(account_id, cohort_id).',
@@ -1662,7 +1653,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 4,
       topic: 'Chiến lược Caching Đa tầng với Redis & Hàng đợi Bất đồng bộ',
       primarySkillId: skSysDesign!.id,
-      secondarySkillId: skNode!.id,
+      secondarySkillId: skBackendTs!.id,
       attachmentFileName: 'SWE_S04_Redis_Caching_Queues.pdf',
       chunkContent:
         'Mẫu Cache-Aside đọc dữ liệu từ Redis trước, nếu miss mới đọc PostgreSQL rồi nạp lại vào Redis kèm TTL hợp lý. Các tác vụ nặng như trích xuất phụ đề video hay băm tài liệu PDF cần đẩy vào hàng đợi bất đồng bộ để API phản hồi nhanh.',
@@ -1720,8 +1711,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 5,
       topic: 'Bảo mật API (JWT, RBAC, Ownership Check) & Docker Production',
-      primarySkillId: skDocker!.id,
-      secondarySkillId: skNode!.id,
+      primarySkillId: skDevOps!.id,
+      secondarySkillId: skBackendTs!.id,
       attachmentFileName: 'SWE_S05_API_Security_RBAC_Docker.pdf',
       chunkContent:
         'Kiểm tra vai trò RBAC (như role === INSTRUCTOR hoặc STUDENT) là chưa đủ nếu thiếu kiểm tra quyền sở hữu tài nguyên (Object-level Authorization / chống lỗi IDOR): giảng viên chỉ được sửa đợt học do mình phụ trách, học viên chỉ được xem đơn hàng và phiên phỏng vấn của chính mình.',
@@ -1780,7 +1771,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       sessionOrder: 6,
       topic: 'Kiểm thử Chịu tải (Load Testing) & Tổng kết Kiến trúc Hệ thống',
       primarySkillId: skSysDesign!.id,
-      secondarySkillId: skDocker!.id,
+      secondarySkillId: skDevOps!.id,
       attachmentFileName: 'SWE_S06_Load_Testing_Observability.pdf',
       chunkContent:
         'Khi đánh giá hiệu năng API bằng công cụ kiểm thử chịu tải, độ trễ phân vị p95 và p99 phản ánh trải nghiệm thực của nhóm yêu cầu chậm nhất chính xác hơn nhiều so với số trung bình cộng dễ bị che lấp. Endpoint /health/live và /health/ready tách biệt kiểm tra tiến trình sống với kiểm tra kết nối DB/Redis sẵn sàng nhận tải.',
@@ -1841,8 +1832,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 1,
       topic: 'Kiến trúc Data Lakehouse & Mô hình Medallion (Bronze, Silver, Gold)',
-      primarySkillId: skDbt!.id,
-      secondarySkillId: skSparkKafka!.id,
+      primarySkillId: skDataModeling!.id,
+      secondarySkillId: skDataPipeline!.id,
       attachmentFileName: 'DATA_S01_Medallion_Lakehouse_Architecture.pdf',
       chunkContent:
         'Kiến trúc Medallion trong Data Lakehouse chia dữ liệu thành 3 tầng rõ rệt: tầng Bronze lưu nguyên trạng dữ liệu thô bất biến để có thể phát lại (replay), tầng Silver làm sạch, khử trùng lặp và chuẩn hóa kiểu dữ liệu, còn tầng Gold tổng hợp các bảng chiều và sự kiện (Star Schema) phục vụ trực tiếp BI và AI Feature Store.',
@@ -1895,7 +1886,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 2,
       topic: 'Xử lý Dữ liệu Phân tán Quy mô lớn với Apache Spark & PySpark',
-      primarySkillId: skSparkKafka!.id,
+      primarySkillId: skDataPipeline!.id,
       secondarySkillId: skPython!.id,
       attachmentFileName: 'DATA_S02_PySpark_DAG_DataSkew.pdf',
       chunkContent:
@@ -1949,7 +1940,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 3,
       topic: 'Xử lý Luồng Sự kiện Thời gian thực với Apache Kafka',
-      primarySkillId: skSparkKafka!.id,
+      primarySkillId: skDataPipeline!.id,
       secondarySkillId: skSysDesign!.id,
       attachmentFileName: 'DATA_S03_Kafka_Streaming_Architecture.pdf',
       chunkContent:
@@ -2008,8 +1999,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 4,
       topic: 'Analytics Engineering: Chuẩn hóa Kho Dữ liệu Star Schema với dbt',
-      primarySkillId: skDbt!.id,
-      secondarySkillId: skSqlVec!.id,
+      primarySkillId: skDataModeling!.id,
+      secondarySkillId: skSql!.id,
       attachmentFileName: 'DATA_S04_dbt_StarSchema_DataQuality.pdf',
       chunkContent:
         'Công cụ dbt (Data Build Tool) đưa quy trình kỹ thuật phần mềm vào kho dữ liệu: quản lý biến đổi SQL theo DAG qua hàm ref(), xây dựng mô hình Star Schema gồm bảng sự kiện Fact và bảng chiều Dimension, chạy Incremental models cho bảng lớn và kiểm định chất lượng dữ liệu tự động (not_null, unique, relationships, accepted_values).',
@@ -2062,8 +2053,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 5,
       topic: 'Đồng bộ Feature Store & Vector Store từ tầng Gold cho Hệ thống AI',
-      primarySkillId: skSqlVec!.id,
-      secondarySkillId: skDbt!.id,
+      primarySkillId: skSql!.id,
+      secondarySkillId: skDataModeling!.id,
       attachmentFileName: 'DATA_S05_Gold_To_Pgvector_Sync.pdf',
       chunkContent:
         'Để tránh tính toán lại vector nhúng tốn kém cho hàng vạn tài liệu không thay đổi, đường ống đồng bộ từ kho dữ liệu sang PostgreSQL pgvector lưu mã băm SHA-256 content_hash của văn bản chuẩn hóa: chỉ những đoạn có content_hash mới hoặc thay đổi mới được đưa qua bước sinh embedding và cập nhật.',
@@ -2121,8 +2112,8 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     {
       sessionOrder: 6,
       topic: 'Vận hành, Giám sát SLA Đường ống Dữ liệu & Tổng ôn Cuối khóa',
-      primarySkillId: skSparkKafka!.id,
-      secondarySkillId: skDbt!.id,
+      primarySkillId: skDataPipeline!.id,
+      secondarySkillId: skDataModeling!.id,
       attachmentFileName: 'DATA_S06_Data_Observability_SLA.pdf',
       chunkContent:
         'Giám sát đường ống dữ liệu Production (Data Observability) theo dõi 5 trụ cột: độ tươi mới dữ liệu (Freshness), lưu lượng bản ghi bất thường (Volume), phân phối giá trị (Distribution), thay đổi lược đồ (Schema Drift) và phả hệ dữ liệu (Lineage) để khoanh vùng sự cố trước khi báo cáo sai lệch.',
@@ -2665,7 +2656,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
   // =========================================================================
   // 9. ORDERS, SEPAY TRANSACTIONS, ENROLLMENTS & CERTIFICATES (Tables 14–19/32)
   // =========================================================================
-  const [ordAnPy, ordAnAi, ordAnSwe, ordMaiAi, ordMaiDataMismatch] = await db
+  const [ordAnPy, ordAnAi, ordAnSwe, ordMaiAi, ordMaiDataMismatch, ordLinhPy] = await db
     .insert(orders)
     .values([
       {
@@ -2722,6 +2713,17 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         paidAt: null,
         expiresAt: new Date('2026-12-01T10:30:00Z'),
         createdAt: new Date('2026-11-16T10:00:00Z'),
+      },
+      {
+        orderCode: 'ET20260006',
+        accountId: stuLinhAcc!.id,
+        cohortId: cohortPyK01!.id,
+        amountVnd: 10000,
+        status: 'PAID',
+        idempotencyKey: 'seed-ord-linh-py-k01',
+        paidAt: new Date('2026-01-04T09:15:00Z'),
+        expiresAt: new Date('2026-01-04T09:45:00Z'),
+        createdAt: new Date('2026-01-04T09:10:00Z'),
       },
     ])
     .returning();
@@ -2787,11 +2789,21 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       matchStatus: 'UNMATCHED_ORDER',
       createdAt: new Date('2026-11-17T08:30:00Z'),
     },
+    {
+      orderId: ordLinhPy!.id,
+      gateway: 'SEPAY_VIETQR',
+      gatewayTxnId: 'SEPAY-TXN-20260007',
+      amountVnd: 10000,
+      responseCode: '00',
+      rawPayload: { gateway: 'MBBank', content: 'SEVQR ET20260006', transferAmount: 10000 },
+      matchStatus: 'MATCHED',
+      createdAt: new Date('2026-01-04T09:15:00Z'),
+    },
   ]);
 
   const anPyGraduatedAt = new Date('2026-01-24T13:45:00Z');
 
-  const [enrAnPy, _enrAnAi, _enrAnSwe, _enrMaiAi] = await db
+  const [enrAnPy, _enrAnAi, _enrAnSwe, _enrMaiAi, _enrLinhPy] = await db
     .insert(enrollments)
     .values([
       {
@@ -2836,6 +2848,17 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         dropoutRiskScore: 0.74,
         riskLevel: 'HIGH',
         enrolledAt: new Date('2026-10-30T14:10:00Z'),
+        completedAt: null,
+      },
+      {
+        accountId: stuLinhAcc!.id,
+        cohortId: cohortPyK01!.id,
+        orderId: ordLinhPy!.id,
+        status: 'ACTIVE',
+        finalExamPassed: false,
+        dropoutRiskScore: 0.04,
+        riskLevel: 'LOW',
+        enrolledAt: new Date('2026-01-04T09:15:00Z'),
         completedAt: null,
       },
     ])
@@ -3168,6 +3191,38 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
     });
   }
 
+  // 10E. Linh in PY-SQL-2026-K01: completed ALL 6/6 sessions + passed ALL 6/6 quizzes -> 100% READY for Final Exam!
+  for (let i = 0; i < pyData.sessions.length; i++) {
+    const sess = pyData.sessions[i]!;
+    const quiz = pyData.sessionQuizzes[i]!;
+    const qItems = pyData.itemsByAssessmentId.get(quiz.id) ?? [];
+    const baseTime = new Date((sess.scheduledEnd ?? new Date()).getTime() + 45 * 60 * 1000);
+    const doneTime = new Date(baseTime.getTime() + 9 * 60 * 1000);
+    const durSec = sess.durationSeconds ?? 53;
+
+    await seedQuizOrExamSubmission({
+      assessmentId: quiz.id,
+      accountId: stuLinhAcc!.id,
+      sessionOrder: sess.sessionOrder,
+      items: qItems,
+      wrongIndices: i === 1 ? [2] : [], // 5 sessions 100% + 1 session 75% -> all PASSED >= 70%
+      startedAt: baseTime,
+      submittedAt: doneTime,
+      gradingCompletedAt: doneTime,
+    });
+
+    progressRows.push({
+      accountId: stuLinhAcc!.id,
+      sessionId: sess.id,
+      lastPositionSec: durSec,
+      maxWatchedSec: durSec,
+      attendedLive: true,
+      isCompleted: true,
+      completedAt: doneTime,
+      lastActivityAt: doneTime,
+    });
+  }
+
   await db.insert(sessionProgress).values(progressRows);
 
   // Derive student_skill_states via Progressive Elo-IRT + Stage Weighting (0..100 scale!)
@@ -3269,6 +3324,15 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       isRead: false,
       createdAt: new Date('2026-11-15T09:05:00Z'),
     },
+    {
+      recipientId: stuLinhAcc!.id,
+      type: 'FINAL_EXAM_UNLOCKED',
+      title: `Phòng Thi Tốt Nghiệp ${cohortPyK01!.code} đã mở khóa!`,
+      body: 'Chúc mừng bạn đã hoàn thành trọn vẹn 6/6 buổi học và bài kiểm tra của khóa Python & SQL Thực chiến. Bạn có thể vào làm Kỳ thi cuối khóa có giám sát AI ngay bây giờ để nhận chứng chỉ số HMAC.',
+      metadata: { cohortId: cohortPyK01!.id, assessmentId: pyData.finalExam.id },
+      isRead: false,
+      createdAt: new Date('2026-01-23T09:00:00Z'),
+    },
   ]);
 
   const [chatNamAdvisor, chatAnTutor] = await db
@@ -3309,7 +3373,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       detectedTopic: 'Tư vấn lộ trình AI Engineering',
       citations: [],
       llmProvider: '3t-rag',
-      llmModel: 'gemini-2.5-flash',
+      llmModel: 'gemini-3.5-flash',
       latencyMs: 320,
     },
     {
@@ -3333,7 +3397,7 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
         },
       ],
       llmProvider: '3t-rag',
-      llmModel: 'gemini-2.5-flash',
+      llmModel: 'gemini-3.5-flash',
       latencyMs: 280,
     },
   ]);
@@ -3616,6 +3680,59 @@ export async function runSeed(db: typeof defaultDb = defaultDb) {
       },
       preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: true },
       interviewCredits: 0,
+    },
+    {
+      accountId: stuLinhAcc!.id,
+      fullName: 'Trần Khánh Linh',
+      phone: '0934567890',
+      githubUrl: 'https://github.com/trankhanhlinh-py',
+      linkedinUrl: 'https://linkedin.com/in/trankhanhlinh-py',
+      avatarUrl: '/assets/aistudio/image_aa8c5a52.png',
+      bio: 'Học viên đã hoàn thành 6/6 buổi khóa Python & SQL Thực chiến — sẵn sàng bước vào Kỳ thi Tốt nghiệp Cuối khóa.',
+      careerGoal: 'Hoàn tất chứng chỉ Python & SQL Thực chiến và phát triển chuyên sâu lên Data & AI Engineer.',
+      goalEmbedding: computeSemanticEmbedding1024(
+        'Python AsyncIO PostgreSQL Window Functions Data Engineer AI Engineer Fresher'
+      ),
+      faceReferenceR2Key: 'kyc/2026/stu-linh-face-ref-v1.jpg',
+      faceEmbedding: makeDeterministicVector(103, 512),
+      cvParsedData: {
+        fileName: 'TranKhanhLinh_Python_SQL_CV_2026.pdf',
+        updatedAt: '2026-01-22T16:00:00.000Z',
+        extractedAt: '2026-01-22T16:00:00.000Z',
+        fullName: 'Trần Khánh Linh',
+        candidateName: 'Trần Khánh Linh',
+        headline: 'Fresher Python & SQL Data Developer',
+        targetRole: 'Fresher Python & Data Engineer',
+        email: 'linh.student@3t.edu.vn',
+        phone: '0934567890',
+        location: 'Quận 3, TP. Hồ Chí Minh',
+        avatarUrl: '/assets/aistudio/image_aa8c5a52.png',
+        githubUrl: 'https://github.com/trankhanhlinh-py',
+        linkedinUrl: 'https://linkedin.com/in/trankhanhlinh-py',
+        careerObjective: 'Hoàn thiện kỹ năng Python bất đồng bộ và phân tích dữ liệu SQL chuẩn Production.',
+        summaryBio: 'Hoàn thành xuất sắc 6/6 buổi học khóa Python & SQL Thực chiến tại 3T Academy.',
+        skills: ['Lập trình Python (PYTHON)', 'SQL & Cơ sở dữ liệu (SQL)'],
+        externalSkills: ['Git', 'Pytest', 'Docker cơ bản'],
+        projects: [
+          {
+            name: 'Hệ thống thu thập & phân tích dữ liệu bất đồng bộ Python + PostgreSQL',
+            role: 'Backend Developer',
+            techStack: 'Python 3.12, AsyncIO, httpx, PostgreSQL 16',
+            highlights: 'Xử lý hàng nghìn bản ghi bất đồng bộ bằng Semaphore và truy vấn Window Functions.',
+          },
+        ],
+        workExperience: [],
+        education: [
+          {
+            school: 'Đại học Công nghệ Thông tin — ĐHQG TP.HCM',
+            degree: 'Kỹ sư Khoa học Dữ liệu',
+            period: '2022 - 2026',
+          },
+        ],
+        awardsAndCerts: [],
+      },
+      preferences: { emailReminders: true, liveSessionAlerts: true, aiStudyNudges: true },
+      interviewCredits: 4,
     },
   ]);
 

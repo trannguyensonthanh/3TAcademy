@@ -1,3 +1,41 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/assessment/assessment.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Module Đánh giá Năng lực, Chấm bài tự động,
+ *     Giám sát Thi AI Proctoring 2 tầng và Cấp Chứng chỉ Ký số HMAC-SHA256.
+ *   - Triển khai các quy tắc học thuật cốt lõi:
+ *     1. **Bảo mật đề thi:** Tuyệt đối KHÔNG trả về `correctIndex` / `explanationMd`
+ *        khi học viên tải đề (`GET /assessments/:id`); chỉ mở lời giải sau khi nộp bài.
+ *     2. **Chấm bài thống nhất (`gradeAndRecordAssessmentSubmission`):**
+ *        - Cập nhật điểm kỹ năng tiến bộ bằng thuật toán **Elo-IRT 2PL** (`skillMasteryModel.ts`).
+ *        - **Quy tắc hoàn thành buổi >= 70%:** Khi Quiz buổi đạt `scorePercent >= passScorePct` (70%),
+ *          tự động đánh dấu `session_progress.is_completed = true`.
+ *        - **Kỳ thi cuối khóa (`FINAL_EXAM`):** Bắt buộc hoàn thành đủ 6/6 buổi mới được mở;
+ *          nếu bị Proctoring gắn cờ (`FLAGGED` / `CONFIRMED_CHEAT`) thì tạm giữ `isPassed = false`
+ *          chờ Giảng viên duyệt; nếu đạt sạch (`CLEAN` & `>= 70%`) tự động hoàn tất ghi danh
+ *          và **cấp Chứng chỉ ký số HMAC-SHA256** (`certificates`) ngay trong Transaction ACID.
+ *     3. **Giám sát Thi AI Proctoring 2 tầng:** Nhận sự kiện trình duyệt (tab switch, fullscreen)
+ *        và chụp khung hình Webcam (`POST /assessments/:id/proctoring-snapshot`) gọi trực tiếp
+ *        sang `apps/ai-service` (`POST /api/v1/ai/proctoring/analyze-frame`, MediaPipe/YuNet +
+ *        SolvePnP + YOLOv8n + Gemini Vision) với ngưỡng rủi ro tích lũy `>= 60 -> FLAGGED`.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/assessment.api.ts`:
+ *     + `assessmentApi.getAssessmentForStudent()`   -> `GET  /api/v1/assessments/:assessmentId`
+ *     + `assessmentApi.startAssessmentAttempt()`    -> `POST /api/v1/assessments/:assessmentId/start`
+ *     + `assessmentApi.submitAssessmentAttempt()`   -> `POST /api/v1/assessments/:assessmentId/submit`
+ *     + `assessmentApi.getAssessmentResult()`       -> `GET  /api/v1/assessments/:assessmentId/result(s)`
+ *     + `assessmentApi.reportProctoringEvent()`     -> `POST /api/v1/assessments/:assessmentId/proctoring-events`
+ *     + `assessmentApi.analyzeProctoringSnapshot()` -> `POST /api/v1/assessments/:assessmentId/proctoring-snapshot`
+ *   - Đồng thời xuất hàm `gradeAndRecordAssessmentSubmission()` cho `learning.routes.ts` (`/sessions/:sessionId/quiz-submit`).
+ *   - Đọc/Ghi bảng DB: `assessments`, `assessment_items`, `assessment_attempts`, `submission_answers`,
+ *     `proctoring_events`, `student_skill_states`, `skills`, `session_progress`, `class_sessions`,
+ *     `cohorts`, `enrollments`, `certificates`, `user_profiles`, `notifications`.
+ *   - Gọi AI Service: `POST /api/v1/ai/proctoring/analyze-frame` (`apps/ai-service/src/api/routes/proctoring_ai.py`)
+ *     kèm Fallback `FALLBACK_HEARTBEAT` (`NORMAL`) nếu AI Service tạm ngắt để không đánh oan thí sinh.
+ * ============================================================================
+ */
 import { Router } from 'express';
 import { eq, and, asc, desc, inArray } from 'drizzle-orm';
 import { z } from 'zod';
@@ -28,6 +66,7 @@ import {
   toDbMasteryScore,
 } from '../../db/helpers.js';
 import { computeProgressiveSkillMastery } from './skillMasteryModel.js';
+import { aiServiceClient } from '../../integrations/aiService.client.js';
 
 export const assessmentRouter = Router();
 
@@ -48,6 +87,7 @@ interface GradingConfigShape {
   reviewSegmentRangeSec?: [number, number];
 }
 
+/** Quy đổi đáp án đúng từ `gradingConfig` (hỗ trợ cả chỉ số `correctIndex: 0..3` lẫn ký tự `correct_option_id: 'A'..'D'`). */
 function resolveCorrectOptionIndex(gCfg: GradingConfigShape): number {
   if (typeof gCfg.correctIndex === 'number' && gCfg.correctIndex >= 0) {
     return gCfg.correctIndex;
@@ -67,6 +107,11 @@ type NormalizedProctoringType =
   | 'FULLSCREEN_EXIT'
   | 'PHONE_DETECTED';
 
+/**
+ * Phân loại sự kiện giám sát thi (Proctoring) thành sự kiện lành tính (`benign: true`, 0 điểm rủi ro)
+ * hoặc sự kiện vi phạm chuẩn hóa kèm trọng số điểm rủi ro (`FACE_MISMATCH: +50`, `PHONE_DETECTED: +45`,
+ * `MULTI_FACE: +40`, `TAB_HIDDEN: +20`, `FULLSCREEN_EXIT/NO_FACE: +15`).
+ */
 function classifyIncomingProctoringEvent(
   rawType: string,
   details?: Record<string, unknown>
@@ -116,6 +161,10 @@ function classifyIncomingProctoringEvent(
   return { benign: false, eventType: 'TAB_HIDDEN', riskDelta: 20 };
 }
 
+/**
+ * Kiểm tra quyền truy cập bài kiểm tra theo vai trò (`ADMIN`, `INSTRUCTOR` đúng lớp, `STUDENT` đã ghi danh)
+ * và tính cờ `allCohortSessionsCompleted` (học viên đã hoàn thành đủ tất cả các buổi học hay chưa).
+ */
 async function verifyAssessmentAccess(params: {
   assessment: typeof assessments.$inferSelect;
   userId: number;
@@ -189,6 +238,11 @@ async function verifyAssessmentAccess(params: {
   return { enrollment, allCohortSessionsCompleted };
 }
 
+/**
+ * Tìm lượt làm bài đang mở (`submittedAt === null`) hoặc tự khởi tạo lượt mới (`attemptNumber + 1`)
+ * với trạng thái ban đầu `integrityStatus = 'CLEAN'` và `totalRiskScore = 0`.
+ * Đảm bảo sự kiện Proctoring luôn có `attemptId` gắn vào, không bao giờ bị thất lạc.
+ */
 async function getOrCreateOpenAttempt(params: {
   assessment: typeof assessments.$inferSelect;
   accountId: number;
@@ -232,6 +286,19 @@ async function getOrCreateOpenAttempt(params: {
 }
 
 /**
+ * Bộ máy chấm bài và ghi nhận kết quả thống nhất cho CẢ Quiz buổi học (`/sessions/:sessionId/quiz-submit`)
+ * LẪN Bài kiểm tra / Kỳ thi cuối khóa (`/assessments/:id/submit`).
+ *
+ * - **Quy trình từng bước (ACID Transaction):**
+ *   1. Kiểm tra quyền truy cập, chặn nộp đề `DRAFT`, chặn thi lại `FINAL_EXAM` đã đậu hoặc chưa đủ 6/6 buổi, kiểm giới hạn `maxAttempts`.
+ *   2. Chấm từng câu hỏi trắc nghiệm, tổng hợp `scorePercent` và danh sách câu sai kèm gợi ý ôn lại theo mốc video (`wrongItems`).
+ *   3. Kiểm tra quy tắc liêm chính Proctoring (`FLAGGED` / `CONFIRMED_CHEAT` khóa `isPassed = false`) và ngưỡng đạt (`>= passScorePct`, mặc định 70%).
+ *   4. Trong **Transaction ACID**: lưu `assessment_attempts` & `submission_answers` -> cập nhật **Elo-IRT 2PL** (`student_skill_states`)
+ *      -> nếu là Quiz buổi & đạt >= 70% thì đánh dấu hoàn thành buổi (`session_progress.is_completed = true`)
+ *      -> nếu là `FINAL_EXAM` & đạt sạch thì hoàn tất `enrollments` và **ký cấp Chứng chỉ HMAC-SHA256** (`certificates` + `notifications`).
+ * - **Đọc/Ghi DB:** `assessment_items`, `skills`, `assessment_attempts`, `submission_answers`, `student_skill_states`,
+ *   `session_progress`, `class_sessions`, `enrollments`, `certificates`, `notifications`, `user_profiles`.
+ *
  * Unified assessment grading engine used by BOTH `/assessments/:id/submit`
  * and `/sessions/:sessionId/quiz-submit`.
  */
@@ -244,6 +311,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
   const { assessment, accountId, userRole, rawAnswers } = params;
   const isFinalExam = assessment.purpose === 'FINAL_EXAM';
 
+  // Bước 1: Kiểm tra phân quyền, chặn nộp đề Nháp và xác minh điều kiện tiên quyết của Kỳ thi cuối khóa (6/6 buổi)
   const { enrollment, allCohortSessionsCompleted } = await verifyAssessmentAccess({
     assessment,
     userId: accountId,
@@ -276,6 +344,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
     }
   }
 
+  // Bước 2: Tải song song bộ câu hỏi, danh mục kỹ năng, lịch sử lượt làm bài trước và danh sách buổi học của lớp
   const [items, allSkills, priorAttempts, cohortSessions] = await Promise.all([
     db
       .select()
@@ -365,6 +434,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
     slideLabel: string;
   }> = [];
 
+  // Bước 3: Chấm điểm từng câu hỏi (hỗ trợ nhiều định dạng payload đáp án) và trích xuất danh sách câu làm sai để ôn tập theo mốc giây
   items.forEach((item, idx) => {
     const maxPts = Number(item.points) || 1;
     maxPossibleScore += maxPts;
@@ -473,6 +543,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
   const effectiveIntegrityStatus = openAttempt?.integrityStatus ?? 'CLEAN';
   const effectiveRiskScore = openAttempt?.totalRiskScore ?? '0.00';
 
+  // Bước 4: Áp dụng quy tắc đạt (>= passScorePct, mặc định 70%) và khóa tạm `isPassed = false` nếu bài thi bị Proctoring gắn cờ
   // If proctoring flagged the exam (`FLAGGED` or `CONFIRMED_CHEAT`), hold `isPassed = false` pending instructor review!
   const isIntegrityBlocked =
     isFinalExam &&
@@ -493,6 +564,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
     delta: string;
   }> = [];
 
+  // Bước 5: Ghi kết quả nguyên tử trong Transaction ACID (Attempt -> Answers -> Elo-IRT Skill -> Hoàn thành buổi -> Cấp Chứng chỉ HMAC)
   const attempt = await db.transaction(async (tx) => {
     let savedAttempt: typeof assessmentAttempts.$inferSelect;
 
@@ -555,6 +627,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
       );
     }
 
+    // Bước 5.1: Cập nhật điểm thành thạo từng kỹ năng bằng mô hình Elo-IRT 2PL (`computeProgressiveSkillMastery`)
     const uniqueSkillIds = [...new Set(gradedAnswers.map((a) => a.skillId))];
     for (const skId of uniqueSkillIds) {
       const skItems = gradedAnswers.filter((a) => a.skillId === skId);
@@ -627,6 +700,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
       });
     }
 
+    // Bước 5.2: Quy tắc hoàn thành buổi (>= 70%) — tự động đánh dấu `session_progress.is_completed = true` khi đạt Quiz buổi
     if (assessment.sessionId && isPassed) {
       await tx
         .insert(sessionProgress)
@@ -649,6 +723,7 @@ export async function gradeAndRecordAssessmentSubmission(params: {
         });
     }
 
+    // Bước 5.3: Tự động tốt nghiệp & cấp Chứng chỉ ký số HMAC-SHA256 khi học viên vượt qua Kỳ thi cuối khóa sạch gian lận
     if (isFinalExam && isPassed && enrollment) {
       await tx
         .update(enrollments)
@@ -753,6 +828,15 @@ export async function gradeAndRecordAssessmentSubmission(params: {
   };
 }
 
+/**
+ * Route `GET /api/v1/assessments/:assessmentId` — Tải đề kiểm tra / đề thi cuối khóa đã lọc bỏ đáp án cho học viên.
+ *
+ * - **Bảo mật:** Tuyệt đối loại bỏ `correctIndex` và `explanationMd` khỏi payload trả về trước khi nộp bài;
+ *   chặn đề `DRAFT` và chặn vào Thi cuối khóa nếu chưa hoàn thành đủ 6/6 buổi.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.getAssessmentForStudent(assessmentId)` (`apps/web/src/services/assessment.api.ts`).
+ *   + Đọc/Ghi DB: `assessments`, `assessment_items`, `skills`, `assessment_attempts`, `enrollments`, `class_sessions`, `session_progress`.
+ */
 // 4.1 GET /assessments/:assessmentId
 assessmentRouter.get('/assessments/:assessmentId', requireAuth, async (req, res, next) => {
   try {
@@ -787,7 +871,8 @@ assessmentRouter.get('/assessments/:assessmentId', requireAuth, async (req, res,
       return;
     }
 
-    const { enrollment, allCohortSessionsCompleted } = await verifyAssessmentAccess({
+    // Bước 1: Kiểm tra phân quyền, chặn nộp đề Nháp và xác minh điều kiện tiên quyết của Kỳ thi cuối khóa (6/6 buổi)
+  const { enrollment, allCohortSessionsCompleted } = await verifyAssessmentAccess({
       assessment,
       userId: req.user!.id,
       userRole: req.user!.role,
@@ -911,6 +996,13 @@ assessmentRouter.get('/assessments/:assessmentId', requireAuth, async (req, res,
   }
 });
 
+/**
+ * Route `POST /api/v1/assessments/:assessmentId/start` — Bắt đầu hoặc tiếp tục lượt làm bài đang mở (tính giờ đếm ngược `expiresAt`).
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.startAssessmentAttempt(assessmentId)` (`apps/web/src/services/assessment.api.ts`).
+ *   + Đọc/Ghi DB: `assessments`, `assessment_attempts`, `enrollments`, `class_sessions`, `session_progress`.
+ */
 // 4.1B POST /assessments/:assessmentId/start — Explicitly start or resume an assessment attempt
 assessmentRouter.post('/assessments/:assessmentId/start', requireAuth, async (req, res, next) => {
   try {
@@ -925,7 +1017,8 @@ assessmentRouter.post('/assessments/:assessmentId/start', requireAuth, async (re
       return;
     }
 
-    const { enrollment, allCohortSessionsCompleted } = await verifyAssessmentAccess({
+    // Bước 1: Kiểm tra phân quyền, chặn nộp đề Nháp và xác minh điều kiện tiên quyết của Kỳ thi cuối khóa (6/6 buổi)
+  const { enrollment, allCohortSessionsCompleted } = await verifyAssessmentAccess({
       assessment,
       userId: req.user!.id,
       userRole: req.user!.role,
@@ -971,6 +1064,13 @@ assessmentRouter.post('/assessments/:assessmentId/start', requireAuth, async (re
   }
 });
 
+/**
+ * Route `POST /api/v1/assessments/:assessmentId/submit` — Nộp bài làm để chấm tự động, cập nhật Elo-IRT và xét cấp chứng chỉ.
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.submitAssessmentAttempt(assessmentId, answers)` (`apps/web/src/services/assessment.api.ts`).
+ *   + Gọi nội bộ: `gradeAndRecordAssessmentSubmission()`.
+ */
 // 4.2 POST /assessments/:assessmentId/submit
 const submitSchema = z.object({
   answers: z.union([
@@ -1027,6 +1127,13 @@ assessmentRouter.post(
   }
 );
 
+/**
+ * Handler cho `GET /api/v1/assessments/:assessmentId/result` (& `/results`) — Trả kết quả chi tiết kèm đáp án & lời giải sau khi đã nộp.
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.getAssessmentResult(assessmentId)` (`apps/web/src/services/assessment.api.ts`).
+ *   + Đọc DB: `assessments`, `assessment_attempts`, `assessment_items`, `submission_answers`, `skills`, `student_skill_states`.
+ */
 // 4.3 GET /assessments/:assessmentId/result & /assessments/:assessmentId/results
 async function handleGetAssessmentResult(req: any, res: any, next: any) {
   try {
@@ -1130,7 +1237,8 @@ async function handleGetAssessmentResult(req: any, res: any, next: any) {
     const selectedAnswers: Record<number, number> = {};
     const selectedIndices: number[] = [];
 
-    items.forEach((item, idx) => {
+    // Bước 3: Chấm điểm từng câu hỏi (hỗ trợ nhiều định dạng payload đáp án) và trích xuất danh sách câu làm sai để ôn tập theo mốc giây
+  items.forEach((item, idx) => {
       const pCfg = (item.promptConfig || {}) as PromptConfigShape;
       const qNum = pCfg.number ?? item.itemOrder ?? idx + 1;
       const ans = answerByItemId.get(item.id);
@@ -1215,6 +1323,16 @@ async function handleGetAssessmentResult(req: any, res: any, next: any) {
 assessmentRouter.get('/assessments/:assessmentId/result', requireAuth, handleGetAssessmentResult);
 assessmentRouter.get('/assessments/:assessmentId/results', requireAuth, handleGetAssessmentResult);
 
+/**
+ * Routes `POST /api/v1/assessments/:assessmentId/proctoring-events` & `/assessments/attempts/:attemptId/proctoring-events`
+ * — Tiếp nhận sự kiện giám sát thi từ trình duyệt (Edge Tier: chuyển tab, thoát toàn màn hình, mất khuôn mặt...).
+ *
+ * - **Mục tiêu:** Lọc bỏ sự kiện lành tính (`CAMERA_NORMAL`, `HEARTBEAT`), cộng dồn `riskDelta` vào
+ *   `assessment_attempts.total_risk_score` trong Transaction ACID; vượt ngưỡng `>= 60` tự động gắn cờ `FLAGGED`.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.reportProctoringEvent()` (`apps/web/src/services/assessment.api.ts`).
+ *   + Ghi DB: `proctoring_events`, `assessment_attempts`.
+ */
 // 4.4 POST /assessments/:assessmentId/proctoring-events & /assessments/attempts/:attemptId/proctoring-events
 const proctoringEventSchema = z.object({
   tier: z.enum(['EDGE', 'SERVER']).default('EDGE'),
@@ -1261,6 +1379,7 @@ assessmentRouter.post(
       }
 
       // Auto-resolve or create open attempt so live proctoring events are NEVER dropped!
+      // Bước 3: Nếu CV/VLM phát hiện vi phạm có `riskDelta > 0`, ghi biên bản vào `proctoring_events` & cộng dồn điểm rủi ro (`>= 60 -> FLAGGED`)
       const attempt = await getOrCreateOpenAttempt({ assessment, accountId });
 
       const newTotalRisk = Number(attempt.totalRiskScore) + classified.riskDelta;
@@ -1398,6 +1517,19 @@ assessmentRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/assessments/:assessmentId/proctoring-snapshot` — Phân tích khung hình Webcam 2 tầng (Computer Vision + VLM) qua AI Service.
+ *
+ * - **Mục tiêu:** Chuyển ảnh Base64 thí sinh chụp định kỳ sang Python AI Service để chạy:
+ *   + Tầng 1 (CV tốc độ cao): MediaPipe / OpenCV YuNet đếm mặt + SolvePnP ước lượng góc quay đầu (`headPose`) + YOLOv8n ONNX phát hiện điện thoại/vật cấm.
+ *   + Tầng 2 (VLM leo thang): Gemini Vision xác nhận khi có nghi vấn (`escalateVlm: true`).
+ *   + Nếu phát hiện vi phạm (`riskDelta > 0`), ghi log vào `proctoring_events (tier = 'SERVER')` và cập nhật `total_risk_score` (`>= 60 -> FLAGGED`).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `assessmentApi.analyzeProctoringSnapshot()` (`apps/web/src/services/assessment.api.ts`).
+ *   + Gọi AI Service: `POST /api/v1/ai/proctoring/analyze-frame` (`apps/ai-service/src/api/routes/proctoring_ai.py` -> `analyze_proctoring_frame_endpoint`, timeout `6500ms`).
+ *   + Fallback: Nếu AI Service offline/timeout, giữ nguyên `FALLBACK_HEARTBEAT` (`state: 'NORMAL', riskDelta: 0`) để không đánh oan thí sinh.
+ *   + Ghi DB: `proctoring_events`, `assessment_attempts`.
+ */
 // 4.5 POST /assessments/:assessmentId/proctoring-snapshot
 //     Two-Tier Edge-Cloud CV Analysis (MediaPipe/YuNet + SolvePnP + YOLOv8n ONNX + Gemini Vision)
 const proctoringSnapshotSchema = z.object({
@@ -1442,6 +1574,7 @@ assessmentRouter.post(
       const accountId = req.user!.id;
       const { imageBase64, videoOffsetSec, escalateVlm } = req.body;
 
+      // Bước 1: Chuẩn bị kết quả Fallback mặc định `NORMAL` (tránh đánh oan thí sinh nếu AI Service tạm ngắt)
       let cvResult: AiProctoringCvResult = {
         status: 'FALLBACK_HEARTBEAT',
         detectorTier1: 'CLIENT_WEBCAM_STREAM',
@@ -1458,25 +1591,18 @@ assessmentRouter.post(
         latencyMs: 0,
       };
 
-      const aiBaseUrl = (env.AI_SERVICE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+      // Bước 2: Gửi ảnh chụp Base64 qua cổng tập trung `aiServiceClient.analyzeProctoringFrame()`
+      // (`POST /api/v1/ai/proctoring/analyze-frame`, gắn đúng header `X-Internal-Key` & `X-Request-ID`).
       try {
-        const aiRes = await fetch(`${aiBaseUrl}/api/v1/ai/proctoring/analyze-frame`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Internal-API-Key': env.INTERNAL_API_KEY,
-          },
-          body: JSON.stringify({ imageBase64, escalateVlm }),
-          signal: AbortSignal.timeout(6500),
-        });
-        if (aiRes.ok) {
-          const parsed = (await aiRes.json()) as Partial<AiProctoringCvResult>;
-          if (parsed && typeof parsed.eventType === 'string') {
-            cvResult = {
-              ...cvResult,
-              ...parsed,
-            };
-          }
+        const parsed = await aiServiceClient.analyzeProctoringFrame<Partial<AiProctoringCvResult>>(
+          { imageBase64, escalateVlm },
+          req.correlationId
+        );
+        if (parsed && typeof parsed.eventType === 'string') {
+          cvResult = {
+            ...cvResult,
+            ...parsed,
+          };
         }
       } catch {
         // AI microservice offline in standalone dev: keep exam smooth without false strikes
@@ -1496,6 +1622,7 @@ assessmentRouter.post(
         return;
       }
 
+      // Bước 3: Nếu CV/VLM phát hiện vi phạm có `riskDelta > 0`, ghi biên bản vào `proctoring_events` & cộng dồn điểm rủi ro (`>= 60 -> FLAGGED`)
       const attempt = await getOrCreateOpenAttempt({ assessment, accountId });
       const appliedRisk = cvResult.riskDelta > 0 ? cvResult.riskDelta : classified.riskDelta;
       const newTotalRisk = Number(attempt.totalRiskScore) + appliedRisk;

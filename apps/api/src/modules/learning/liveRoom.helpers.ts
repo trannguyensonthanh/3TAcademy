@@ -1,3 +1,30 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/learning/liveRoom.helpers.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Bộ quản lý trạng thái phòng học trực tuyến trong bộ nhớ
+ *     (In-Memory Real-time Room State & SSE Event Broker) kết hợp bộ phân giải nguồn phát
+ *     video bài giảng Cloudflare R2 (`resolvePlayableVideoSource`).
+ *   - Đảm nhiệm:
+ *     1. Quản lý danh sách client SSE (`EventSource`) kết nối vào từng phòng `sessionId`,
+ *        theo dõi danh sách người tham gia online (`activeParticipants`) kèm vùng đệm 45 giây
+ *        cho người vừa mở phòng đang chờ bắt tay SSE.
+ *     2. Phát sự kiện thời gian thực (`broadcastLiveRoomEvent`) cho toàn bộ thành viên trong lớp:
+ *        giơ tay (`hand_raise`), thả cảm xúc (`reaction`), bình chọn câu hỏi Q&A (`qa_upvoted`),
+ *        tắt mic/đuổi học viên (`participant_muted`, `participant_kicked`), đồng bộ slide/media
+ *        của Giảng viên (`host_broadcast`, `host_media_sync`), chuyển tiếp tín hiệu WebRTC
+ *        (`webrtc_signal`, `live_audio_chunk`) và trạng thái ghi hình R2 (`recording_status`).
+ *     3. Phân giải `videoR2Key` lưu trong PostgreSQL thành URL phát MP4/HLS sẵn sàng cho Frontend.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Được gọi từ:
+ *     + `apps/api/src/modules/learning/learning.routes.ts` (vào phòng Live, mở SSE stream, giơ tay,
+ *       reaction, upvote, WebRTC signaling, đồng bộ media, webhook LiveKit)
+ *     + `apps/api/src/modules/teach/teach.routes.ts` (đổi trạng thái LIVE/REPLAY_READY, mute/kick,
+ *       ghi hình, cập nhật slide broadcast)
+ *   - Không truy vấn DB trực tiếp, không gọi `apps/ai-service`.
+ * ============================================================================
+ */
 import type { Response } from 'express';
 import { env } from '../../config/env.js';
 
@@ -72,6 +99,7 @@ interface LiveRoomBucket {
 
 const roomBuckets = new Map<number, LiveRoomBucket>();
 
+/** Lấy hoặc khởi tạo bucket trạng thái in-memory (clients SSE, participants, hostMedia, recording) cho một `sessionId`. */
 function getOrCreateBucket(sessionId: number): LiveRoomBucket {
   let bucket = roomBuckets.get(sessionId);
   if (!bucket) {
@@ -108,6 +136,11 @@ function getOrCreateBucket(sessionId: number): LiveRoomBucket {
   return bucket;
 }
 
+/**
+ * Tính lại danh sách thành viên đang hiện diện trong phòng học (`activeParticipants`).
+ * - Hợp nhất người đang giữ kết nối SSE sống + người vừa vào phòng trong 45s gần nhất (`recentJoinedMap`),
+ *   loại bỏ người bị đuổi (`kickedIdentities`) và luôn sắp Giảng viên/Host lên đầu danh sách.
+ */
 function recomputeActiveParticipants(bucket: LiveRoomBucket): LiveParticipantPresence[] {
   const now = Date.now();
   const byAccountId = new Map<string, LiveParticipantPresence>();
@@ -149,12 +182,14 @@ function recomputeActiveParticipants(bucket: LiveRoomBucket): LiveParticipantPre
   return list;
 }
 
+/** Lấy ảnh chụp trạng thái thời gian thực hiện hành (`LiveRoomRuntimeState`) của phòng học `sessionId`. */
 export function getLiveRoomState(sessionId: number): LiveRoomRuntimeState {
   const bucket = getOrCreateBucket(sessionId);
   recomputeActiveParticipants(bucket);
   return bucket.state;
 }
 
+/** Đánh dấu người dùng vừa tải phòng Live (giữ hiện diện 45s chờ SSE kết nối) và broadcast `participants_updated`. */
 export function markParticipantJoinedRoom(
   sessionId: number,
   participant: Omit<LiveParticipantPresence, 'joinedAt'> & { joinedAt?: string }
@@ -181,6 +216,7 @@ export function markParticipantJoinedRoom(
   return updated;
 }
 
+/** Đăng ký kết nối SSE (`res`) của một học viên/giảng viên vào phòng và trả hàm cleanup khi ngắt kết nối. */
 export function registerLiveRoomClient(
   sessionId: number,
   res: Response,
@@ -211,6 +247,10 @@ export function registerLiveRoomClient(
   };
 }
 
+/**
+ * Gỡ kết nối SSE khi người dùng rời phòng; tự hạ tay nếu đang giơ tay, và tự tắt trạng thái `hostMedia`
+ * nếu Giảng viên cuối cùng rời phòng để tránh treo khung hình cũ trên màn hình học viên.
+ */
 export function unregisterLiveRoomClient(sessionId: number, res: Response): void {
   const bucket = roomBuckets.get(sessionId);
   if (!bucket) return;
@@ -247,6 +287,7 @@ export function unregisterLiveRoomClient(sessionId: number, res: Response): void
   }
 }
 
+/** Phát sự kiện Server-Sent Events (`event: <name>\ndata: <json>\n\n`) tới toàn bộ client đang kết nối vào phòng `sessionId`. */
 export function broadcastLiveRoomEvent(
   sessionId: number,
   event: string,
@@ -265,6 +306,7 @@ export function broadcastLiveRoomEvent(
   }
 }
 
+/** Bật hoặc hạ trạng thái giơ tay phát biểu của một tài khoản và phát sự kiện `hand_raise` tới cả lớp. */
 export function setHandRaiseState(
   sessionId: number,
   params: { accountId: string; fullName: string; role: string; raised: boolean }
@@ -296,6 +338,7 @@ export function toggleHandRaise(
   return setHandRaiseState(sessionId, { ...item, raised });
 }
 
+/** Lưu biểu cảm mới nhất (giữ tối đa 20 biểu cảm gần nhất) và phát sự kiện `reaction` qua SSE. */
 export function addLiveReaction(
   sessionId: number,
   senderName: string,
@@ -318,6 +361,7 @@ export function addLiveReaction(
 
 export const pushLiveReaction = addLiveReaction;
 
+/** Tăng lượt bình chọn (+1) cho một câu hỏi Q&A trong phòng học và broadcast `qa_upvoted`. */
 export function upvoteLiveDiscussion(
   sessionId: number,
   threadId: number | string
@@ -335,6 +379,7 @@ export function upvoteLiveDiscussion(
 
 export const incrementQuestionVote = upvoteLiveDiscussion;
 
+/** Cập nhật tiêu đề slide đang trình chiếu và ghi chú chủ đề của Giảng viên, phát sự kiện `host_broadcast`. */
 export function updateHostBroadcastState(
   sessionId: number,
   patch: { activeSlideLabel?: string; liveTopicNote?: string }
@@ -351,6 +396,7 @@ export function updateHostBroadcastState(
   return bucket.state.hostBroadcast;
 }
 
+/** Đồng bộ trạng thái Camera/Micro/Chia sẻ màn hình (và khung hình dự phòng) của Giảng viên tới học viên qua `host_media_sync`. */
 export function updateHostMediaState(
   sessionId: number,
   patch: Partial<LiveHostMediaState>
@@ -384,6 +430,7 @@ export function updateHostMediaState(
   return bucket.state.hostMedia;
 }
 
+/** Chuyển tiếp bản tin tín hiệu WebRTC Peer-to-Peer (`offer`, `answer`, `ice-candidate`) giữa Giảng viên và Học viên qua SSE. */
 export function relayWebRtcSignal(
   sessionId: number,
   signal: {
@@ -402,6 +449,7 @@ export function relayWebRtcSignal(
   });
 }
 
+/** Chuyển tiếp gói âm thanh dự phòng dạng Base64 (`live_audio_chunk`) khi WebRTC/LiveKit không khả dụng. */
 export function relayLiveAudioChunk(
   sessionId: number,
   chunk: {
@@ -419,6 +467,7 @@ export function relayLiveAudioChunk(
   });
 }
 
+/** Cập nhật danh sách người bị tắt micro (hoặc cờ `ALL_STUDENTS`) trong trạng thái phòng và broadcast `participant_muted`. */
 export function updateMutedParticipantsState(
   sessionId: number,
   params: {
@@ -457,6 +506,7 @@ export function updateMutedParticipantsState(
   return bucket.state.mutedIdentities;
 }
 
+/** Cập nhật danh sách người bị mời khỏi phòng (`kickedIdentities`), xóa họ khỏi `activeParticipants` và broadcast `participant_kicked`. */
 export function updateKickedParticipantsState(
   sessionId: number,
   params: {
@@ -514,6 +564,7 @@ export function updateKickedParticipantsState(
   return bucket.state.kickedIdentities;
 }
 
+/** Cập nhật trạng thái ghi hình phòng livestream (`isRecording`, `objectKey`, `publicUrl`) và broadcast `recording_status`. */
 export function updateLiveRecordingState(
   sessionId: number,
   recording: LiveRecordingState
@@ -542,6 +593,10 @@ const SEED_PLACEHOLDER_KEY_REGEX =
 
 /**
  * Resolves a session's `videoR2Key` into a playable URL and stream type (HLS or MP4).
+ */
+/**
+ * Phân giải cột `videoR2Key` trong DB thành nguồn phát video hợp lệ (`MP4` / `HLS` / `NONE`) cho trình phát Frontend.
+ * - Ưu tiên: (1) URL tuyệt đối `http(s)://` hoặc `/videos/...` -> (2) Domain `R2_PUBLIC_DOMAIN` thật -> (3) MP4 fallback công cộng.
  */
 export function resolvePlayableVideoSource(
   videoR2Key: string | null | undefined,

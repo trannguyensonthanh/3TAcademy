@@ -1,3 +1,32 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/catalog/catalog.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Module Danh mục Đào tạo Công khai, Sổ cái Xác thực Chứng chỉ
+ *     và Tư vấn Lộ trình AI (Public Catalog, Certificate Verification & Career Advisor).
+ *   - Cung cấp dữ liệu thật từ PostgreSQL cho Trang chủ (`HomeView`), Trang danh sách & chi tiết
+ *     khóa học, danh sách đợt khai giảng, câu hỏi thường gặp (FAQ), tra cứu chứng chỉ ký số
+ *     HMAC-SHA256 và hộp thoại Trợ lý Tư vấn AI công khai (`visibility = 'PUBLIC'`).
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/catalog.api.ts`:
+ *     + `catalogApi.getSummary()`          -> `GET  /api/v1/catalog/summary`
+ *     + `catalogApi.getCategories()`       -> `GET  /api/v1/categories`
+ *     + `catalogApi.getSkills()`           -> `GET  /api/v1/skills`
+ *     + `catalogApi.getCourses()`          -> `GET  /api/v1/courses`
+ *     + `catalogApi.getCourseBySlug()`     -> `GET  /api/v1/courses/:slug`
+ *     + `catalogApi.getCohorts()`          -> `GET  /api/v1/cohorts`
+ *     + `catalogApi.getFaqs()`             -> `GET  /api/v1/faqs`
+ *     + `catalogApi.getCertificates()`     -> `GET  /api/v1/certificates`
+ *     + `catalogApi.verifyCertificate()` / `verifyCertificateByCode()` -> `GET /api/v1/certificates/verify/:code`
+ *     + `catalogApi.askPublicAdvisor()` / `askCareerAdvisor()` -> `POST /api/v1/advisor/ask`
+ *   - Đọc/Ghi bảng DB: `categories`, `courses`, `cohorts`, `class_sessions`, `skills`, `course_skills`,
+ *     `course_reviews`, `certificates`, `enrollments`, `accounts`, `user_profiles`,
+ *     `instructor_profiles`, `system_settings`, `student_skill_states`, `assessment_attempts`, `assessments`.
+ *   - Tích hợp AI: Gọi `askCareerAdvisorRag()` từ `apps/api/src/integrations/ragAi.service.ts`
+ *     (Hybrid Search RRF trên chunk `PUBLIC` + Gemini đa model -> fallback Deterministic RAG).
+ * ============================================================================
+ */
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import { eq, or, desc } from 'drizzle-orm';
@@ -24,6 +53,7 @@ import {
 import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/auth.js';
 import { askCareerAdvisorRag } from '../../integrations/ragAi.service.js';
+import { aiServiceClient } from '../../integrations/aiService.client.js';
 import { env } from '../../config/env.js';
 import {
   formatScheduleLabels,
@@ -49,6 +79,7 @@ const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
   'foundational programming': 'Lập trình Nền tảng',
 };
 
+/** Chuyển đổi slug/tên danh mục kỹ thuật trong DB sang tên hiển thị tiếng Việt chuẩn trên giao diện. */
 export function humanizeCategoryName(slug?: string | null, rawName?: string | null): string {
   const slugKey = (slug || '').trim().toLowerCase();
   if (slugKey && CATEGORY_DISPLAY_NAMES[slugKey]) {
@@ -69,6 +100,7 @@ const COHORT_STATUS_PRIORITY: Record<string, number> = {
   ARCHIVED: 5,
 };
 
+/** Sắp xếp danh sách đợt học ưu tiên hiển thị lớp đang mở ghi danh (`OPENING` -> `ONGOING` -> ...), cùng trạng thái ưu tiên ngày khai giảng mới nhất. */
 function sortCohortsByPriority<T extends { status: string; startDate: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     const prioA = COHORT_STATUS_PRIORITY[a.status] ?? 99;
@@ -80,6 +112,7 @@ function sortCohortsByPriority<T extends { status: string; startDate: string }>(
 
 let catalogConsistencySynced = false;
 
+/** Đồng bộ một lần (lazy idempotent) tên hiển thị tiếng Việt của bảng `categories` ngay khi có request đầu tiên. */
 async function ensureCatalogConsistency(): Promise<void> {
   if (catalogConsistencySynced) return;
   try {
@@ -107,6 +140,17 @@ const ALL_CATEGORY_TOKENS = new Set([
   'tất cả khóa học',
 ]);
 
+/**
+ * Route `GET /api/v1/catalog/summary` — Thống kê tổng quan công khai & danh sách Giảng viên cho Trang chủ.
+ *
+ * - **Mục tiêu:** Trả về số liệu thật trực tiếp từ PostgreSQL (số khóa đã xuất bản, đợt học đang mở,
+ *   số học viên duy nhất, điểm đánh giá trung bình, đội ngũ giảng viên đang hoạt động).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getSummary()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `courses`, `cohorts`, `class_sessions`, `enrollments`, `course_reviews`,
+ *     `instructor_profiles`, `user_profiles`, `accounts`.
+ *   + AI Service: Không gọi.
+ */
 // 2.0 GET /catalog/summary — Real public stats & instructors for HomeView (eliminates hardcodes!)
 catalogRouter.get('/catalog/summary', async (_req, res, next) => {
   try {
@@ -195,6 +239,13 @@ catalogRouter.get('/catalog/summary', async (_req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/categories` — Danh mục chuyên ngành kèm số lượng khóa học đã xuất bản (`PUBLISHED`).
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getCategories()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `categories`, `courses`. (Tự chèn mục ảo `'all'` ở đầu danh sách cho bộ lọc UI).
+ */
 // 2.1 GET /categories
 catalogRouter.get('/categories', async (_req, res, next) => {
   try {
@@ -236,6 +287,13 @@ catalogRouter.get('/categories', async (_req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/skills` — Toàn bộ từ điển kỹ năng năng lực (Skill Ontology) của học viện.
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getSkills()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `skills`, `course_skills` (gắn vai trò `LEARNING_OUTCOME` hoặc `PREREQUISITE`).
+ */
 // 2.2 GET /skills
 catalogRouter.get('/skills', async (_req, res, next) => {
   try {
@@ -265,6 +323,15 @@ catalogRouter.get('/skills', async (_req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/courses` — Tìm kiếm & lọc danh sách khóa học đã xuất bản kèm đợt học và giảng viên.
+ *
+ * - **Mục tiêu:** Hỗ trợ lọc đa tiêu chí (`q` theo từ khóa/kỹ năng/mã lớp, `categoryId`/`category`, `level`)
+ *   và tính toán sẵn học phí khởi điểm (`startingPriceVnd`), số chỗ trống (`seatsRemaining`), đánh giá trung bình.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getCourses(filters)` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `categories`, `courses`, `cohorts`, `course_reviews`, `skills`, `course_skills`, `instructor_profiles`.
+ */
 // 2.3 GET /courses
 catalogRouter.get('/courses', async (req, res, next) => {
   try {
@@ -447,6 +514,15 @@ catalogRouter.get('/courses', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/courses/:slug` — Lấy chi tiết đầy đủ một khóa học (theo `slug` hoặc `id`).
+ *
+ * - **Mục tiêu:** Trả về đề cương khung (`syllabusTemplate`), danh sách kỹ năng kèm trọng số (`targetWeight`),
+ *   tất cả các đợt khai giảng (`cohorts`) đã sắp ưu tiên và đánh giá công khai của học viên.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getCourseBySlug(slug)` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `courses`, `categories`, `course_skills`, `skills`, `cohorts`, `course_reviews`, `user_profiles`.
+ */
 // 2.4 GET /courses/:slug
 catalogRouter.get('/courses/:slug', async (req, res, next) => {
   try {
@@ -614,6 +690,13 @@ catalogRouter.get('/courses/:slug', async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/cohorts` — Danh sách toàn bộ đợt học (lớp theo kỳ) kèm lịch học và sĩ số còn lại.
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getCohorts()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `cohorts`, `courses`, `instructor_profiles`, `user_profiles`.
+ */
 // 2.5 GET /cohorts
 catalogRouter.get('/cohorts', async (_req, res, next) => {
   try {
@@ -705,6 +788,13 @@ const DEFAULT_ACADEMY_FAQS = [
   },
 ];
 
+/**
+ * Route `GET /api/v1/faqs` — Lấy danh sách câu hỏi thường gặp từ `system_settings` (fallback sang `DEFAULT_ACADEMY_FAQS`).
+ *
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getFaqs()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: `system_settings` (key `ACADEMY_FAQS`).
+ */
 // 2.6 GET /faqs
 catalogRouter.get('/faqs', async (_req, res, next) => {
   try {
@@ -742,6 +832,15 @@ catalogRouter.get('/faqs', async (_req, res, next) => {
   }
 });
 
+/**
+ * Tổng hợp đầy đủ bản ghi Chứng chỉ từ DB kèm tái kiểm toán chữ ký số **HMAC-SHA256**.
+ *
+ * - **Mục tiêu:** Ghép chứng chỉ với điểm thi cuối khóa, trạng thái liêm chính Proctoring,
+ *   năng lực kỹ năng (`student_skill_states`) và tự tính lại `expectedHmac` từ chuỗi
+ *   `${enrollmentId}:${accountId}:${certificateCode}` bằng `HMAC_CERTIFICATE_SECRET` để phát hiện giả mạo DB.
+ * - **Liên kết luồng (Cross-layer):** Được dùng chung bởi `GET /certificates`, `GET /certificates/verify/:code`,
+ *   `admin.routes.ts`, và `learning.routes.ts`.
+ */
 // Helper to build CertificateRecord objects from DB
 export async function buildCertificateRecords(
   options?: number | { filterAccountId?: number; filterInstructorId?: number }
@@ -866,6 +965,16 @@ export async function buildCertificateRecords(
   });
 }
 
+/**
+ * Route `GET /api/v1/certificates` — Lấy danh sách chứng chỉ theo đúng phạm vi phân quyền RBAC.
+ *
+ * - **Bảo mật:** Khách chưa đăng nhập nhận `{}` (không lộ danh sách học viên/email);
+ *   Học viên chỉ thấy chứng chỉ của chính mình; Giảng viên thấy chứng chỉ của các lớp mình dạy;
+ *   Quản trị viên (`ADMIN`) thấy toàn hệ thống.
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.getCertificates()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: Thông qua `buildCertificateRecords()`.
+ */
 // 2.7 GET /certificates — Strict RBAC & Privacy Protection!
 // Guests receive {} (never dump all students' certificates/emails publicly).
 catalogRouter.get('/certificates', optionalAuth, async (req, res, next) => {
@@ -893,6 +1002,16 @@ catalogRouter.get('/certificates', optionalAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/certificates/verify/:code` — Cổng tra cứu & xác thực chứng chỉ công khai (Public Verification Ledger).
+ *
+ * - **Mục tiêu:** Cho phép nhà tuyển dụng quét QR hoặc nhập mã chứng chỉ / mã chữ ký HMAC để kiểm tra
+ *   tính xác thực (`!isRevoked && isHmacAuthentic`), đồng thời ẩn `studentEmail` nếu người tra cứu
+ *   không phải chủ chứng chỉ hoặc nhân sự học viện (bảo vệ PII).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.verifyCertificate(code)` / `verifyCertificateByCode(code)` (`apps/web/src/services/catalog.api.ts`).
+ *   + Đọc DB: Thông qua `buildCertificateRecords()`.
+ */
 // 2.8 GET /certificates/verify/:code — Public Verification Ledger (employers, students, guests, staff)
 catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, next) => {
   try {
@@ -958,6 +1077,17 @@ catalogRouter.get('/certificates/verify/:code', optionalAuth, async (req, res, n
   }
 });
 
+/**
+ * Route `POST /api/v1/advisor/ask` — Hỏi Trợ lý Tư vấn Lộ trình AI công khai (Public Career Advisor RAG).
+ *
+ * - **Mục tiêu:** Nhận câu hỏi/mục tiêu nghề nghiệp + nền tảng hiện tại, chuyển sang `askCareerAdvisorRag()`
+ *   để lọc Guardrail (chặn hỏi ngoài hệ thống & hỏi sâu bài giảng trả phí), truy xuất tài liệu `PUBLIC`
+ *   bằng Hybrid Search RRF và sinh tư vấn bằng Gemini đa model (fallback Deterministic RAG).
+ * - **Liên kết luồng (Cross-layer):**
+ *   + Frontend gọi từ: `catalogApi.askPublicAdvisor()` / `catalogApi.askCareerAdvisor()` (`apps/web/src/services/catalog.api.ts`).
+ *   + Gọi nội bộ: `askCareerAdvisorRag()` (`apps/api/src/integrations/ragAi.service.ts`).
+ *   + Đọc DB: `courses`, `cohorts`, `knowledge_chunks` (`visibility = 'PUBLIC'`).
+ */
 // 2.9 POST /advisor/ask
 const advisorAskSchema = z
   .object({
@@ -981,6 +1111,46 @@ catalogRouter.post('/advisor/ask', validate(advisorAskSchema), async (req, res, 
     const background = req.body.background ? ` (Nền tảng: ${req.body.background})` : '';
     const fullQuestion = `${rawQuestion}${background}`.trim();
 
+    // Bước 1: Ưu tiên gọi Python AI Microservice (`POST /api/v1/ai/advisor/ask` — 5-node LangGraph CRAG + Cross-Encoder Reranker)
+    try {
+      const aiRes = await aiServiceClient.askAdvisor(fullQuestion, req.correlationId);
+      if (aiRes && typeof aiRes.answerMd === 'string' && aiRes.answerMd.trim().length > 0) {
+        // Giữ đồng bộ metadata gợi ý khóa học/đợt học thực tế từ PostgreSQL cho UI thẻ tư vấn
+        const [publishedCourses, activeCohorts] = await Promise.all([
+          db.select().from(courses).where(eq(courses.status, 'PUBLISHED')),
+          db.select().from(cohorts),
+        ]);
+        const qNorm = fullQuestion.toLowerCase();
+        const recommendedCourse =
+          publishedCourses.find((c) => qNorm.includes('python') && c.slug.includes('python')) ||
+          publishedCourses.find((c) => (qNorm.includes('data') || qNorm.includes('spark') || qNorm.includes('kafka')) && c.slug.includes('data')) ||
+          publishedCourses.find((c) => (qNorm.includes('backend') || qNorm.includes('node') || qNorm.includes('typescript')) && c.slug.includes('backend')) ||
+          publishedCourses.find((c) => c.slug.includes('ai')) ||
+          publishedCourses[0];
+        const recommendedCohort = recommendedCourse
+          ? activeCohorts.find((ch) => ch.courseId === recommendedCourse.id && ch.status === 'OPENING') ||
+            activeCohorts.find((ch) => ch.courseId === recommendedCourse.id)
+          : activeCohorts[0];
+
+        res.json({
+          replyText: aiRes.answerMd,
+          answerMd: aiRes.answerMd,
+          recommendedCourseSlug: recommendedCourse?.slug || '',
+          recommendedCohortId: recommendedCohort ? String(recommendedCohort.id) : '',
+          recommendedCohortCodes: recommendedCohort ? [recommendedCohort.code] : [],
+          citations: aiRes.citations ?? [],
+          rerankBackend: aiRes.rerankBackend,
+          maxRelevanceScore: aiRes.maxRelevanceScore,
+          agentTrace: aiRes.agentTrace,
+          provider: 'AI_SERVICE_CRAG',
+        });
+        return;
+      }
+    } catch {
+      // AI Service tạm ngắt hoặc timeout -> tự động hạ cấp mượt sang RAG nội bộ Node.js
+    }
+
+    // Bước 2 (Fallback): Chạy Hybrid RAG + Gemini Cascade / Deterministic nội bộ tại `ragAi.service.ts`
     const result = await askCareerAdvisorRag(fullQuestion);
     res.json(result);
   } catch (err) {

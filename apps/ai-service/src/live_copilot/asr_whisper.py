@@ -5,6 +5,23 @@ Multi-tier audio/video transcription & WebVTT subtitle alignment:
 1. FFmpeg 16kHz Mono PCM extraction + Acoustic Energy/ZCR Voice Activity Detection (VAD).
 2. Tier-1 Neural ASR: `Faster-Whisper` (`CTranslate2` INT8/FP16) with word/segment timestamps.
 3. Tier-2 Multimodal Audio Fallback: Companion `.vtt` alignment or Gemini Audio REST API.
+
+Vai trò trong kiến trúc 3 tầng (Frontend `apps/web` <-> Backend `apps/api` <-> AI Service `apps/ai-service`):
+- Chuyển đổi file video/audio bài giảng thành văn bản phụ đề có mốc thời gian (`segments` + chuẩn `WebVTT`)
+  cùng thống kê vùng có tiếng nói (Acoustic VAD) phục vụ cả hiển thị phụ đề cho trình phát video
+  lẫn đầu vào cho phân chương tự động (`topic_segmenter.py`) và lập chỉ mục RAG (`worker/tasks.py`).
+- Thiết kế kiến trúc đa tầng chống lỗi (Graceful Degradation):
+  + **Tier 1 (Local Neural ASR):** `Faster-Whisper` (CTranslate2 lượng tử hóa INT8 trên CPU / FP16 trên GPU)
+    tích hợp sẵn bộ lọc khoảng lặng Silero VAD (`vad_filter=True`).
+  + **Tier 2A (Companion WebVTT):** Đọc trực tiếp file `.vtt` đi kèm video nếu có sẵn.
+  + **Tier 2B (Cloud Multimodal Fallback):** Gửi file âm thanh WAV (<= 12MB) dạng base64 tới Gemini Audio API.
+  + **Tier 3 (VAD Alignment):** Căn chỉnh các câu từ `transcript_hint` lên các khoảng có tiếng nói đo được từ VAD.
+
+Liên kết chéo (Cross-layer):
+- Được gọi bởi `src/api/routes/media_ai.py` (`POST /api/v1/ai/media/transcribe-and-summarize`) và
+  tác vụ nền `process_live_recording()` trong `src/worker/tasks.py`.
+- Sử dụng `WHISPER_MODELS_DIR` (`src/core/model_registry.py`), `get_http_client()` (`src/core/llm_gateway.py`),
+  và `is_valid_gemini_key`, `settings` (`src/core/config.py`).
 """
 
 import base64
@@ -23,10 +40,17 @@ from ..core.llm_gateway import get_http_client
 from ..core.logging import logger
 from ..core.model_registry import WHISPER_MODELS_DIR, has_package
 
+# Biến toàn cục giữ singleton mô hình Faster-Whisper đã nạp vào RAM/VRAM để tái sử dụng giữa các lần gọi.
 _whisper_instance: Any = None
 
 
 def _get_whisper_model() -> Any:
+    """Khởi tạo lười (lazy load) mô hình `Faster-Whisper` trên engine CTranslate2 tối ưu tốc độ suy luận.
+
+    Mục tiêu:
+        Tự động chọn kiểu lượng tử hóa (`int8` cho CPU tiết kiệm RAM & tăng tốc ~4x; `float16` cho GPU)
+        và lưu cache trọng số tại `apps/ai-service/models/whisper`. Trả `None` nếu chưa cài `faster_whisper`.
+    """
     global _whisper_instance
     if _whisper_instance is not None:
         return _whisper_instance
@@ -52,6 +76,7 @@ def _get_whisper_model() -> Any:
 
 
 def format_vtt_timestamp(sec: float) -> str:
+    """Chuyển số giây thực sang chuỗi dấu thời gian chuẩn WebVTT định dạng `HH:MM:SS.mmm`."""
     sec = max(0.0, float(sec))
     ms = int(round((sec - math.floor(sec)) * 1000))
     total_s = int(math.floor(sec))
@@ -65,6 +90,7 @@ def format_vtt_timestamp(sec: float) -> str:
 
 
 def build_webvtt_from_segments(segments: List[Dict[str, Any]]) -> str:
+    """Xuất danh sách các đoạn phụ đề (`startSec`, `endSec`, `text`) sang nội dung file phụ đề chuẩn HTML5 `WEBVTT`."""
     lines = ["WEBVTT", ""]
     for idx, seg in enumerate(segments, start=1):
         start_ts = format_vtt_timestamp(float(seg.get("startSec", 0.0)))
@@ -80,6 +106,11 @@ def build_webvtt_from_segments(segments: List[Dict[str, Any]]) -> str:
 
 
 def parse_webvtt_file(vtt_path: Path) -> List[Dict[str, Any]]:
+    """Đọc và phân tích file phụ đề `.vtt` có sẵn thành danh sách các đoạn thoại có cấu trúc (`startSec`, `endSec`, `text`).
+
+    Mục tiêu:
+        Tận dụng phụ đề chuẩn do giảng viên/hệ thống cung cấp sẵn đi kèm video (Tier 2A) để tiết kiệm tài nguyên ASR.
+    """
     raw = vtt_path.read_text(encoding="utf-8", errors="ignore")
     blocks = re.split(r"\n\s*\n", raw.strip())
     ts_re = re.compile(
@@ -119,6 +150,12 @@ def parse_webvtt_file(vtt_path: Path) -> List[Dict[str, Any]]:
 
 
 def extract_pcm16k_wav(input_media_path: Path, out_wav_path: Path) -> bool:
+    """Dùng `ffmpeg` tách luồng âm thanh chuẩn hóa về 16kHz, Mono (1 kênh), 16-bit Signed PCM WAV.
+
+    Mục tiêu:
+        Whisper và thuật toán xử lý tín hiệu tiếng nói VAD đều được huấn luyện/tối ưu trên tần số lấy mẫu 16kHz đơn kênh;
+        tách riêng audio giúp giảm mạnh dung lượng xử lý so với file video gốc.
+    """
     try:
         subprocess.run(
             [
@@ -146,10 +183,20 @@ def extract_pcm16k_wav(input_media_path: Path, out_wav_path: Path) -> bool:
 
 
 def analyze_acoustic_vad(wav_path: Path, frame_ms: int = 30) -> Dict[str, Any]:
+    """Phát hiện hoạt động giọng nói (Acoustic Voice Activity Detection — VAD) bằng năng lượng ngắn hạn RMS.
+
+    Mục tiêu:
+        Đo tỷ lệ thời gian có tiếng giảng (`speechRatio`) và xác định danh sách các khoảng thời gian có giọng nói
+        (`voicedIntervals`) bằng xử lý tín hiệu số (DSP) thuần NumPy mà không phụ thuộc LLM/GPU.
+        Ước lượng nền tạp âm (`noise_floor`) bằng phân vị thứ 15 (15th percentile) để ngưỡng năng lượng
+        tự thích nghi với độ ồn phòng thu khác nhau.
+    Đầu vào / Đầu ra:
+        - Input: `wav_path` (file WAV 16kHz mono), `frame_ms` (độ dài mỗi khung tín hiệu, mặc định 30ms).
+        - Output: Dict `{"durationSec", "speechRatio", "voicedIntervalsCount", "voicedIntervals"}`.
     """
-    Computes short-time frame energy E_t = (1/N) * sum(x_i^2) and Zero-Crossing Rate (ZCR)
-    over 30ms frames at 16kHz to detect active speech intervals without any LLM dependency.
-    """
+    # Computes short-time frame energy E_t = (1/N) * sum(x_i^2) and Zero-Crossing Rate (ZCR)
+    # over 30ms frames at 16kHz to detect active speech intervals without any LLM dependency.
+    # Bước 1: Đọc mẫu biên độ PCM 16-bit và chuẩn hóa về dải thực `[-1.0, 1.0]`.
     with wave.open(str(wav_path), "rb") as wf:
         sr = wf.getframerate()
         n_frames = wf.getnframes()
@@ -160,6 +207,8 @@ def analyze_acoustic_vad(wav_path: Path, frame_ms: int = 30) -> Dict[str, Any]:
     if len(samples) == 0:
         return {"durationSec": 0.0, "speechRatio": 0.0, "voicedIntervals": []}
 
+    # Bước 2: Chia tín hiệu thành các khung 30ms và tính năng lượng RMS từng khung;
+    # đặt ngưỡng thích nghi `energy_thresh = max(0.008, 2.2 * percentile_15)`.
     win = max(1, int(sr * (frame_ms / 1000.0)))
     num_wins = len(samples) // win
     if num_wins == 0:
@@ -170,6 +219,7 @@ def analyze_acoustic_vad(wav_path: Path, frame_ms: int = 30) -> Dict[str, Any]:
     noise_floor = float(np.percentile(rms_energy, 15))
     energy_thresh = max(0.008, noise_floor * 2.2)
 
+    # Bước 3: Gom các khung vượt ngưỡng liên tiếp có thời lượng >= 0.35s thành khoảng tiếng nói (`intervals`).
     voiced_mask = rms_energy >= energy_thresh
     speech_ratio = round(float(np.mean(voiced_mask)), 3)
 
@@ -189,6 +239,7 @@ def analyze_acoustic_vad(wav_path: Path, frame_ms: int = 30) -> Dict[str, Any]:
     if in_speech and (num_wins * dt - seg_start) >= 0.35:
         intervals.append([round(seg_start, 2), round(num_wins * dt, 2)])
 
+    # Bước 4: Nối liền 2 đoạn tiếng nói nếu khoảng nghỉ ngắn giữa chúng <= 0.45s (ngắt hơi tự nhiên giữa câu).
     # Merge intervals separated by short micro-pauses (< 0.45s)
     merged: List[List[float]] = []
     for iv in intervals:
@@ -210,12 +261,24 @@ async def transcribe_media_pipeline(
     transcript_hint: Optional[str] = None,
     language: str = "vi",
 ) -> Dict[str, Any]:
+    """Điều phối trọn bộ pipeline nhận dạng giọng nói đa tầng (Faster-Whisper -> VTT -> Gemini Audio -> VAD Align).
+
+    Mục tiêu:
+        Đảm bảo mọi video/audio bài giảng đều cho ra danh sách `segments` có mốc thời gian và phụ đề `WebVTT`,
+        ưu tiên model local nhanh & miễn phí (Faster-Whisper CTranslate2 + Silero VAD), đồng thời dự phòng
+        liền mạch sang file `.vtt` có sẵn, Gemini Multimodal Audio API hoặc căn chỉnh theo VAD.
+    Liên kết luồng (Cross-layer):
+        - Được gọi từ `src/api/routes/media_ai.py` và `src/worker/tasks.py`.
+        - Gọi nội bộ `extract_pcm16k_wav`, `analyze_acoustic_vad`, `_get_whisper_model`, `parse_webvtt_file`,
+          `build_webvtt_from_segments` và HTTP client tới Gemini Audio REST API.
+    Đầu vào / Đầu ra:
+        - Input: `media_path` (đường dẫn file audio/video), `transcript_hint` (văn bản gỡ băng gợi ý nếu có), `language`.
+        - Output: Dict JSON gồm `engine`, `language`, `vad`, `segments`, `fullText`, và `vtt` (chuỗi WebVTT).
     """
-    Executes multi-tier Speech-to-Text + VAD telemetry:
-    Tier 1: Faster-Whisper CTranslate2 neural ASR on 16kHz WAV.
-    Tier 2: Companion WebVTT cues or Gemini Multimodal Audio API.
-    Tier 3: Transcript-hint alignment across VAD voiced intervals.
-    """
+    # Executes multi-tier Speech-to-Text + VAD telemetry:
+    # Tier 1: Faster-Whisper CTranslate2 neural ASR on 16kHz WAV.
+    # Tier 2: Companion WebVTT cues or Gemini Multimodal Audio API.
+    # Tier 3: Transcript-hint alignment across VAD voiced intervals.
     vad_stats: Dict[str, Any] = {"durationSec": 0.0, "speechRatio": 0.0, "voicedIntervals": []}
     segments: List[Dict[str, Any]] = []
     engine_used = "TRANSCRIPT_SEGMENTER"
@@ -226,6 +289,7 @@ async def transcribe_media_pipeline(
         if cand.exists():
             resolved_path = cand
 
+    # Bước 1: Tạo thư mục tạm tự động dọn dẹp để tách file audio WAV 16kHz Mono bằng FFmpeg và chạy đo Acoustic VAD.
     with tempfile.TemporaryDirectory() as tmp:
         wav_path = Path(tmp) / "audio_16k.wav"
         has_wav = resolved_path is not None and extract_pcm16k_wav(resolved_path, wav_path)
@@ -233,6 +297,8 @@ async def transcribe_media_pipeline(
         if has_wav:
             vad_stats = analyze_acoustic_vad(wav_path)
 
+            # Bước 2 (Tier 1): Chạy suy luận Faster-Whisper CTranslate2 cục bộ với Beam Search (`beam_size=4`)
+            # và bộ lọc Silero VAD (`vad_filter=True`, bỏ khoảng lặng >= 400ms) để chống ảo giác lặp chữ khi im lặng.
             # Tier 1: Faster-Whisper CTranslate2 Local Neural ASR
             whisper_model = _get_whisper_model()
             if whisper_model is not None:
@@ -247,6 +313,7 @@ async def transcribe_media_pipeline(
                     for s in raw_segs:
                         txt = (s.text or "").strip()
                         if txt:
+                            # Quy đổi log-probability trung bình sang độ tin cậy xác suất `exp(avg_logprob) ∈ (0, 1]`.
                             prob = round(float(math.exp(max(-5.0, min(0.0, getattr(s, "avg_logprob", -0.2))))), 3)
                             segments.append(
                                 {
@@ -261,6 +328,7 @@ async def transcribe_media_pipeline(
                 except Exception as exc:
                     logger.warning("Faster-Whisper inference error, falling back", error=str(exc))
 
+        # Bước 3 (Tier 2A): Nếu Tier 1 chưa có kết quả, kiểm tra xem cạnh file video có sẵn phụ đề `.vtt` không.
         # Tier 2A: Companion `.vtt` file alongside lecture video
         if not segments and resolved_path is not None:
             companion_vtt = resolved_path.with_suffix(".vtt")
@@ -269,6 +337,7 @@ async def transcribe_media_pipeline(
                 if segments:
                     engine_used = "ACOUSTIC_VAD_PLUS_ALIGNED_VTT"
 
+        # Bước 4 (Tier 2B): Dự phòng Cloud bằng Gemini Multimodal Audio API khi WAV <= 12MB và đã cấu hình API key.
         # Tier 2B: Gemini Multimodal Audio API (when audio < 12 MB and API key configured)
         api_key = (settings.GEMINI_API_KEY or "").strip()
         if (
@@ -279,7 +348,7 @@ async def transcribe_media_pipeline(
         ):
             try:
                 audio_b64 = base64.b64encode(wav_path.read_bytes()).decode("ascii")
-                model_name = (settings.GEMINI_MODEL or "gemini-2.5-flash").strip()
+                model_name = (settings.GEMINI_MODEL or "gemini-3.5-flash").strip()
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 client = get_http_client()
                 res = await client.post(
@@ -312,6 +381,8 @@ async def transcribe_media_pipeline(
             except Exception as exc:
                 logger.warning("Gemini Multimodal Audio fallback skipped", error=str(exc))
 
+    # Bước 5 (Tier 3): Khi chỉ có văn bản thô (`transcript_hint` từ người dùng hoặc Gemini Audio),
+    # tách câu và ánh xạ từng câu khớp lên các khoảng thời gian có giọng nói (`voicedIntervals`) đo bởi VAD.
     # Tier 3: Align `transcript_hint` sentences onto VAD voiced intervals
     if not segments and transcript_hint:
         sentences = [
@@ -337,6 +408,7 @@ async def transcribe_media_pipeline(
                 }
             )
 
+    # Bước 6: Hợp nhất toàn văn và xuất chuỗi phụ đề chuẩn WebVTT trả về cho Backend/Worker.
     full_text = " ".join(s["text"] for s in segments).strip()
     return {
         "engine": engine_used,

@@ -1,4 +1,30 @@
 /**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/assessment/skillMasteryModel.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Bộ máy Định lượng Năng lực Học viên theo thời gian
+ *     dựa trên mô hình Trắc nghiệm tâm lý **Elo-IRT 2PL (Item Response Theory 2-Parameter Logistic)**
+ *     kết hợp **Bayesian Cold-Start Prior** và **Trần phủ chương trình (Curriculum Ceiling)**.
+ *   - Giải quyết bài toán sư phạm cốt lõi: Thay thế cách tính trung bình cộng ngây thơ
+ *     (dễ bị lạm phát điểm 100/100 ngay Buổi 1 hoặc kìm hãm học viên tiến bộ về sau) bằng
+ *     mô hình toán học phản ánh đúng độ khó câu hỏi và chiều sâu tiến trình học tập.
+ *
+ * CÔNG THỨC TOÁN HỌC CỐT LÕI:
+ *   1. Xác suất làm đúng kỳ vọng theo hàm Logistic 2PL-IRT:
+ *        `P_i = 1 / (1 + exp(-alpha * (theta - D_i)))`  (với `alpha = 0.08`)
+ *   2. Cập nhật năng lực tiềm ẩn `theta` theo sai số dư bất đối xứng (Asymmetric Residual):
+ *        `theta_new = theta_old + K_eff * asymmetryFactor * (y_i - P_i)`
+ *      - Trả lời đúng câu khó (`D_i` cao, `P_i` thấp) -> thưởng điểm lớn.
+ *      - Trả lời sai câu dễ (`P_i > 0.7`) -> phạt mạnh hơn `1.15x`.
+ *   3. Trọng số giai đoạn tiến hóa `W_stage`: Buổi 1 (`1.0x`) -> Buổi 6 (`2.0x`) -> Thi cuối khóa (`3.0x`).
+ *   4. Trần phủ chương trình: Buổi 1 tối đa `68` -> Buổi 6 tối đa `88` -> Đạt Thi cuối khóa mở khóa trần `100`.
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Được gọi bởi: `apps/api/src/modules/assessment/assessment.routes.ts`
+ *     (`gradeAndRecordAssessmentSubmission()` -> cập nhật bảng `student_skill_states`).
+ *   - Không truy vấn DB trực tiếp, không gọi `apps/ai-service` (hàm thuần toán học, dễ unit-test).
+ * ============================================================================
+ *
  * Progressive Elo-IRT + Bayesian Skill Mastery Engine (`skillMasteryModel.ts`)
  *
  * Replaces naive arithmetic mean / fixed EMA with a psychometric 2PL-IRT / Elo model
@@ -55,6 +81,13 @@ const IRT_DISCRIMINATION_ALPHA = 0.08;
 const BASE_K_FACTOR = 18;
 
 /**
+ * Tính trọng số giai đoạn tiến hóa `W_stage` theo vị trí buổi học trong khóa.
+ *
+ * - **Mục tiêu:** Đảm bảo kết quả ở các buổi chuyên sâu cuối khóa và Kỳ thi cuối khóa có sức nặng
+ *   quyết định hơn nhiều so với bài Quiz nhập môn ở Buổi 1.
+ * - **Đầu vào:** `sessionOrder` (1..S hoặc `null`), `totalSessionsInCohort` (mặc định 6), `isFinalExam`.
+ * - **Đầu ra:** Hệ số trọng số: Buổi 1 -> `1.00`, Buổi 6 -> `2.00`, `FINAL_EXAM` -> `3.00`.
+ *
  * Computes progressive stage weight W_stage:
  * - Session 1 of 6 -> 1.00
  * - Session 6 of 6 -> 2.00
@@ -78,6 +111,12 @@ export function computeStageWeight(
 }
 
 /**
+ * Ước lượng độ khó chuẩn hóa `D_i` trong khoảng `[25, 85]` cho từng câu hỏi trắc nghiệm.
+ *
+ * - **Mục tiêu:** Mô hình hóa độ khó câu hỏi từ 4 yếu tố: chiều sâu buổi học (Buổi 1: 30 -> Buổi 6: 62 -> Thi cuối: 68),
+ *   vị trí tương đối của câu trong đề (`+0..8`), hệ số điểm cao (`+5`) và có tình huống thực chiến `hasScenarioTag` (`+4`).
+ * - **Đầu ra:** Số thực `D_i` nằm trong `[25, 85]`.
+ *
  * Estimates calibrated item difficulty D_i in [25, 85] from curriculum depth,
  * item points weight, relative position inside the assessment, and scenario complexity.
  */
@@ -115,6 +154,12 @@ export function estimateItemDifficulty(
 }
 
 /**
+ * Tính trần phủ chương trình (Curriculum Coverage Ceiling) giới hạn điểm thành thạo tối đa ở mỗi chặng.
+ *
+ * - **Mục tiêu:** Ngăn tình trạng học viên mới làm đúng 4 câu Quiz Buổi 1 đã hiện 100% thành thạo kỹ năng;
+ *   chỉ khi hoàn thành các buổi sau (trần tăng dần 68 -> 88) và vượt qua Kỳ thi cuối khóa mới mở trần 100.
+ * - **Đầu ra:** Ngưỡng trần nguyên trong `{68..88, 100}`.
+ *
  * Computes curriculum coverage ceiling so early introductory quizzes cannot inflate
  * mastery to 100/100 before advanced sessions and Final Exam are completed.
  */
@@ -138,9 +183,19 @@ export function computeCurriculumCeiling(params: {
   return Math.min(88, Math.round(68 + depthRatio * 20));
 }
 
+/**
+ * Thuật toán cập nhật điểm thành thạo kỹ năng tiến bộ **Elo-IRT 2PL** cho cặp `(Học viên, Kỹ năng)`.
+ *
+ * - **Mục tiêu:** Tính điểm năng lực mới `newScore` (0..100) và độ biến thiên `delta` sau khi học viên nộp bài.
+ * - **Liên kết luồng (Cross-layer):** Được gọi trong Transaction của `gradeAndRecordAssessmentSubmission()`
+ *   (`apps/api/src/modules/assessment/assessment.routes.ts`) để ghi bảng `student_skill_states`.
+ * - **Đầu vào:** `ProgressiveSkillUpdateInput` (điểm cũ, số bằng chứng trước đó, thứ tự buổi, cờ thi cuối khóa, danh sách câu đúng/sai).
+ * - **Đầu ra:** `ProgressiveSkillUpdateOutput` (`previousScore`, `newScore`, `delta`, `stageWeight`, `ceilingApplied`, `updatedEvidenceCount`).
+ */
 export function computeProgressiveSkillMastery(
   input: ProgressiveSkillUpdateInput
 ): ProgressiveSkillUpdateOutput {
+  // Bước 1: Xác định năng lực khởi điểm `theta` — nếu chưa có bằng chứng cũ thì khởi tạo bằng Bayesian Cold-Start Prior (`40`)
   const totalSessions = Math.max(1, input.totalSessionsInCohort ?? 6);
   const hasPrior =
     typeof input.previousScore === 'number' &&
@@ -160,11 +215,13 @@ export function computeProgressiveSkillMastery(
     input.isFinalExam
   );
 
+  // Bước 2: Tính hệ số bước nhảy hiệu dụng `effectiveK` = (BASE_K * W_stage * hệ số giảm chấn theo số bằng chứng) / sqrt(số câu)
   // Dampen step size gently with evidence count, but amplify by stageWeight so late sessions dominate!
   const evidenceDamping = 1 / (1 + 0.06 * Math.min(12, Math.max(0, input.previousEvidenceCount)));
   const itemsCount = Math.max(1, input.items.length);
   const effectiveK = (BASE_K_FACTOR * stageWeight * evidenceDamping) / Math.sqrt(itemsCount);
 
+  // Bước 3: Lặp qua từng câu hỏi của kỹ năng để cập nhật `theta` theo mô hình 2PL-IRT (xác suất kỳ vọng P_i và sai số dư bất đối xứng)
   for (let i = 0; i < input.items.length; i += 1) {
     const item = input.items[i]!;
     const d_i = estimateItemDifficulty(
@@ -187,6 +244,7 @@ export function computeProgressiveSkillMastery(
     theta += effectiveK * asymmetryFactor * residual;
   }
 
+  // Bước 4: Neo kéo hiệu suất giai đoạn cuối (stageWeight >= 1.8 & đúng >= 80%) giúp học viên bứt phá không bị điểm thấp đầu khóa kéo lùi
   // Blend in stage-weighted empirical performance anchor when stageWeight >= 1.8 (late sessions / Final Exam)
   // so a student who improved dramatically in late sessions is not held back by early low scores!
   const correctRatio =
@@ -197,6 +255,7 @@ export function computeProgressiveSkillMastery(
     theta = theta * (1 - pullAlpha) + targetAnchor * pullAlpha;
   }
 
+  // Bước 5: Áp trần phủ chương trình `effectiveCeiling` (không bao giờ hạ điểm cũ chỉ vì trần thấp hơn) và chặn sàn tối thiểu `8`
   const ceiling = computeCurriculumCeiling({
     sessionOrder: input.sessionOrder,
     totalSessionsInCohort: totalSessions,
@@ -224,6 +283,11 @@ export function computeProgressiveSkillMastery(
 }
 
 /**
+ * Tính điểm trung bình có trọng số giai đoạn (`W_stage`) trên nhiều lượt bài kiểm tra trong cùng một đợt học.
+ *
+ * - **Đầu vào:** Mảng lượt làm bài `{ scorePct, sessionOrder?, isFinalExam? }` và tổng số buổi.
+ * - **Đầu ra:** Điểm phần trăm nguyên `[0..100]` trong đó buổi sau (1.0x -> 2.0x) và Thi cuối khóa (3.0x) có trọng số cao hơn.
+ *
  * Stage-weighted average score across multiple assessment attempts in a cohort.
  * Later sessions (1.0x -> 2.0x) and FINAL_EXAM (3.0x) weigh more than early introductory quizzes.
  */

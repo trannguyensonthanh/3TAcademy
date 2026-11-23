@@ -1,3 +1,40 @@
+/**
+ * ============================================================================
+ * TỆP: apps/api/src/modules/admin/admin.routes.ts
+ * VAI TRÒ TRONG KIẾN TRÚC 3 TẦNG:
+ *   - Tầng Backend (`apps/api`) — Trung tâm Quản trị Hệ thống (`ADMIN` only).
+ *   - Toàn bộ router được khóa chặt bởi `requireAuth` + `requireRole(['ADMIN'])`.
+ *   - Đảm nhiệm:
+ *     1. Tổng quan vận hành & doanh thu (`GET /admin/overview`) và sổ cái giao dịch SePay (`GET /admin/sepay-transactions`).
+ *     2. Quản trị & xuất bản khóa học (`POST /admin/courses`): tự động sinh vector Semantic Embedding 1024-dim
+ *        (`computeSemanticEmbedding1024`) và đồng bộ ánh xạ `skills` / `course_skills`.
+ *     3. Mở mới / cập nhật đợt học (`POST /admin/cohorts`): kiểm tra xung đột lịch giảng viên cứng
+ *        (`SCHEDULE_CONFLICT_DETECTED`, HTTP 409 — đồng bộ ràng buộc cứng với bộ giải tối ưu xếp lịch
+ *        OR-Tools **CP-SAT** tại `apps/ai-service/src/api/routes/scheduler_routes.py`), tự động trải ngày giờ
+ *        6 buổi học theo múi giờ Việt Nam (UTC+7) và sinh sẵn bộ đề `DRAFT` cho từng buổi + Kỳ thi cuối khóa.
+ *     4. Quản trị tài khoản (`PUT /admin/users`, `POST /admin/accounts` băm Argon2 + tạo hồ sơ giảng viên/học viên),
+ *        ghi danh thủ công (`POST /admin/enrollments/manual` cấp +4 lượt phỏng vấn AI),
+ *        cấp hàng loạt & thu hồi/khôi phục Chứng chỉ ký số HMAC-SHA256 (`POST /admin/certificates/issue`,
+ *        `PUT /admin/certificates/:certificateCode/revoke`).
+ *
+ * LIÊN KẾT CHÉO (CROSS-LAYER):
+ *   - Nhận gọi từ Frontend `apps/web/src/services/admin.api.ts`:
+ *     + `adminApi.getAdminOverview()`        -> `GET  /api/v1/admin/overview`
+ *     + `adminApi.getSepayTransactions()`    -> `GET  /api/v1/admin/sepay-transactions`
+ *     + `adminApi.manageCourses()`           -> `POST /api/v1/admin/courses`
+ *     + `adminApi.manageCohorts()`           -> `POST /api/v1/admin/cohorts`
+ *     + `adminApi.manageUsers()`             -> `PUT  /api/v1/admin/users`
+ *     + `adminApi.createAccount()`           -> `POST /api/v1/admin/accounts`
+ *     + `adminApi.issueCertificatesBatch()`  -> `POST /api/v1/admin/certificates/issue`
+ *     + `adminApi.toggleCertificateRevoke()` -> `PUT  /api/v1/admin/certificates/:certificateCode/revoke`
+ *   - Đọc/Ghi bảng DB: `accounts`, `account_identities`, `user_profiles`, `instructor_profiles`,
+ *     `categories`, `skills`, `courses`, `course_skills`, `cohorts`, `class_sessions`, `session_progress`,
+ *     `orders`, `payment_transactions`, `enrollments`, `course_reviews`, `certificates`, `chat_sessions`,
+ *     `chat_messages`, `notifications`, `assessments`, `assessment_attempts`.
+ *   - Liên kết AI Service: Đồng bộ cấu trúc slot lịch học với bộ tối ưu xếp lịch CP-SAT tại
+ *     `apps/ai-service/src/api/routes/scheduler_routes.py` (`POST /api/v1/ai/scheduler/optimize-cohort-schedule`).
+ * ============================================================================
+ */
 import { Router } from 'express';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { z } from 'zod';
@@ -43,6 +80,7 @@ export const adminRouter = Router();
 
 adminRouter.use(requireAuth, requireRole(['ADMIN']));
 
+/** Chuẩn hóa đầu vào ngày tháng từ form Quản trị (hỗ trợ `YYYY-MM-DD`, `DD/MM/YYYY`, `DD-MM-YYYY`) sang ISO `YYYY-MM-DD` an toàn. */
 function normalizeAdminDateInput(rawDate?: string | null): string | null {
   const trimmed = (rawDate || '').trim();
   if (!trimmed) return null;
@@ -64,6 +102,12 @@ function normalizeAdminDateInput(rawDate?: string | null): string | null {
   return null;
 }
 
+/**
+ * Route `GET /api/v1/admin/overview` — Bảng điều khiển Tổng quan Hệ thống cho Quản trị viên (`AdminDashboardView`).
+ * - **Mục tiêu:** Tổng hợp doanh thu thật (đơn `PAID`), số đợt học đang chạy, tổng học viên, chứng chỉ đã cấp,
+ *   lịch dạy hôm nay, thống kê đánh giá sao, danh sách tài khoản, học viên đủ điều kiện tốt nghiệp và lịch sử AI chat.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.getAdminOverview()`. Đọc toàn bộ các bảng nghiệp vụ cốt lõi.
+ */
 // 8.1 GET /admin/overview
 adminRouter.get('/admin/overview', async (_req, res, next) => {
   try {
@@ -446,6 +490,10 @@ adminRouter.get('/admin/overview', async (_req, res, next) => {
   }
 });
 
+/**
+ * Route `GET /api/v1/admin/sepay-transactions` — Sổ cái đối soát giao dịch chuyển khoản VietQR SePay (`MATCHED` / `AMOUNT_MISMATCH` / `UNMATCHED_ORDER`).
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.getSepayTransactions()`. Đọc `payment_transactions`, `orders`, `cohorts`, `user_profiles`, `accounts`.
+ */
 // 8.1B GET /admin/sepay-transactions
 adminRouter.get('/admin/sepay-transactions', async (_req, res, next) => {
   try {
@@ -497,6 +545,14 @@ adminRouter.get('/admin/sepay-transactions', async (_req, res, next) => {
   }
 });
 
+/**
+ * Route `POST /api/v1/admin/courses` — Tạo mới hoặc cập nhật đề cương khóa học (`PUBLISHED`).
+ * - **Quy trình:**
+ *   + Bước 1: Nếu chỉ gửi `id` + `syllabusTemplate` -> cập nhật nhanh khung đề cương khóa hiện có.
+ *   + Bước 2: Nếu tạo mới -> tự giải ánh xạ danh mục, sinh slug, tính vector Semantic Embedding 1024-dim (`computeSemanticEmbedding1024`)
+ *     để AI Advisor gợi ý khóa học ngay lập tức, và upsert danh sách `skills` + `course_skills`.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.manageCourses()`. Ghi DB: `courses`, `skills`, `course_skills`.
+ */
 // 8.2 POST /admin/courses
 const createOrUpdateCourseSchema = z.object({
   id: z.union([z.string(), z.number()]).optional(),
@@ -680,6 +736,18 @@ adminRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/admin/cohorts` — Mở mới hoặc cập nhật Đợt học (Cohort), kiểm tra trùng lịch giảng viên & tự sinh lịch 6 buổi.
+ *
+ * - **Quy trình từng bước:**
+ *   + Bước 1: Chuẩn hóa `startDate`/`endDate` và kiểm tra tính hợp lệ khoảng ngày.
+ *   + Bước 2: Kiểm tra ràng buộc cứng chống trùng lịch giảng viên (`SCHEDULE_CONFLICT_DETECTED`, HTTP 409) trên các lớp đang mở/đang học
+ *     (đồng bộ ràng buộc cứng với thuật toán xếp lịch tối ưu OR-Tools **CP-SAT** tại `apps/ai-service/src/api/routes/scheduler_routes.py`).
+ *   + Bước 3: Nếu truyền `cohortId` -> cập nhật đợt học hiện có; nếu mở mới -> chèn `cohorts (OPENING)`,
+ *     tự động trải mốc thời gian thực (`UTC+7`) cho từng `class_sessions` theo `scheduleSlots` và tạo sẵn
+ *     các bài kiểm tra `DRAFT` (`SESSION_ASSIGNMENT` + `FINAL_EXAM`).
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.manageCohorts()`. Đọc/Ghi DB: `courses`, `cohorts`, `class_sessions`, `assessments`.
+ */
 // 8.3 POST /admin/cohorts
 const createCohortSchema = z.object({
   cohortId: z.union([z.number(), z.string()]).optional(),
@@ -1024,6 +1092,10 @@ adminRouter.post('/admin/cohorts', validate(createCohortSchema), async (req, res
   }
 });
 
+/**
+ * Route `PUT /api/v1/admin/users` — Phân quyền vai trò (`STUDENT` / `INSTRUCTOR` / `ADMIN`), khóa/mở khóa tài khoản (`LOCKED` / `ACTIVE`) và cập nhật họ tên.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.manageUsers()`. Ghi DB: `accounts`, `user_profiles`.
+ */
 // 8.4 PUT /admin/users
 const updateUserSchema = z.object({
   userId: z.union([z.number(), z.string()]),
@@ -1095,6 +1167,10 @@ adminRouter.put('/admin/users', validate(updateUserSchema), async (req, res, nex
   }
 });
 
+/**
+ * Route `POST /api/v1/admin/accounts` — Tạo trực tiếp tài khoản mới (Học viên, Giảng viên kèm `instructor_profiles`, hoặc Quản trị viên) trong Transaction ACID.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.createAccount()`. Ghi DB: `accounts`, `account_identities`, `user_profiles`, `instructor_profiles`.
+ */
 // 8.5 POST /admin/accounts
 const createAccountSchema = z.object({
   fullName: z.string().min(2, 'Họ tên tối thiểu 2 ký tự'),
@@ -1282,6 +1358,11 @@ adminRouter.post('/admin/accounts', validate(createAccountSchema), async (req, r
   }
 });
 
+/**
+ * Route `POST /api/v1/admin/enrollments/manual` — Quản trị viên kích hoạt ghi danh thủ công cho học viên (chuyển khoản ngoài luồng/học bổng)
+ * kèm cập nhật sĩ số `cohorts.enrolled_count`, tạo đơn `PAID` đối soát và cộng thưởng `+4` lượt Phỏng vấn AI trong Transaction ACID.
+ * - **Liên kết luồng:** Ghi DB: `orders`, `enrollments`, `cohorts`, `user_profiles`, `notifications`.
+ */
 // 8.6 POST /admin/enrollments/manual
 const manualEnrollSchema = z.object({
   email: z.string().email(),
@@ -1453,6 +1534,10 @@ adminRouter.post(
   }
 );
 
+/**
+ * Route `POST /api/v1/admin/certificates/issue` — Cấp phát hàng loạt (hoặc khôi phục) Chứng chỉ tốt nghiệp ký số **HMAC-SHA256** trong Transaction ACID.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.issueCertificatesBatch(enrollmentIds)`. Ghi DB: `certificates`, `enrollments`.
+ */
 // 8.7 POST /admin/certificates/issue
 const issueCertificatesSchema = z.object({
   enrollmentIds: z.array(z.union([z.number(), z.string()])).min(1),
@@ -1567,6 +1652,10 @@ adminRouter.post(
   }
 );
 
+/**
+ * Route `PUT /api/v1/admin/certificates/:certificateCode/revoke` — Thu hồi hoặc khôi phục hiệu lực một Chứng chỉ trên sổ cái xác thực.
+ * - **Liên kết luồng:** Frontend gọi từ `adminApi.toggleCertificateRevoke(certificateCode)`. Ghi DB: `certificates`.
+ */
 // 8.8 PUT /admin/certificates/:certificateCode/revoke
 const revokeCertSchema = z.object({
   isRevoked: z.boolean().optional(),
